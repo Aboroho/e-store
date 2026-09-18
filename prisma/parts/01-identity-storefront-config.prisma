@@ -1,0 +1,605 @@
+// =============================================================================
+// E-STORE PLATFORM — PRISMA SCHEMA
+// Part 1: enums, identity & access control, business/storefront configuration
+//
+// Money is always stored as integer minor units (paisa) using `Int`.
+// Never use floating point arithmetic for money (see src/lib/money.ts).
+// =============================================================================
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ----------------------------------------------------------------------------
+// Shared enums
+// ----------------------------------------------------------------------------
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum ActorType {
+  USER
+  CUSTOMER
+  SYSTEM
+  API_KEY
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  SESSION_REVOKED
+  RATE_LIMITED
+  PERMISSION_DENIED
+  API_KEY_CREATED
+  API_KEY_REVOKED
+  WEBHOOK_REJECTED
+  ACCOUNT_CLAIM_REQUESTED
+  ACCOUNT_CLAIM_COMPLETED
+}
+
+enum VerificationPurpose {
+  ACCOUNT_CLAIM
+  LOGIN
+  PHONE_VERIFY
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  ORDER_LOOKUP
+}
+
+enum VerificationChannel {
+  SMS
+  EMAIL
+}
+
+enum StorefrontStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+enum DomainStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+enum CustomerStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum IntegrationKind {
+  PAYMENT
+  COURIER
+  MARKETING
+  STORAGE
+  OTHER
+}
+
+enum SettingValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  JSON
+}
+
+// ----------------------------------------------------------------------------
+// Business
+// ----------------------------------------------------------------------------
+
+/// The single business that operates this platform. Version 1 is not
+/// multi-tenant: exactly one business row is expected, but every business-owned
+/// table carries `businessId` so that future expansion does not require a
+/// schema rewrite.
+model Business {
+  id        String   @id @default(uuid())
+  name      String
+  legalName String?
+  slug      String   @unique
+  currency  String   @default("BDT")
+  timezone  String   @default("Asia/Dhaka")
+  locale    String   @default("en")
+  phone     String?
+  email     String?
+  website   String?
+  address   String?
+  logoMediaId String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings             BusinessSetting[]
+  roles                Role[]
+  users                User[]
+  storefronts          Storefront[]
+  customers            Customer[]
+  categories           Category[]
+  products             Product[]
+  attributes           Attribute[]
+  priceLists           PriceList[]
+  locations            InventoryLocation[]
+  suppliers            Supplier[]
+  purchaseOrders       PurchaseOrder[]
+  orders               Order[]
+  payments             Payment[]
+  refunds              Refund[]
+  resellers            Reseller[]
+  courierProviders     CourierProvider[]
+  courierSettlements   CourierSettlement[]
+  shippingZones        DeliveryZone[]
+  exchangeRequests     ExchangeRequest[]
+  reviews              Review[]
+  pages                Page[]
+  mediaFolders         MediaFolder[]
+  mediaAssets          MediaAsset[]
+  apiKeys              ApiKey[]
+  integrations         Integration[]
+  plugins              Plugin[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  jobs                 BackgroundJob[]
+  outboxEvents         OutboxEvent[]
+  numberSequences      NumberSequence[]
+  adjustmentReasons    StockAdjustmentReason[]
+  exchangeReasons      ExchangeReason[]
+  idempotencyRecords   IdempotencyRecord[]
+  paymentReconciliations PaymentReconciliation[]
+  checkoutFields       CheckoutFieldConfig[]
+  inventoryMovements   InventoryMovement[]
+  stockAdjustments     StockAdjustment[]
+  codCollections       CodCollection[]
+  shipments            Shipment[]
+  resellerLedgerEntries ResellerLedgerEntry[]
+  resellerOrderEarnings ResellerOrderEarning[]
+  resellerPayouts      ResellerPayout[]
+  marketingIntegrations MarketingIntegration[]
+  marketingEvents      MarketingEvent[]
+  webhookSubscriptions WebhookSubscription[]
+
+  @@index([createdAt])
+}
+
+/// Key/value business configuration (delivery defaults, exchange policy,
+/// notification preferences, pricing configuration, checkout behaviour...).
+model BusinessSetting {
+  id            String           @id @default(uuid())
+  businessId    String
+  key           String
+  value         Json
+  valueType     SettingValueType @default(JSON)
+  description   String?
+  isSecret      Boolean          @default(false)
+  updatedByUserId String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, key])
+  @@index([businessId])
+}
+
+// ----------------------------------------------------------------------------
+// Users, roles, permissions, sessions
+// ----------------------------------------------------------------------------
+
+model User {
+  id             String     @id @default(uuid())
+  businessId     String
+  name           String
+  email          String     @unique
+  phone          String?
+  passwordHash   String?
+  status         UserStatus @default(ACTIVE)
+  isOwner        Boolean    @default(false)
+  avatarMediaId  String?
+  jobTitle       String?
+  lastLoginAt    DateTime?
+  failedLoginCount Int      @default(0)
+  lockedUntil    DateTime?
+  mustChangePassword Boolean @default(false)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  deletedAt      DateTime?
+
+  business            Business             @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  roles               UserRole[]
+  sessions            Session[]
+  auditLogs           AuditLog[]           @relation("AuditActorUser")
+  notifications       NotificationRecipient[]
+  notificationPreferences NotificationPreference[]
+  orderNotes          Order[]              @relation("OrderCreatedBy")
+  passwordResets      PasswordResetToken[]
+  resellerProfile     Reseller?
+  securityEvents      SecurityEvent[]
+
+  @@index([businessId, status])
+  @@index([businessId, deletedAt])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  businessId  String
+  name        String
+  slug        String
+  description String?
+  isSystem    Boolean  @default(false)
+  isProtected Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@unique([businessId, slug])
+  @@index([businessId])
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  group       String
+  label       String
+  description String?
+  isDangerous Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([group])
+}
+
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([roleId])
+}
+
+/// Server side session. Only a hash of the session token is stored.
+model Session {
+  id           String    @id @default(uuid())
+  userId       String
+  tokenHash    String    @unique
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  revokedReason String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+/// Server side session for customer accounts (separate cookie + table from
+/// staff sessions so that privileges can never be confused).
+model CustomerSession {
+  id           String    @id @default(uuid())
+  customerId   String
+  tokenHash    String    @unique
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, expiresAt])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  attempts   Int       @default(0)
+  ipAddress  String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// One-time verification codes (SMS/email) used for passwordless customer
+/// account claims and other identity verification flows.
+model VerificationCode {
+  id          String              @id @default(uuid())
+  businessId  String?
+  customerId  String?
+  channel     VerificationChannel
+  destination String
+  purpose     VerificationPurpose
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int                 @default(0)
+  maxAttempts Int                 @default(5)
+  consumedAt  DateTime?
+  ipAddress   String?
+  createdAt   DateTime            @default(now())
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([destination, purpose, consumedAt])
+  @@index([expiresAt])
+}
+
+model SecurityEvent {
+  id         String            @id @default(uuid())
+  businessId String?
+  userId     String?
+  customerId String?
+  type       SecurityEventType
+  success    Boolean           @default(true)
+  email      String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime          @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([createdAt])
+}
+
+/// Database backed rate limiter (fixed window). Used for login attempts,
+/// verification code requests, API key traffic and webhook processing.
+model RateLimitBucket {
+  id          String   @id @default(uuid())
+  scope       String
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scope, key, windowStart])
+  @@index([windowStart])
+}
+
+/// Idempotency records for retryable operations (checkout, API requests,
+/// payment callbacks, settlement imports, payout processing...).
+model IdempotencyRecord {
+  id           String   @id @default(uuid())
+  businessId   String?
+  scope        String
+  key          String
+  requestHash  String?
+  resourceType String?
+  resourceId   String?
+  statusCode   Int?
+  responseBody Json?
+  lockedAt     DateTime?
+  completedAt  DateTime?
+  expiresAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+}
+
+/// Atomic, gap-free document numbering (orders, purchases, shipments,
+/// payouts, exchanges) scoped per business.
+model NumberSequence {
+  id        String   @id @default(uuid())
+  businessId String
+  key       String
+  scope     String   @default("")
+  prefix    String   @default("")
+  nextValue Int      @default(1)
+  padding   Int      @default(5)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, key, scope])
+}
+
+// ----------------------------------------------------------------------------
+// Storefronts, domains, delivery and checkout configuration
+// ----------------------------------------------------------------------------
+
+/// A public sales channel (domain group) that shares the catalog, customers,
+/// pricing engine and inventory of the business.
+model Storefront {
+  id               String           @id @default(uuid())
+  businessId       String
+  name             String
+  slug             String           @unique
+  code             String?          @unique
+  status           StorefrontStatus @default(DRAFT)
+  description      String?
+  defaultCurrency  String           @default("BDT")
+  defaultPriceListId String?
+  defaultLocationId  String?
+  themeKey         String           @default("default")
+  themeConfig      Json?
+  supportPhone     String?
+  supportEmail     String?
+  addressLine      String?
+  isDefault        Boolean          @default(false)
+  allowedPaymentMethods String[]
+  allowedCourierProviders String[]
+  codEnabled       Boolean          @default(true)
+  preorderEnabled  Boolean          @default(true)
+  freeDeliveryThresholdPaisa Int?
+  packagingCostPaisa Int            @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  business       Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  domains        StorefrontDomain[]
+  settings       StorefrontSetting[]
+  orders         Order[]
+  pages          Page[]
+  navigationMenus NavigationMenu[]
+  deliveryZones  DeliveryZone[]
+  reviews        Review[]
+  marketingIntegrations MarketingIntegration[]
+  marketingEvents MarketingEvent[]
+  integrations   Integration[]
+
+  @@index([businessId, status])
+}
+
+model StorefrontDomain {
+  id             String       @id @default(uuid())
+  storefrontId   String
+  host           String       @unique
+  isPrimary      Boolean      @default(false)
+  status         DomainStatus @default(PENDING)
+  sslEnabled     Boolean      @default(false)
+  verifiedAt     DateTime?
+  verificationToken String?
+  lastCheckedAt  DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  storefront Storefront @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+
+  @@index([storefrontId])
+}
+
+model StorefrontSetting {
+  id           String           @id @default(uuid())
+  storefrontId String
+  key          String
+  value        Json
+  valueType    SettingValueType @default(JSON)
+  updatedByUserId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  storefront Storefront @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+
+  @@unique([storefrontId, key])
+}
+
+/// Bangladesh districts used for delivery fee configuration and reporting.
+model District {
+  code      String   @id
+  name      String
+  division  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  addresses     CustomerAddress[]
+  deliveryZones DeliveryZone[]
+
+  @@index([division])
+}
+
+/// Delivery fee / COD rules per storefront and district.
+model DeliveryZone {
+  id                String   @id @default(uuid())
+  businessId        String
+  storefrontId      String?
+  districtCode      String
+  feePaisa          Int
+  freeDeliveryThresholdPaisa Int?
+  codEnabled        Boolean  @default(true)
+  codFeePaisa       Int      @default(0)
+  estimatedDaysMin  Int?
+  estimatedDaysMax  Int?
+  isActive          Boolean  @default(true)
+  note              String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storefront Storefront? @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+  district   District    @relation(fields: [districtCode], references: [code], onDelete: Restrict)
+
+  @@unique([businessId, storefrontId, districtCode])
+  @@index([businessId, isActive])
+}
+
+/// Configuration of which customer fields are required at checkout.
+model CheckoutFieldConfig {
+  id            String   @id @default(uuid())
+  businessId    String
+  storefrontId  String?
+  fieldKey      String
+  label         String
+  isEnabled     Boolean  @default(true)
+  isRequired    Boolean  @default(false)
+  position      Int      @default(0)
+  helpText      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, storefrontId, fieldKey])
+  @@index([businessId])
+}
+
+/// Configurable exchange policy entries (reason codes, fees, windows).
+model ExchangeReason {
+  id                 String   @id @default(uuid())
+  businessId         String
+  code               String
+  label              String
+  description        String?
+  deliveryChargePaisa Int     @default(0)
+  requiresNote       Boolean  @default(false)
+  requiresApproval   Boolean  @default(true)
+  isActive           Boolean  @default(true)
+  position           Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  business  Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  exchanges ExchangeRequest[]
+
+  @@unique([businessId, code])
+}

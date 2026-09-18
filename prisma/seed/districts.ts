@@ -1,0 +1,78 @@
+/**
+ * Bangladesh districts (64) with their division.
+ *
+ * Used for delivery zones and customer addresses. Codes follow the official
+ * two-digit administrative codes so imports from government datasets map 1:1.
+ */
+export interface DistrictSeed {
+  code: string;
+  name: string;
+  division: string;
+}
+
+export const DISTRICTS: DistrictSeed[] = [
+  { code: "01", name: "Dhaka", division: "Dhaka" },
+  { code: "02", name: "Faridpur", division: "Dhaka" },
+  { code: "03", name: "Gazipur", division: "Dhaka" },
+  { code: "04", name: "Gopalganj", division: "Dhaka" },
+  { code: "05", name: "Jamalpur", division: "Mymensingh" },
+  { code: "06", name: "Kishoreganj", division: "Dhaka" },
+  { code: "07", name: "Madaripur", division: "Dhaka" },
+  { code: "08", name: "Manikganj", division: "Dhaka" },
+  { code: "09", name: "Munshiganj", division: "Dhaka" },
+  { code: "10", name: "Mymensingh", division: "Mymensingh" },
+  { code: "11", name: "Narayanganj", division: "Dhaka" },
+  { code: "12", name: "Narsingdi", division: "Dhaka" },
+  { code: "13", name: "Netrokona", division: "Mymensingh" },
+  { code: "14", name: "Rajbari", division: "Dhaka" },
+  { code: "15", name: "Shariatpur", division: "Dhaka" },
+  { code: "16", name: "Sherpur", division: "Mymensingh" },
+  { code: "17", name: "Tangail", division: "Dhaka" },
+  { code: "18", name: "Bogura", division: "Rajshahi" },
+  { code: "19", name: "Joypurhat", division: "Rajshahi" },
+  { code: "20", name: "Naogaon", division: "Rajshahi" },
+  { code: "21", name: "Natore", division: "Rajshahi" },
+  { code: "22", name: "Chapainawabganj", division: "Rajshahi" },
+  { code: "23", name: "Pabna", division: "Rajshahi" },
+  { code: "24", name: "Rajshahi", division: "Rajshahi" },
+  { code: "25", name: "Sirajganj", division: "Rajshahi" },
+  { code: "26", name: "Dinajpur", division: "Rangpur" },
+  { code: "27", name: "Gaibandha", division: "Rangpur" },
+  { code: "28", name: "Kurigram", division: "Rangpur" },
+  { code: "29", name: "Lalmonirhat", division: "Rangpur" },
+  { code: "30", name: "Nilphamari", division: "Rangpur" },
+  { code: "31", name: "Panchagarh", division: "Rangpur" },
+  { code: "32", name: "Rangpur", division: "Rangpur" },
+  { code: "33", name: "Thakurgaon", division: "Rangpur" },
+  { code: "34", name: "Barguna", division: "Barishal" },
+  { code: "35", name: "Barishal", division: "Barishal" },
+  { code: "36", name: "Bhola", division: "Barishal" },
+  { code: "37", name: "Jhalokati", division: "Barishal" },
+  { code: "38", name: "Patuakhali", division: "Barishal" },
+  { code: "39", name: "Pirojpur", division: "Barishal" },
+  { code: "40", name: "Bandarban", division: "Chattogram" },
+  { code: "41", name: "Brahmanbaria", division: "Chattogram" },
+  { code: "42", name: "Chandpur", division: "Chattogram" },
+  { code: "43", name: "Chattogram", division: "Chattogram" },
+  { code: "44", name: "Cumilla", division: "Chattogram" },
+  { code: "45", name: "Cox's Bazar", division: "Chattogram" },
+  { code: "46", name: "Feni", division: "Chattogram" },
+  { code: "47", name: "Khagrachhari", division: "Chattogram" },
+  { code: "48", name: "Lakshmipur", division: "Chattogram" },
+  { code: "49", name: "Noakhali", division: "Chattogram" },
+  { code: "50", name: "Rangamati", division: "Chattogram" },
+  { code: "51", name: "Habiganj", division: "Sylhet" },
+  { code: "52", name: "Moulvibazar", division: "Sylhet" },
+  { code: "53", name: "Sunamganj", division: "Sylhet" },
+  { code: "54", name: "Sylhet", division: "Sylhet" },
+  { code: "55", name: "Bagerhat", division: "Khulna" },
+  { code: "56", name: "Chuadanga", division: "Khulna" },
+  { code: "57", name: "Jashore", division: "Khulna" },
+  { code: "58", name: "Jhenaidah", division: "Khulna" },
+  { code: "59", name: "Khulna", division: "Khulna" },
+  { code: "60", name: "Kushtia", division: "Khulna" },
+  { code: "61", name: "Magura", division: "Khulna" },
+  { code: "62", name: "Meherpur", division: "Khulna" },
+  { code: "63", name: "Narail", division: "Khulna" },
+  { code: "64", name: "Satkhira", division: "Khulna" },
+];

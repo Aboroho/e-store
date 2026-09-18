@@ -1,0 +1,814 @@
+// =============================================================================
+// Part 2: catalog, attributes, variants, pricing, purchasing, inventory
+// =============================================================================
+
+enum ProductType {
+  SIMPLE
+  VARIABLE
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum AttributeType {
+  TEXT
+  SELECT
+  COLOR
+  NUMBER
+}
+
+enum VariantStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum PriceListChannel {
+  DEFAULT
+  STOREFRONT
+  RESELLER
+  WHOLESALE
+  CUSTOM
+}
+
+enum PriceListStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum StockCondition {
+  SELLABLE
+  DAMAGED
+  INSPECTION
+}
+
+enum InventoryMovementType {
+  OPENING
+  PURCHASE_RECEIPT
+  PURCHASE_RECEIPT_REVERSAL
+  SALE_DISPATCH
+  SALE_REVERSAL
+  RESERVATION
+  RESERVATION_RELEASE
+  ADJUSTMENT_INCREASE
+  ADJUSTMENT_DECREASE
+  DAMAGE_RECORDED
+  DAMAGE_RELEASED
+  INSPECTION_IN
+  INSPECTION_OUT
+  PREORDER_ALLOCATION
+  EXCHANGE_RETURN_IN
+  EXCHANGE_REPLACEMENT_OUT
+  CORRECTION
+}
+
+enum ReservationStatus {
+  ACTIVE
+  PARTIALLY_CONSUMED
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+enum PreorderCommitmentStatus {
+  OPEN
+  PARTIALLY_ALLOCATED
+  ALLOCATED
+  FULFILLED
+  CANCELLED
+}
+
+enum AdjustmentDirection {
+  INCREASE
+  DECREASE
+  BOTH
+}
+
+enum PurchaseStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum GoodsReceiptStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+enum ExpenseAllocationMethod {
+  QUANTITY
+  VALUE
+  NONE
+}
+
+// ----------------------------------------------------------------------------
+// Catalog
+// ----------------------------------------------------------------------------
+
+model Category {
+  id           String        @id @default(uuid())
+  businessId   String
+  parentId     String?
+  name         String
+  slug         String
+  description  String?
+  imageMediaId String?
+  position     Int           @default(0)
+  isActive     Boolean       @default(true)
+  isFeatured   Boolean       @default(false)
+  seoTitle     String?
+  seoDescription String?
+  path         String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  business  Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent    Category?    @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Category[]   @relation("CategoryHierarchy")
+  products  ProductCategory[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, isActive, position])
+  @@index([parentId])
+}
+
+model Product {
+  id               String        @id @default(uuid())
+  businessId       String
+  name             String
+  slug             String
+  productType      ProductType   @default(SIMPLE)
+  status           ProductStatus @default(DRAFT)
+  shortDescription String?
+  description      String?
+  brand            String?
+  sku              String?
+  barcode          String?
+  unitLabel        String        @default("piece")
+  weightGrams      Int?
+  requiresShipping Boolean       @default(true)
+  isFeatured       Boolean       @default(false)
+  isPreorderEnabled Boolean      @default(false)
+  preorderNote     String?
+  preorderExpectedAt DateTime?
+  taxRateBps       Int           @default(0)
+  packagingCostPaisa Int         @default(0)
+  attributesSummary Json?
+  seoTitle         String?
+  seoDescription   String?
+  seoKeywords      String?
+  publishedAt      DateTime?
+  archivedAt       DateTime?
+  createdByUserId  String?
+  updatedByUserId  String?
+  metadata         Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+
+  business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  categories ProductCategory[]
+  images     ProductImage[]
+  variants   Variant[]
+  attributes ProductAttribute[]
+  reviews    Review[]
+  priceItems PriceListItem[]
+  orderItems OrderItem[]
+  mediaUsages MediaUsage[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, status, createdAt])
+  @@index([businessId, isFeatured])
+  @@index([businessId, deletedAt])
+}
+
+model ProductCategory {
+  id         String   @id @default(uuid())
+  productId  String
+  categoryId String
+  isPrimary  Boolean  @default(false)
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, categoryId])
+  @@index([categoryId])
+}
+
+model Attribute {
+  id                 String        @id @default(uuid())
+  businessId         String
+  name               String
+  slug               String
+  type               AttributeType @default(SELECT)
+  unit               String?
+  position           Int           @default(0)
+  isVariantDefining  Boolean       @default(true)
+  isActive           Boolean       @default(true)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  values        AttributeValue[]
+  productLinks  ProductAttribute[]
+  variantValues VariantAttributeValue[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, position])
+}
+
+model AttributeValue {
+  id          String   @id @default(uuid())
+  attributeId String
+  value       String
+  slug        String
+  colorHex    String?
+  position    Int      @default(0)
+  mediaId     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  attribute      Attribute               @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  variantValues  VariantAttributeValue[]
+
+  @@unique([attributeId, slug])
+  @@index([attributeId, position])
+}
+
+/// Attributes that participate in variant generation for a product.
+model ProductAttribute {
+  id          String   @id @default(uuid())
+  productId   String
+  attributeId String
+  isRequired  Boolean  @default(true)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, attributeId])
+  @@index([attributeId])
+}
+
+model Variant {
+  id             String        @id @default(uuid())
+  productId      String
+  sku            String        @unique
+  barcode        String?
+  name           String
+  /// Deterministic key of the attribute combination, e.g. "color=red|size=xl".
+  /// Guarantees that one product cannot contain the same combination twice.
+  optionKey      String
+  status         VariantStatus @default(ACTIVE)
+  position       Int           @default(0)
+  weightGrams    Int?
+  priceOverridePaisa Int?
+  compareAtPricePaisa Int?
+  costPaisa      Int?
+  packagingCostPaisa Int?
+  isPreorderEnabled Boolean?
+  imageMediaId   String?
+  attributesSummary Json?
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  product        Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attributeValues VariantAttributeValue[]
+  images         VariantImage[]
+  priceItems     PriceListItem[]
+  inventory      InventoryBalance[]
+  movements      InventoryMovement[]
+  reservations   StockReservation[]
+  preorders      PreorderCommitment[]
+  adjustments    StockAdjustment[]
+  orderItems     OrderItem[]
+  purchaseItems  PurchaseOrderItem[]
+  exchangeItems  ExchangeItem[]
+  mediaUsages    MediaUsage[]
+  reviews        Review[]
+
+  @@unique([productId, optionKey])
+  @@index([productId, status])
+  @@index([status])
+}
+
+model VariantAttributeValue {
+  id               String   @id @default(uuid())
+  variantId        String
+  attributeId      String
+  attributeValueId String
+  createdAt        DateTime @default(now())
+
+  variant        Variant        @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  attribute      Attribute      @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  attributeValue AttributeValue @relation(fields: [attributeValueId], references: [id], onDelete: Cascade)
+
+  @@unique([variantId, attributeId])
+  @@index([attributeValueId])
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  mediaId   String
+  position  Int      @default(0)
+  altText   String?
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  media   MediaAsset @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@unique([productId, mediaId])
+  @@index([productId, position])
+}
+
+model VariantImage {
+  id        String   @id @default(uuid())
+  variantId String
+  mediaId   String
+  position  Int      @default(0)
+  altText   String?
+  createdAt DateTime @default(now())
+
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  media   MediaAsset @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@unique([variantId, mediaId])
+  @@index([variantId, position])
+}
+
+// ----------------------------------------------------------------------------
+// Pricing
+// ----------------------------------------------------------------------------
+
+/// A named set of prices. Exactly one list may be the business default;
+/// additional lists target storefronts, resellers or custom channels.
+model PriceList {
+  id          String           @id @default(uuid())
+  businessId  String
+  name        String
+  slug        String
+  channel     PriceListChannel @default(DEFAULT)
+  currency    String           @default("BDT")
+  isDefault   Boolean          @default(false)
+  priority    Int              @default(0)
+  storefrontId String?
+  resellerId  String?          @unique
+  status      PriceListStatus  @default(ACTIVE)
+  validFrom   DateTime?
+  validTo     DateTime?
+  description String?
+  createdByUserId String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reseller   Reseller?         @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  items      PriceListItem[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, channel, status])
+  @@index([storefrontId])
+}
+
+model PriceListItem {
+  id                 String   @id @default(uuid())
+  priceListId        String
+  variantId          String
+  productId          String?
+  pricePaisa         Int
+  compareAtPricePaisa Int?
+  minQuantity        Int      @default(1)
+  validFrom          DateTime?
+  validTo            DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  variant   Variant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  product   Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([priceListId, variantId, minQuantity])
+  @@index([variantId])
+}
+
+// ----------------------------------------------------------------------------
+// Purchasing
+// ----------------------------------------------------------------------------
+
+model Supplier {
+  id           String   @id @default(uuid())
+  businessId   String
+  name         String
+  contactName  String?
+  phone        String?
+  email        String?
+  address      String?
+  note         String?
+  paymentTerms String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business      Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+
+  @@index([businessId, isActive])
+}
+
+model PurchaseOrder {
+  id              String         @id @default(uuid())
+  businessId      String
+  supplierId      String
+  code            String
+  status          PurchaseStatus @default(DRAFT)
+  currency        String         @default("BDT")
+  orderedAt       DateTime?
+  expectedAt      DateTime?
+  subtotalPaisa   Int            @default(0)
+  extraCostPaisa  Int            @default(0)
+  totalPaisa      Int            @default(0)
+  paidPaisa       Int            @default(0)
+  note            String?
+  internalNote    String?
+  createdByUserId String?
+  approvedByUserId String?
+  receivedAt      DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  business  Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  supplier  Supplier           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items     PurchaseOrderItem[]
+  receipts  GoodsReceipt[]
+  expenses  PurchaseExpense[]
+  payments  SupplierPayment[]
+
+  @@unique([businessId, code])
+  @@index([businessId, status, createdAt])
+  @@index([supplierId])
+}
+
+model PurchaseOrderItem {
+  id               String   @id @default(uuid())
+  purchaseOrderId  String
+  variantId        String
+  sku              String
+  productName      String
+  variantName      String
+  orderedQuantity  Int
+  receivedQuantity Int      @default(0)
+  unitCostPaisa    Int
+  lineTotalPaisa   Int      @default(0)
+  position         Int      @default(0)
+  note             String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  purchaseOrder PurchaseOrder   @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  variant       Variant         @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  receiptItems  GoodsReceiptItem[]
+
+  @@unique([purchaseOrderId, variantId])
+  @@index([variantId])
+}
+
+model GoodsReceipt {
+  id              String              @id @default(uuid())
+  purchaseOrderId String
+  code            String
+  status          GoodsReceiptStatus  @default(DRAFT)
+  receivedAt      DateTime            @default(now())
+  receivedByUserId String?
+  locationId      String
+  idempotencyKey  String?             @unique
+  note            String?
+  totalCostPaisa  Int                 @default(0)
+  totalQuantity   Int                 @default(0)
+  externalReference String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  location      InventoryLocation   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  items         GoodsReceiptItem[]
+  expenses      PurchaseExpense[]
+
+  @@unique([purchaseOrderId, code])
+  @@index([purchaseOrderId, status])
+}
+
+model GoodsReceiptItem {
+  id                 String   @id @default(uuid())
+  goodsReceiptId     String
+  purchaseOrderItemId String
+  variantId          String
+  quantity           Int
+  unitCostPaisa      Int
+  allocatedExpensePaisa Int   @default(0)
+  lineCostPaisa      Int      @default(0)
+  inventoryMovementId String? @unique
+  note               String?
+  createdAt          DateTime @default(now())
+
+  goodsReceipt     GoodsReceipt     @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+  inventoryMovement InventoryMovement? @relation("ReceiptMovement", fields: [inventoryMovementId], references: [id], onDelete: SetNull)
+
+  @@index([goodsReceiptId])
+  @@index([variantId])
+}
+
+/// Additional acquisition costs (freight, duty, packaging) that are
+/// allocated to receipt lines and therefore to inventory valuation.
+model PurchaseExpense {
+  id              String                  @id @default(uuid())
+  purchaseOrderId String
+  goodsReceiptId  String?
+  label           String
+  amountPaisa     Int
+  allocationMethod ExpenseAllocationMethod @default(QUANTITY)
+  allocated       Boolean                 @default(false)
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime                @default(now())
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  goodsReceipt  GoodsReceipt? @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+}
+
+model SupplierPayment {
+  id              String   @id @default(uuid())
+  businessId      String
+  supplierId      String
+  purchaseOrderId String?
+  amountPaisa     Int
+  method          String   @default("CASH")
+  reference       String?
+  paidAt          DateTime @default(now())
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, paidAt])
+  @@index([supplierId])
+}
+
+// ----------------------------------------------------------------------------
+// Inventory
+// ----------------------------------------------------------------------------
+
+/// Physical stock location. Version 1 operates a single default location.
+model InventoryLocation {
+  id         String   @id @default(uuid())
+  businessId String
+  name       String
+  code       String
+  address    String?
+  isDefault  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  balances      InventoryBalance[]
+  movements     InventoryMovement[]
+  reservations  StockReservation[]
+  preorders     PreorderCommitment[]
+  adjustments   StockAdjustment[]
+  receipts      GoodsReceipt[]
+
+  @@unique([businessId, code])
+  @@index([businessId, isActive])
+}
+
+/// Current stock state per variant and location.
+/// Invariants (see docs/BUSINESS_RULES.md):
+///   available = sellable - reserved
+///   sellable  = onHand - damaged - inspection
+///   onHand, damaged, inspection and reserved are never negative.
+model InventoryBalance {
+  id                String   @id @default(uuid())
+  locationId        String
+  variantId         String
+  /// Total physical units owned at this location (sellable + damaged + inspection).
+  onHand            Int      @default(0)
+  reserved          Int      @default(0)
+  damaged           Int      @default(0)
+  inspection        Int      @default(0)
+  preorderCommitted Int      @default(0)
+  incomingQuantity  Int      @default(0)
+  averageCostPaisa  Int      @default(0)
+  lastMovementAt    DateTime?
+  lastCountedAt     DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  location InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  variant  Variant           @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, variantId])
+  @@index([variantId])
+}
+
+/// Immutable inventory ledger. Every stock change writes exactly one row
+/// (plus balance updates) inside the same transaction.
+model InventoryMovement {
+  id             String                @id @default(uuid())
+  businessId     String
+  locationId     String
+  variantId      String
+  type           InventoryMovementType
+  condition      StockCondition        @default(SELLABLE)
+  /// Signed change applied to `onHand` (negative for outbound movements).
+  quantityDelta  Int                   @default(0)
+  /// Signed change applied to `reserved`.
+  reservedDelta  Int                   @default(0)
+  /// Signed change applied to `damaged`.
+  damagedDelta   Int                   @default(0)
+  /// Signed change applied to `inspection`.
+  inspectionDelta Int                  @default(0)
+  onHandAfter    Int
+  reservedAfter  Int
+  damagedAfter   Int
+  inspectionAfter Int
+  unitCostPaisa  Int?
+  valueDeltaPaisa Int?
+  averageCostAfterPaisa Int?
+  sourceType     String?
+  sourceId       String?
+  reference      String?
+  reason         String?
+  note           String?
+  actorUserId    String?
+  actorCustomerId String?
+  idempotencyKey String?               @unique
+  createdAt      DateTime              @default(now())
+
+  business  Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location  InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  variant   Variant           @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  adjustment StockAdjustment?
+  receiptItem GoodsReceiptItem? @relation("ReceiptMovement")
+  preorderAllocations PreorderAllocation[]
+  reservationAllocations ReservationAllocation[]
+
+  @@index([variantId, createdAt])
+  @@index([locationId, variantId, createdAt])
+  @@index([type, createdAt])
+  @@index([sourceType, sourceId])
+  @@index([createdAt])
+}
+
+/// Reservation of physical stock for a specific order item.
+model StockReservation {
+  id             String            @id @default(uuid())
+  businessId     String
+  locationId     String
+  variantId      String
+  orderId        String
+  orderItemId    String            @unique
+  quantity       Int
+  consumedQuantity Int             @default(0)
+  releasedQuantity Int             @default(0)
+  status         ReservationStatus @default(ACTIVE)
+  idempotencyKey String?           @unique
+  expiresAt      DateTime?
+  consumedAt     DateTime?
+  releasedAt     DateTime?
+  releasedReason String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  location  InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  variant   Variant           @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  allocations ReservationAllocation[]
+
+  @@index([orderId])
+  @@index([variantId, status])
+  @@index([status, expiresAt])
+}
+
+model ReservationAllocation {
+  id             String   @id @default(uuid())
+  reservationId  String
+  quantity       Int
+  inventoryMovementId String?
+  kind           String   @default("RESERVE")
+  createdAt      DateTime @default(now())
+
+  reservation StockReservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+}
+
+/// Quantity of an order item that could not be covered by physical stock and
+/// is owed to the customer as a preorder. Allocated FIFO when stock arrives.
+model PreorderCommitment {
+  id                String                    @id @default(uuid())
+  businessId        String
+  locationId        String
+  variantId         String
+  orderId           String
+  orderItemId       String                    @unique
+  quantity          Int
+  allocatedQuantity Int                       @default(0)
+  status            PreorderCommitmentStatus  @default(OPEN)
+  priorityAt        DateTime                  @default(now())
+  expectedAt        DateTime?
+  note              String?
+  cancelledAt       DateTime?
+  cancelReason      String?
+  fulfilledAt       DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  location  InventoryLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  variant   Variant           @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  allocations PreorderAllocation[]
+
+  @@index([variantId, status, priorityAt])
+  @@index([orderId])
+}
+
+model PreorderAllocation {
+  id                   String   @id @default(uuid())
+  preorderCommitmentId String
+  quantity             Int
+  inventoryMovementId  String?
+  reservationId        String?
+  createdByUserId      String?
+  note                 String?
+  createdAt            DateTime @default(now())
+
+  preorderCommitment PreorderCommitment @relation(fields: [preorderCommitmentId], references: [id], onDelete: Cascade)
+  inventoryMovement  InventoryMovement? @relation(fields: [inventoryMovementId], references: [id], onDelete: SetNull)
+
+  @@index([preorderCommitmentId])
+}
+
+model StockAdjustmentReason {
+  id           String               @id @default(uuid())
+  businessId   String
+  code         String
+  label        String
+  direction    AdjustmentDirection  @default(BOTH)
+  requiresNote Boolean              @default(false)
+  isActive     Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  business    Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  adjustments StockAdjustment[]
+
+  @@unique([businessId, code])
+}
+
+model StockAdjustment {
+  id            String         @id @default(uuid())
+  businessId    String
+  locationId    String
+  variantId     String
+  reasonId      String?
+  reasonCode    String
+  direction     AdjustmentDirection
+  condition     StockCondition @default(SELLABLE)
+  quantity      Int
+  note          String?
+  reference     String?
+  actorUserId   String?
+  inventoryMovementId String?  @unique
+  createdAt     DateTime       @default(now())
+
+  business  Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location  InventoryLocation     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  variant   Variant               @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  reason    StockAdjustmentReason? @relation(fields: [reasonId], references: [id], onDelete: SetNull)
+  inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id], onDelete: SetNull)
+
+  @@index([variantId, createdAt])
+  @@index([businessId, createdAt])
+}
