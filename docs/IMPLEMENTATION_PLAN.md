@@ -32,17 +32,21 @@ production build must all pass before the next stage starts. This plan is the wo
 | Tests | 11 new integration tests (catalog 5, inventory 7, purchasing 6, preorders 4) — suite now 72 tests | done |
 | Docs | DATABASE_DESIGN, BUSINESS_RULES, TESTING | done |
 
-## Stage 3 — Orders, checkout, payments, couriers and exchanges
+## Stage 3 — Orders, checkout, payments, couriers and exchanges ✅ complete
 
-- Checkout with server-side re-pricing, address snapshots, delivery zone fees, COD surcharge.
-- Order lifecycle: PENDING → CONFIRMED → PROCESSING → READY_TO_SHIP → SHIPPED → DELIVERED →
-  COMPLETED, with reservation → allocation → dispatch and cancellation releasing stock.
-- Payments: COD, bKash, SSLCommerz, manual/bank transfer, refunds, `PaymentEvent` webhooks.
-- Courier adapters: Pathao, Steadfast, CarryBee (one file per provider operation), shipments,
-  tracking webhooks, COD collection records.
-- Exchange requests with inspection, restock decisions and difference settlement.
-- Outbox + `scripts/worker.ts` for every external call; nothing external inside a transaction.
-- Docs: API (REST v1 surface).
+| Area | Deliverable | Status |
+| --- | --- | --- |
+| Orders | `createOrder` in one transaction (customer, price resolution, reservation, preorder shortfall, zone fee, COD fee, audit), idempotent replay, `INSUFFICIENT_STOCK` instead of oversell, status machine with history, cancel (release + cancel preorder promise), dispatch (consume reservation, `SALE_DISPATCH`, outbox event), ready-for-courier/delivered transitions | done |
+| Checkout | Storefront order placement from variant ids + quantities only, storefront resolution (slug), server-side pricing from the storefront price list, delivery-zone fee and COD fee, rate-limited public server action, guest-order claiming after phone verification | done |
+| Payments | `recordPayment`, `initiateProviderPayment`, `processProviderEvent` (atomic, deduped by provider event), bKash and SSLCommerz clients with server-side signature verification, refunds with attempts, COD collection idempotent per shipment, derived `paid/due/refunded` + `paymentStatus` | done |
+| Couriers | Adapter per provider per operation (`pathao-outgoing-data.ts`, `steadfast-outgoing-data.ts`, `carrybee-outgoing-data.ts` + clients), `MANUAL` handled without a provider call, encrypted credentials, HMAC-verified webhooks, single status writer with history, tracking refresh, charges | done |
+| Outbox worker | `scripts/worker.ts` claims events with `FOR UPDATE SKIP LOCKED`, exponential backoff, dead-letter record, `worker:once` for cron | done |
+| Settlements | Statement import with row matching against expected collection, duplicate-reference guard, discrepancy reasons, manual resolve/ignore, reconcile | done |
+| Exchanges | Return-window check, partial exchanges, credit/charge maths, replacement reservation at approval, inspection (sellable restock vs damaged bucket), difference collected or refunded | done |
+| Admin & account screens | Orders (list/new/detail), payments, customers (list/detail), shipments, couriers & gateways, settlements, exchanges, storefront checkout, customer account (orders + cancel) | done |
+| API | `docs/API.md` + `/api/v1/orders`, `/api/v1/orders/{orderNumber}`, `/api/v1/customers/verification`, payment callbacks, courier webhooks | done |
+| Tests | 29 new integration tests (orders 11, fulfilment 8, storefront/webhooks 10) — suite now 101 tests | done |
+| Docs | API, BUSINESS_RULES (§8–10), TESTING (§4), ARCHITECTURE (§5–6) | done |
 
 ## Stage 4 — Resellers, settlement reconciliation, payouts, reports
 

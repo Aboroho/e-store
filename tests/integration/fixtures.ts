@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { prisma } from "@/lib/db/client";
+import { prisma, withTransaction } from "@/lib/db/client";
+import { applyStockMovement } from "@/modules/inventory/service";
 
 /**
  * Shared fixtures for database-backed integration tests.
@@ -79,6 +80,43 @@ export async function createTestBusiness(label: string): Promise<TestContext> {
  * the business cascade alone.
  */
 export async function destroyTestBusiness(businessId: string): Promise<void> {
+  // Stage 3 rows first: exchanges restrict their order, and settlements/COD
+  // collections point at shipments, so they must go before the orders.
+  await prisma.resellerPayoutEntry.deleteMany({ where: { payout: { businessId } } });
+  await prisma.resellerPayout.deleteMany({ where: { businessId } });
+  await prisma.resellerLedgerEntry.deleteMany({ where: { businessId } });
+  await prisma.exchangeItem.deleteMany({ where: { exchangeRequest: { businessId } } });
+  await prisma.exchangeStatusHistory.deleteMany({ where: { exchangeRequest: { businessId } } });
+  await prisma.refundAttempt.deleteMany({ where: { refund: { businessId } } });
+  await prisma.refund.deleteMany({ where: { businessId } });
+  await prisma.paymentEvent.deleteMany({ where: { payment: { businessId } } });
+  await prisma.paymentAttempt.deleteMany({ where: { payment: { businessId } } });
+  await prisma.paymentAllocation.deleteMany({ where: { payment: { businessId } } });
+  await prisma.payment.deleteMany({ where: { businessId } });
+  await prisma.codCollection.deleteMany({ where: { businessId } });
+  await prisma.courierSettlementEntry.deleteMany({ where: { settlement: { businessId } } });
+  await prisma.courierSettlement.deleteMany({ where: { businessId } });
+  await prisma.courierCharge.deleteMany({ where: { shipment: { businessId } } });
+  await prisma.shipmentStatusHistory.deleteMany({ where: { shipment: { businessId } } });
+  await prisma.codCollection.deleteMany({ where: { businessId } });
+  await prisma.shipment.deleteMany({ where: { businessId } });
+  await prisma.courierWebhookEvent.deleteMany({ where: { courierProviderId: { not: null } } });
+  await prisma.courierProvider.deleteMany({ where: { businessId } });
+  await prisma.exchangeRequest.deleteMany({ where: { businessId } });
+  await prisma.exchangeReason.deleteMany({ where: { businessId } });
+  await prisma.outboxEvent.deleteMany({ where: { businessId } });
+  await prisma.orderAdjustment.deleteMany({ where: { order: { businessId } } });
+  await prisma.orderStatusHistory.deleteMany({ where: { order: { businessId } } });
+  await prisma.orderAddress.deleteMany({ where: { order: { businessId } } });
+  await prisma.customerSession.deleteMany({ where: { customer: { businessId } } });
+  await prisma.verificationCode.deleteMany({ where: { businessId } });
+  await prisma.customerAddress.deleteMany({ where: { customer: { businessId } } });
+  await prisma.customerNote.deleteMany({ where: { customer: { businessId } } });
+  await prisma.customer.deleteMany({ where: { businessId } });
+  await prisma.deliveryZone.deleteMany({ where: { businessId } });
+  await prisma.integrationSecret.deleteMany({ where: { courierProviderId: { not: null } } });
+  await prisma.integration.deleteMany({ where: { businessId } });
+  await prisma.storefront.deleteMany({ where: { businessId } });
   await prisma.preorderAllocation.deleteMany({ where: { preorderCommitment: { businessId } } });
   await prisma.reservationAllocation.deleteMany({ where: { reservation: { businessId } } });
   await prisma.stockReservation.deleteMany({ where: { businessId } });
@@ -192,4 +230,40 @@ export async function readBalance(locationId: string, variantId: string) {
   });
   if (!balance) throw new Error("inventory balance row is missing");
   return balance;
+}
+
+/** Storefront fixture: needed before an order can be created from a storefront. */
+export async function createTestStorefront(
+  context: TestContext,
+  options: { code?: string; priceListId?: string; locationId?: string } = {},
+): Promise<{ storefrontId: string; slug: string }> {
+  const suffix = randomUUID().slice(0, 6);
+  const storefront = await prisma.storefront.create({
+    data: {
+      businessId: context.businessId,
+      name: `Test storefront ${suffix}`,
+      slug: `shop-${suffix}`,
+      code: options.code ?? `SHOP-${suffix}`,
+      status: "ACTIVE",
+      isDefault: true,
+      defaultPriceListId: options.priceListId ?? context.priceListId,
+      defaultLocationId: options.locationId ?? context.locationId,
+    },
+  });
+  return { storefrontId: storefront.id, slug: storefront.slug };
+}
+
+/** Put stock on the shelf through the real inventory service. */
+export async function addTestStock(context: TestContext, variantId: string, quantity: number, unitCostPaisa = 5_000) {
+  return withTransaction((tx) =>
+    applyStockMovement(tx, {
+      businessId: context.businessId,
+      locationId: context.locationId,
+      variantId,
+      type: "OPENING",
+      onHandDelta: quantity,
+      unitCostPaisa,
+      actorUserId: context.userId,
+    }),
+  );
 }

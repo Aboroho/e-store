@@ -79,19 +79,39 @@ Full table list: see `docs/DATABASE_DESIGN.md` (Stage 2) — the schema itself i
 - UI filtering (`can`) is a usability feature; `assertPermission` on the server is the boundary.
   Both read from the same catalogue so they cannot drift.
 
-## 5. Background work (introduced in Stage 3, used from Stage 4)
+## 5. Background work
 
-External calls (courier booking, SMS, email, webhook delivery) never run inside a database
-transaction. Instead a module writes an `OutboxEvent` in the same transaction as its state change;
-`scripts/worker.ts` (Stage 3) claims events with `FOR UPDATE SKIP LOCKED`, performs the call, and
-records the result. Failures are retried with exponential backoff and dead-lettered to
-`BackgroundJob` after a configurable attempt limit.
+External calls (courier booking, tracking refresh, SMS, email) never run inside a database
+transaction. A module writes an `OutboxEvent` in the same transaction as its state change;
+`scripts/worker.ts` claims events with `FOR UPDATE SKIP LOCKED`, performs the call, and records the
+result. Failures retry with exponential backoff (`30s × 2^attempt`, capped at one hour) up to
+`maxAttempts`, then the event is marked `FAILED` and the shipment keeps the provider's message in
+`failureReason` so an operator can requeue it from the UI.
 
-## 6. Stage 1 runtime topology
+The worker is a separate process, so a provider outage can never hold a database transaction open
+or block a customer's checkout:
+
+```
+admin action ──writes Shipment + OutboxEvent (one tx)──▶ returns immediately
+                                          │
+                              npm run worker (ClaimsEvent)
+                                          │
+                     adapter.createShipment() ──HTTP──▶ Pathao / Steadfast / CarryBee
+                                          │
+                     updateShipmentStatus() + status history + audit (one tx)
+```
+
+Provider status comes back the other way: a signed webhook (or the polling refresher) resolves the
+shipment by consignment id / tracking code and calls the same `updateShipmentStatus`, which is the
+only writer of shipment state — so a webhook, a manual update and a poll cannot disagree.
+
+## 6. Runtime topology
 
 - `npm run dev` / `npm run build && npm start` — the application (port 3000).
+- `npm run worker` (continuous) or `npm run worker:once` (cron) — outbox and tracking refresher.
 - PostgreSQL 17 (embedded locally, managed service in production).
-- No worker process is needed yet; `npm run worker` is added in Stage 3.
+- Media storage is S3-compatible from Stage 5; the driver can be `disabled`, which makes uploads
+  fail loudly instead of pretending to store files.
 
 ## 7. Failure handling
 

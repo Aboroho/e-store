@@ -1,7 +1,7 @@
 # Testing
 
-Status: Stages 1–2. This document lists what is tested, how to run it, and which
-guarantees are intentionally *not* covered yet.
+Status: Stages 1–3. This document lists what is tested, how to run it, and which
+guarantees are intentionally *not* covered yet. The suite is 101 tests across 12 files.
 
 ## 1. Running the suite
 
@@ -19,7 +19,7 @@ reachable, so unit tests still run on a machine without a database. They never m
 the seeded demo business: each suite creates its own business with a unique slug and
 deletes it afterwards (`tests/integration/fixtures.ts`).
 
-## 2. Unit tests (`tests/lib`, 50 tests)
+## 2. Unit tests (`tests/lib`, 47 tests)
 
 | File | Covers |
 | --- | --- |
@@ -28,7 +28,10 @@ deletes it afterwards (`tests/integration/fixtures.ts`).
 | `auth-password.test.ts` | bcrypt cost-12 hashing, verification, timing-safe comparison, token generation |
 | `utils-validation.test.ts` | slug/phone normalisation, list-query parsing (sort allowlist, page clamping), form value coercion |
 
-## 3. Integration tests (`tests/integration`, 22 tests)
+> `phoneNormalized` is the local `01XXXXXXXXX` form (not `880…`); it is the identity key for a
+> customer and the lookup key for guest-order claiming.
+
+## 3. Integration tests — Stages 1–2 (`tests/integration`, 22 tests)
 
 All of them use the real Prisma client, the real services and real transactions —
 nothing is mocked.
@@ -89,7 +92,19 @@ row; password change verifies the old password and revokes sessions.
   counter drift); the queue path serves what exists and reports `skipped`.
 - Cancelling a commitment releases reserved and committed counters.
 
-## 4. Manual verification recorded per stage
+## 4. Stage 3 suites
+
+| File | Tests | What it proves |
+| --- | --- | --- |
+| `tests/integration/orders.test.ts` | 11 | price/cost snapshots at creation, reservation counters, idempotent replay, oversell refused (also under 3 concurrent orders), dispatch consumes stock exactly once and queues one outbox event, cancellation releases exactly once, one customer per phone, a session only after a verified code, partial → full payment, webhook applied once, COD + refund flow |
+| `tests/integration/fulfilment.test.ts` | 8 | outbox retry/backoff when provider credentials are missing, provider request bodies and status mapping for Pathao/Steadfast/CarryBee, shipment status history is written once and moves the order, statement import matches/mismatches and refuses duplicates, COD marked settled with the courier's fees, exchange credit/charge maths, inspection restock, damaged returns, refund when the replacement is cheaper, CSV parsing |
+| `tests/integration/storefront.test.ts` | 10 | storefront resolution, price-list pricing beats the variant override, zone fee and COD fee, double-submit idempotency, unavailable quantity refused, unknown slug refused, guest-order claiming after verification, signed courier webhook applied once, unsigned webhook refused and stored as failed, unknown tracking code ignored |
+
+No test in these suites performs a network call: the outbox path is exercised with a
+provider that has no credentials (the realistic half-configured state), and provider
+payload builders are pure functions.
+
+## 5. Manual verification recorded per stage
 
 Each stage ends with a smoke pass against the running dev server using a real session
 cookie (minted with the application's own `createSession`), verifying that every new
@@ -98,7 +113,20 @@ route renders with data created through the service layer. Stage 2 smoke results
 variants, price-list editor, inventory list, movement history, adjustment history,
 preorder queue, purchase order detail with receipts and freight lines, supplier list).
 
-## 5. Adding tests
+Stage 3 smoke results: a storefront order was placed through `placeStorefrontOrder`
+(real catalogue, district 26 zone fee, COD surcharge), then 22 admin routes were fetched
+with a real session cookie — `/admin`, `/admin/orders`, `/admin/orders/new`,
+`/admin/orders/<id>`, `/admin/customers`, `/admin/customers/<id>`, `/admin/shipments`,
+`/admin/couriers`, `/admin/settlements`, `/admin/exchanges`, `/admin/exchanges/new`,
+`/admin/payments`, `/admin/inventory`, `/admin/inventory/adjustments`,
+`/admin/inventory/preorders`, `/admin/purchasing`, `/admin/purchasing/new`,
+`/admin/purchasing/suppliers`, `/admin/catalog/products`, `/admin/catalog/categories`,
+`/admin/catalog/attributes`, `/admin/catalog/price-lists` — all returned `200` and
+rendered real rows. `/checkout` rendered the live catalogue and `/account` rendered the
+sign-in form without a session; `/admin/orders` without a cookie redirected to
+`/login?next=%2Fadmin%2Forders`.
+
+## 6. Adding tests
 
 1. Put pure logic in `tests/lib`, database behaviour in `tests/integration`.
 2. Use `createTestBusiness()` from `tests/integration/fixtures.ts`; never touch the
@@ -107,11 +135,11 @@ preorder queue, purchase order detail with receipts and freight lines, supplier 
 4. Prefer concurrent `Promise.all` assertions for anything that must survive races.
 5. If a test exposes a real bug, fix the service and keep the test.
 
-## 6. Not covered yet (deliberate)
+## 7. Not covered yet (deliberate)
 
 - Browser/E2E automation (Playwright) — deferred to Stage 5 hardening.
-- Payment/courier provider sandboxes — Stage 3 adds adapter tests with signed fixture
-  payloads; real provider calls are never made from tests.
+- Payment/courier provider sandboxes — the adapters are covered by payload-builder and
+  status-mapping tests; real provider calls are never made from tests.
 - Load/soak testing, S3 uploads (storage driver is `disabled` here) and SMTP delivery —
   Stage 5.
 - The FK/constraint drift checker runs as `npm run db:check-fk` and requires a migrated

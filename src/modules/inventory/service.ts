@@ -403,6 +403,23 @@ export async function recordStockAdjustment(input: StockAdjustmentInput): Promis
   });
 }
 
+/**
+ * Lock a balance row for update and return how many units can still be sold
+ * (on hand minus reserved, damaged and units under inspection). Callers inside a
+ * transaction use this to reserve stock without ever overselling: the row lock
+ * serialises concurrent orders for the same variant.
+ */
+export async function lockAvailableQuantity(tx: Tx, locationId: string, variantId: string): Promise<number> {
+  const rows = await tx.$queryRaw<Array<{ onHand: number; reserved: number; damaged: number; inspection: number }>>`
+    SELECT "onHand", "reserved", "damaged", "inspection"
+    FROM "InventoryBalance"
+    WHERE "locationId" = ${locationId} AND "variantId" = ${variantId}
+    FOR UPDATE`;
+  const balance = rows[0];
+  if (!balance) return 0;
+  return availableQuantity(balance);
+}
+
 export async function defaultLocationId(businessId: string): Promise<string> {
   const location = await prisma.inventoryLocation.findFirst({
     where: { businessId, isActive: true },

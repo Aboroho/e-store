@@ -133,3 +133,76 @@ them also by a database constraint.
 2. Owners always have all permissions; roles are permission sets assigned per user.
 3. Every financial or stock-affecting change writes an `AuditLog` row in the same
    transaction as the change, including before/after values and the reason.
+
+## 8. Orders and stock (Stage 3)
+
+1. **One order, one transaction.** Customer lookup, price resolution, stock reservation
+   (or preorder commitment), totals and the audit row are written together. A failure
+   anywhere leaves no half-created order.
+2. **The browser never sends money or stock.** Storefront checkout posts variant ids and
+   quantities only. Prices come from the price list (variant override → list item →
+   storefront list → default list), delivery fees from the zone, and the COD surcharge
+   from the zone (falling back to the business setting).
+3. **Reservations are the only way to promise a unit.** Available =
+   `onHand − reserved − damaged − inspection`. Order creation reserves the units it can
+   serve and only turns the shortfall into a preorder promise when the product allows it;
+   anything else fails with `INSUFFICIENT_STOCK` instead of overselling.
+4. **Dispatch consumes the reservation exactly once**, records a `SALE_DISPATCH`
+   movement and queues the courier booking. A second dispatch of the same order is
+   refused by the status machine, not by UI state.
+5. **Cancelling releases reserved units without restocking** what was never shipped,
+   and cancels any preorder promise (releasing both the allocated and the unallocated
+   part). Restocking happens only for goods that physically left the warehouse.
+6. **Idempotency keys are honoured on creation.** Replaying a key returns the original
+   order with `reused: true`; it never reserves a second time.
+7. **In-store orders are paid and dispatched in the same transaction** (cash at the
+   counter), which is why they need no shipment.
+
+## 9. Payments and refunds (Stage 3)
+
+1. **Recording a payment is separate from receiving one.** `Payment` rows carry the
+   method, the provider reference and who recorded them; `PaymentEvent` rows carry every
+   provider callback. A callback is applied at most once, keyed by
+   `(providerName, providerEventId)`.
+2. **A redirect is not a payment.** The callback's amount is checked against the payment
+   attempt before any money is recorded; a mismatched amount is stored as an event with
+   the reason and does not change the order.
+3. **`paidPaisa`, `duePaisa`, `refundedPaisa` and `paymentStatus` are derived** by
+   `recalculateOrderPayments` after every money movement — never set by a caller.
+4. **Refunds cannot exceed what was paid**, are tracked as
+   `REQUESTED → PROCESSING → COMPLETED/FAILED`, and each attempt is stored. Settling a
+   refund for an exchange closes the exchange's `refundId`.
+5. **Cash on delivery is recorded once per shipment** (`idempotencyKey = cod:<shipmentId>`),
+   so a repeated courier webhook or a settlement import cannot double-count the cash.
+
+## 10. Couriers, settlements and exchanges (Stage 3)
+
+1. **One adapter per provider per operation** (`pathao-outgoing-data.ts`,
+   `steadfast-outgoing-data.ts`, `carrybee-outgoing-data.ts` plus the client files), all
+   behind one interface, so a new courier is a new folder rather than a branch in the
+   order service. `MANUAL` has no adapter: those parcels are updated by hand.
+2. **Credentials are encrypted at rest** (`IntegrationSecret`), are never sent to the
+   browser, and are redacted from logs and error messages.
+3. **Webhooks are verified before they are trusted**: HMAC-SHA256 over the raw body with
+   the stored secret; the event is stored with `signatureValid` and rejected when the
+   signature does not match. Duplicate deliveries are recorded and ignored.
+4. **Shipment status has exactly one writer** (`updateShipmentStatus`), which appends
+   history and keeps the order's fulfilment status in step; delivery marks the order
+   `DELIVERED`.
+5. **Settlement rows are matched, never assumed.** A row matches a shipment by tracking
+   code or order number and must agree on the expected collection amount; anything else
+   lands as `UNMATCHED` with the discrepancy reason and needs a human decision
+   (attach / ignore) before the statement can be reconciled.
+6. **Statement import is idempotent per `(business, provider, reference)`**, keeps the
+   courier's own fee figures onto `CodCollection.netPaisa`, and refuses a second import
+   of the same statement.
+7. **Exchanges respect the return window** (settings key `exchange.window_days`, default
+   7 days from delivery) and can only use items the customer actually bought and has not
+   already exchanged.
+8. **A return is money, not stock, until it is inspected.** `SELLABLE` goes back to
+   `onHand`, `DAMAGED`/`DISCARDED` go to the damaged bucket through an
+   `EXCHANGE_RETURN_IN` movement with the reason recorded; replacement units are reserved
+   at approval and consumed at completion.
+9. **The difference is settled explicitly**: positive → collected from the customer,
+   negative → a refund row (so it flows through the same refund pipeline as any other
+   refund), zero → nothing.

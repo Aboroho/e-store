@@ -4,6 +4,7 @@ import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { allocateProportionally } from "@/lib/money";
 import { nextDocumentNumber } from "@/lib/numbering";
+import { allocatePreorders } from "@/modules/preorders/service";
 import { applyStockMovement, defaultLocationId } from "@/modules/inventory/service";
 import type { GoodsReceiptInput, PurchaseOrderInput, SupplierInput } from "@/modules/catalog/schemas";
 
@@ -263,6 +264,8 @@ export interface ReceivePurchaseOrderResult {
   receivedQuantity: number;
   totalCostPaisa: number;
   status: PurchaseStatusName;
+  /** Units of this receipt that immediately went to waiting preorder customers. */
+  allocatedPreorderUnits: number;
 }
 
 type PurchaseStatusName = "DRAFT" | "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CANCELLED";
@@ -301,6 +304,7 @@ export async function receivePurchaseOrder(
           receivedQuantity: existing.totalQuantity,
           totalCostPaisa: existing.totalCostPaisa,
           status: po.status as PurchaseStatusName,
+          allocatedPreorderUnits: 0,
         };
       }
     }
@@ -389,6 +393,7 @@ export async function receivePurchaseOrder(
     });
 
     let totalCostPaisa = 0;
+    let allocatedPreorderUnits = 0;
 
     for (const row of requested) {
       const item = itemById.get(row.purchaseOrderItemId)!;
@@ -434,6 +439,18 @@ export async function receivePurchaseOrder(
         data: { receivedQuantity: item.receivedQuantity + row.quantity },
       });
 
+      // Stock that just arrived belongs to the customers who ordered it first: the
+      // FIFO preorder queue is served inside the same transaction as the receipt.
+      const allocation = await allocatePreorders(tx, {
+        businessId: actor.businessId,
+        locationId,
+        variantId: item.variantId,
+        quantity: row.quantity,
+        actorUserId: actor.userId,
+        note: `Received on ${receiptCode}`,
+      });
+      allocatedPreorderUnits += allocation.allocated;
+
       totalCostPaisa += lineCostPaisa;
     }
 
@@ -470,14 +487,24 @@ export async function receivePurchaseOrder(
         action: "purchase_order.received",
         entityType: "PurchaseOrder",
         entityId: po.id,
-        summary: `Received ${totalQuantity} unit(s) against ${po.code} (receipt ${receiptCode})`,
+        summary: `Received ${totalQuantity} unit(s) against ${po.code} (receipt ${receiptCode})${
+          allocatedPreorderUnits > 0 ? `, ${allocatedPreorderUnits} unit(s) allocated to preorders` : ""
+        }`,
         before: { status: po.status },
-        after: { status, totalQuantity, totalCostPaisa },
+        after: { status, totalQuantity, totalCostPaisa, allocatedPreorderUnits },
         changedFields: ["stock", "averageCostPaisa"],
       },
     });
 
-    return { receiptId: receipt.id, code: receiptCode, reused: false, receivedQuantity: totalQuantity, totalCostPaisa, status };
+    return {
+      receiptId: receipt.id,
+      code: receiptCode,
+      reused: false,
+      receivedQuantity: totalQuantity,
+      totalCostPaisa,
+      status,
+      allocatedPreorderUnits,
+    };
   });
 }
 

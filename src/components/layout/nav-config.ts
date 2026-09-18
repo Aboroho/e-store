@@ -57,7 +57,8 @@ export const ADMIN_NAV: NavSection[] = [
       { label: "Orders", href: "/admin/orders", permission: "order.view", icon: "ShoppingCart", badge: "orders", stage: 3 },
       { label: "Customers", href: "/admin/customers", permission: "customer.view", icon: "Users", stage: 3 },
       { label: "Payments", href: "/admin/payments", permission: "payment.view", icon: "CreditCard", stage: 3 },
-      { label: "Shipments", href: "/admin/couriers", permission: "courier.view", icon: "Send", stage: 3 },
+      { label: "Shipments", href: "/admin/shipments", permission: "courier.view", icon: "Send", stage: 3 },
+      { label: "Couriers & gateways", href: "/admin/couriers", permission: "courier.view", icon: "Plug", stage: 3 },
       { label: "Exchanges", href: "/admin/exchanges", permission: "exchange.view", icon: "RefreshCw", badge: "exchanges", stage: 3 },
     ],
   },
@@ -71,7 +72,7 @@ export const ADMIN_NAV: NavSection[] = [
   {
     title: "Finance",
     items: [
-      { label: "Courier settlements", href: "/admin/settlements", permission: "courier.reconcile", icon: "Landmark", stage: 4 },
+      { label: "Courier settlements", href: "/admin/settlements", permission: "courier.view", icon: "Landmark", stage: 3 },
       { label: "Reseller ledger", href: "/admin/resellers/ledger", permission: "reseller.ledger_view", icon: "BookOpen", stage: 4 },
     ],
   },
