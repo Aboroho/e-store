@@ -131,6 +131,18 @@ export async function setStorefrontSetting(
   });
 }
 
+/** Typed accessors for the settings that drive inventory behaviour. */
+export async function getInventorySettings(
+  businessId: string,
+): Promise<{ lowStockThreshold: number; valuationMethod: string }> {
+  const settings = await getBusinessSettings(businessId);
+  const threshold = Number(settings["inventory.low_stock_threshold"] ?? 5);
+  return {
+    lowStockThreshold: Number.isFinite(threshold) && threshold >= 0 ? threshold : 5,
+    valuationMethod: String(settings["inventory.valuation_method"] ?? "WEIGHTED_AVERAGE"),
+  };
+}
+
 export function settingDefinitionsForGroup(group: string): SettingDefinition<unknown>[] {
   const all = [
     ...Object.values(BUSINESS_SETTINGS as unknown as Record<string, SettingDefinition<unknown>>),

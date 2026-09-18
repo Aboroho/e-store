@@ -1,6 +1,6 @@
 # Project audit
 
-Date: 2026-09-18 · Stage 1 (foundation, authentication, RBAC, admin shell)
+Date: 2026-09-19 · Stages 1–2 (foundation/auth/RBAC/admin shell; catalog, pricing, inventory, purchasing, preorders)
 
 This audit records what exists in the repository, what was verified by running it, and what is
 still missing. It is updated at the end of every stage.
@@ -44,6 +44,30 @@ The repository was therefore a specification-only project: everything below was 
 Not yet verified (no environment available in the sandbox): real SMTP delivery, real courier/bKash/
 SSLCommerz sandbox calls, S3 bucket uploads, load/performance behaviour.
 
+## 3a. Verification actually performed (Stage 2)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Migration applied | `node scripts/migrate.mjs deploy` | `20260919000000_stage2_catalog_inventory` and `20260919000100_fk_referential_actions` applied |
+| Schema ↔ database drift | `node scripts/schema-tool.mjs check` | `OK: database matches prisma/schema.prisma` |
+| Foreign-key actions | `node scripts/fk-check.mjs` | `Foreign keys OK: 209 constraints match prisma/schema.prisma` |
+| Types + lint | `npm run check` | 0 errors |
+| Tests | `npx vitest run` | 72 passed (50 unit, 22 database integration) |
+| Production build | `npm run build` | succeeded — 31 routes, no build warnings |
+| Admin screens | curl with a real session cookie | 12 Stage-2 routes return 200 and render data created through the service layer (product + variants, price list, inventory ledger, adjustment with reason, purchase order with receipt and freight allocation, preorder queue) |
+
+### Defects found and fixed during Stage 2
+
+| # | Defect | Fix |
+| --- | --- | --- |
+| 1 | **Every foreign key in the initial migration was `ON DELETE SET NULL`**, contradicting the schema. Deleting a business with products failed with `null value in column "productId" of relation "Variant"`, and cascades never ran. | `20260919000100_fk_referential_actions` restores the declared actions (127 CASCADE, 21 RESTRICT, rest SET NULL/NO ACTION); `scripts/fk-check.mjs` prevents a recurrence. |
+| 2 | `setPriceListItem` always upserted the `minQuantity = 1` tier, so saving a bulk price overwrote the base price. | Tiers are separate rows again (`minQuantity` is part of the key); only the base tier mirrors onto `Variant.priceOverridePaisa`. Covered by a catalog test. |
+| 3 | Receiving a purchase order in parts capitalised the order-level extra cost in full on **every** receipt. | The order's extra cost is now capitalised proportionally to the quantity received, so the total is exact once the order is fully received. Covered by a purchasing test. |
+| 4 | Landed unit cost added the allocation remainder to the first line *multiplied by the quantity*, inflating stock value. | Landed value is `quantity × unit cost + allocated expense` (exact); the unit cost used for the weighted average is `floor(lineCost / quantity)`. |
+| 5 | Extending a preorder commitment for the same order line updated the commitment but not the `preorderCommitted` counter. | The extension writes a counter movement, keeping ledger and queue consistent. |
+| 6 | Allocating more preorder units than were physically available threw instead of reporting the shortfall; the queue path double-counted `skipped`. | The queue action clamps to available stock (`FOR UPDATE`), returns `allocated`/`skipped` correctly, and never reserves stock that is not on the shelf. |
+| 7 | The seed created no default price list and no stock adjustment reasons, so a fresh install could not create a product or record an adjustment. | The seed now creates the default price list and 8 adjustment reasons (idempotent). |
+
 ## 4. Known gaps and risks
 
 | # | Gap | Impact | Plan |
@@ -51,7 +75,7 @@ SSLCommerz sandbox calls, S3 bucket uploads, load/performance behaviour.
 | 1 | Email delivery is not wired (no SMTP credentials) | Password reset links and invitations cannot be emailed | Password reset stores a single-use token; in non-production the link is returned to the operator. SMTP integration is part of Stage 5 hardening; until then the reset flow is exercised locally. |
 | 2 | S3 storage driver is not implemented yet | Media uploads are impossible | Media manager + driver land in Stage 5; `STORAGE_DRIVER=disabled` currently reports the capability as unavailable instead of pretending to work. |
 | 3 | `prisma migrate dev` cannot run offline | New migrations must be authored as SQL | `scripts/schema-tool.mjs sql --out <dir>/migration.sql` generates DDL from the schema; reviewed manually and applied with `scripts/migrate.mjs`. |
-| 4 | Covering indexes/FK actions are not compared by the drift checker | A hand-edited database could drift silently | The checker verifies tables, columns, nullability and enums; FK/index comparison is a follow-up task. |
+| 4 | ~~Covering indexes/FK actions are not compared by the drift checker~~ **resolved in Stage 2** | A hand-edited database could drift silently | `scripts/fk-check.mjs` (`npm run db:check-fk`) now compares all 209 foreign keys with the schema; covering indexes are still not compared (documented as a follow-up). |
 | 5 | Navigation advertises later-stage screens | Users could expect features that do not exist | Nav items carry a `stage` field; anything above the current stage renders disabled with an "S5"-style badge instead of a dead link. |
 | 6 | No CI pipeline | Regressions rely on the developer running `npm run check` | A GitHub Actions workflow is planned in Stage 5 (documented in DEPLOYMENT.md). |
 
@@ -66,8 +90,9 @@ scripts/                    database + schema tooling, schema assembly
 src/generated/prisma/       generated client (not committed)
 src/lib/                    environment, db, money, crypto, auth, permissions, settings, validation
 src/components/             UI primitives, layout shell, forms
-src/modules/                auth, users, dashboard, notifications, settings (service + actions)
+src/modules/                auth, users, dashboard, notifications, settings, catalog, pricing,
+                            inventory, purchasing, preorders (service + actions + queries per module)
 src/app/                    admin area, auth pages, global styles
-tests/                      unit and database integration tests
-docs/                       this audit plus architecture and plan documents
+tests/                      unit tests, database integration tests and shared fixtures
+docs/                       audit, architecture, plan, DATABASE_DESIGN, BUSINESS_RULES, TESTING
 ```

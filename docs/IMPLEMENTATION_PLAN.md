@@ -4,7 +4,7 @@ Five stages, each ending with a working, reviewable application: lint, type chec
 production build must all pass before the next stage starts. This plan is the working order from
 `phase-1.md` … `phase-5.md`, with the concrete file targets for this repository.
 
-## Stage 1 — Foundation, authentication, RBAC, admin shell ✅ (this stage)
+## Stage 1 — Foundation, authentication, RBAC, admin shell ✅ complete (commit `ae8b3ef`)
 
 | Area | Deliverable | Status |
 | --- | --- | --- |
@@ -17,15 +17,20 @@ production build must all pass before the next stage starts. This plan is the wo
 | Tests | unit tests for money/permissions/password/utils + database integration tests for auth | done |
 | Docs | PROJECT_AUDIT, ARCHITECTURE, IMPLEMENTATION_PLAN | done |
 
-## Stage 2 — Catalog, pricing, purchasing, inventory and preorders
+## Stage 2 — Catalog, pricing, purchasing, inventory and preorders ✅ complete
 
-- Categories/attributes/variants with options and `optionKey` uniqueness; product media references.
-- Price lists (per storefront/currency), cost and margin fields, scheduled price changes.
-- Suppliers, purchase orders, goods receipts, weighted-average costing, stock adjustments, counts.
-- Preorder commitments and allocation; low-stock reporting.
-- Admin screens: products list/editor, categories, attributes, price lists, suppliers, purchase
-  orders, goods receipts, inventory ledger, adjustments, preorders.
-- Docs: DATABASE_DESIGN, BUSINESS_RULES, TESTING.
+| Area | Deliverable | Status |
+| --- | --- | --- |
+| Catalog | Product/variant CRUD with option-key and SKU validation, combination generator, bulk variant editor, archive/restore guards, categories with materialised paths, attributes + starter presets | done |
+| Pricing | Price lists per channel with quantity tiers and validity windows, variant override fallback, price snapshots for later stages, price-list editor screens | done |
+| Inventory | Ledger engine (`applyStockMovement`) with row locking, idempotency keys, weighted-average cost, damaged/inspection counters, adjustments with reasons, low-stock view, movement history | done |
+| Purchasing | Suppliers, purchase orders, submit/cancel, goods receipts with prorated landed costs, supplier payments, payable balances | done |
+| Preorders | Commitments, FIFO queue allocation with reservation, cancellation releasing counters | done |
+| Admin screens | Products (list/new/detail), categories, attributes, price lists, inventory overview, stock history, adjustments, preorder queue, purchases (list/new/detail), suppliers | done |
+| Migration | `20260919000000_stage2_catalog_inventory` + `20260919000100_fk_referential_actions` | done |
+| Tooling | `scripts/fk-check.mjs` (`npm run db:check-fk`) proving 209 foreign keys match the schema | done |
+| Tests | 11 new integration tests (catalog 5, inventory 7, purchasing 6, preorders 4) — suite now 72 tests | done |
+| Docs | DATABASE_DESIGN, BUSINESS_RULES, TESTING | done |
 
 ## Stage 3 — Orders, checkout, payments, couriers and exchanges
 

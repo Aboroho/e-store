@@ -149,6 +149,20 @@ export const zBooleanFromForm = z
   .union([z.boolean(), z.literal("true"), z.literal("false"), z.literal("on"), z.literal("1"), z.literal("0"), z.literal("")])
   .transform((value) => value === true || value === "true" || value === "on" || value === "1");
 
+/**
+ * Optional trimmed text where an empty form field becomes `undefined`.
+ * The `.optional()` sits last on purpose so the key itself is optional in the
+ * inferred object type, which keeps service input types ergonomic.
+ */
+export function zOptionalText(max = 2000) {
+  return z
+    .string()
+    .trim()
+    .max(max)
+    .transform((value) => (value === "" ? undefined : value))
+    .optional();
+}
+
 export const zOptionalString = z
   .string()
   .trim()

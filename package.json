@@ -33,8 +33,9 @@
     "db:assemble:check": "node scripts/assemble-schema.mjs --check",
     "db:validate": "prisma validate",
     "db:migration:sql": "node scripts/schema-tool.mjs sql --out",
-    "db:check": "node scripts/schema-tool.mjs check",
-    "check": "npm run db:assemble:check && npm run typecheck && npm run lint"
+    "db:check": "node scripts/schema-tool.mjs check && node scripts/assemble-schema.mjs --check",
+    "check": "npm run db:assemble:check && npm run typecheck && npm run lint",
+    "db:check-fk": "node scripts/fk-check.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1135.0",

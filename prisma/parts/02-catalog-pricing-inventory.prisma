@@ -650,6 +650,8 @@ model InventoryMovement {
   reservedAfter  Int
   damagedAfter   Int
   inspectionAfter Int
+  preorderCommittedAfter Int @default(0)
+  incomingAfter  Int      @default(0)
   unitCostPaisa  Int?
   valueDeltaPaisa Int?
   averageCostAfterPaisa Int?

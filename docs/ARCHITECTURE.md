@@ -102,3 +102,32 @@ records the result. Failures are retried with exponential backoff and dead-lette
   secrets (cookies, tokens, passwords, `Authorization` headers) before writing.
 - React error boundaries (`error.tsx`) present a recoverable message with the error digest; the
   full stack stays on the server.
+
+## Module map (Stage 2)
+
+Each domain module owns its schema validation, service (the only place that writes its
+tables), server actions (permission checks + revalidation) and read queries:
+
+```
+src/modules/
+  catalog/     products, variants, categories, attributes, bulk editing        (queries, service, actions, schemas)
+  pricing/     price lists, tiers, price resolution and snapshots
+  inventory/   ledger engine, balances, adjustments, stock history
+  purchasing/  suppliers, purchase orders, receipts, landed cost, payments
+  preorders/   commitments, FIFO allocation, cancellation
+```
+
+Dependency direction is one-way: `catalog → pricing/inventory`, `purchasing →
+inventory`, `preorders → inventory`. The inventory engine is the only writer of
+`InventoryBalance`/`InventoryMovement`; every other module goes through
+`applyStockMovement()` inside its own transaction, which keeps stock, ledger and audit
+rows atomic.
+
+```
+server action ──► permission check ──► service (transaction) ──► prisma client
+     │                                     │
+     │                                     ├─ applyStockMovement()  → balances + ledger
+     └─ revalidatePath + ActionState       ├─ recordAudit()         → audit log
+                                           └─ domain tables         → product/PO/commitment
+page (server component) ──► queries module ──► prisma client (read-only, business-scoped)
+```

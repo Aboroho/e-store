@@ -19,3 +19,15 @@ export async function listPermissions() {
   });
   return permissions;
 }
+
+/**
+ * Maps user ids to display names. Ledger tables store the actor id without a
+ * relation (so audit rows survive a user rename), therefore screens resolve the
+ * names in a second, batched query.
+ */
+export async function userDisplayNames(userIds: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const ids = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return new Map();
+  const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
+  return new Map(users.map((user) => [user.id, user.name]));
+}

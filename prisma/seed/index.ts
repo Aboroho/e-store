@@ -187,6 +187,48 @@ async function main() {
   });
   console.log(`Inventory location: ${location.name}`);
 
+  // -------------------------------------------------------------- pricing context
+  // Catalog products need a default price list to hang prices on, so the seed
+  // provides one; every storefront and channel resolves prices through it.
+  const priceList = await prisma.priceList.upsert({
+    where: { businessId_slug: { businessId: business.id, slug: "default" } },
+    create: {
+      businessId: business.id,
+      name: "Default Price List",
+      slug: "default",
+      channel: "DEFAULT",
+      currency: "BDT",
+      isDefault: true,
+      priority: 0,
+      status: "ACTIVE",
+      description: "Standard retail prices used when no channel specific list matches.",
+    },
+    update: { name: "Default Price List", isDefault: true, status: "ACTIVE" },
+  });
+  console.log(`Price list: ${priceList.name}`);
+
+  // ------------------------------------------------------- stock adjustment reasons
+  // Adjustments require a configured reason; the direction and note rules are
+  // enforced by the inventory service.
+  const adjustmentReasons = [
+    { code: "OPENING_BALANCE", label: "Opening balance", direction: "INCREASE", requiresNote: false },
+    { code: "STOCK_COUNT", label: "Stock count correction", direction: "BOTH", requiresNote: true },
+    { code: "DAMAGE", label: "Damaged in warehouse", direction: "DECREASE", requiresNote: true },
+    { code: "LOST", label: "Lost or missing", direction: "DECREASE", requiresNote: true },
+    { code: "FOUND", label: "Found stock", direction: "INCREASE", requiresNote: true },
+    { code: "RETURN_RESTOCK", label: "Customer return restocked", direction: "INCREASE", requiresNote: false },
+    { code: "SAMPLE", label: "Sample or giveaway", direction: "DECREASE", requiresNote: true },
+    { code: "WRITE_OFF", label: "Write-off", direction: "DECREASE", requiresNote: true },
+  ] as const;
+  for (const reason of adjustmentReasons) {
+    await prisma.stockAdjustmentReason.upsert({
+      where: { businessId_code: { businessId: business.id, code: reason.code } },
+      create: { businessId: business.id, ...reason, isActive: true },
+      update: { label: reason.label, direction: reason.direction, requiresNote: reason.requiresNote, isActive: true },
+    });
+  }
+  console.log(`Stock adjustment reasons: ${adjustmentReasons.length}`);
+
   // ------------------------------------------------------------------ storefront
   const storefront = await prisma.storefront.upsert({
     where: { slug: "main" },
