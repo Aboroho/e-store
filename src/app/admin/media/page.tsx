@@ -42,8 +42,9 @@ export default async function MediaPage({
   const [result, folders, storage, settings, products] = await Promise.all([
     listMedia(session.businessId, {
       search: filters.search || undefined,
-      folderId: filters.folderId ? filters.folderId : undefined,
-      mimeGroup: filters.mimeGroup as "image" | "document" | "all" | "unused",
+      // Explorer semantics: no folder means the library root, not "everything".
+      folderId: filters.folderId ? filters.folderId : null,
+      mimeGroup: filters.mimeGroup as "image" | "video" | "audio" | "file" | "document" | "all" | "unused",
       sort: filters.sort as "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest" | "recently_modified",
       page,
       pageSize: 30,

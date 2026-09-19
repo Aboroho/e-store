@@ -74,6 +74,24 @@ export const deleteMediaSchema = z.object({
   force: z.coerce.boolean().default(false),
 });
 
+export const moveFolderSchema = z.object({
+  folderId: z.string().uuid(),
+  /** Destination parent; `null` moves the folder to the top level. */
+  parentId: z.string().uuid().nullable(),
+});
+
+export const copyFolderSchema = z.object({
+  folderId: z.string().uuid(),
+  /** Destination parent; defaults to the source folder's current parent. */
+  parentId: z.string().uuid().nullable().optional(),
+});
+
+export const copyAssetsSchema = z.object({
+  assetIds: z.array(z.string().uuid()).min(1).max(100),
+  /** Destination folder; defaults to each asset's current folder. */
+  folderId: z.string().uuid().nullable().optional(),
+});
+
 export const folderInputSchema = z.object({
   name: z
     .string()

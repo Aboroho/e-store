@@ -15,13 +15,37 @@ const isProduction = process.env.NODE_ENV === "production";
  * "eval() is not supported in this environment" on every page. Production builds never
  * call `eval()`, so the relaxation is not shipped.
  */
+/**
+ * Storage origins the browser may upload to / download from.
+ *
+ * Media uploads PUT directly to presigned S3 URLs, so `connect-src` must cover
+ * the configured storage. Both the exact origin (path-style URLs) and its
+ * subdomains (virtual-hosted-style `bucket.host` URLs) are allowlisted. Local
+ * development with `STORAGE_DRIVER=local` needs nothing extra (`'self'`).
+ */
+function storageConnectSources(): string[] {
+  const sources = new Set<string>();
+  for (const value of [process.env.S3_ENDPOINT, process.env.S3_PUBLIC_BASE_URL]) {
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+      sources.add(url.origin);
+      sources.add(`${url.protocol}//*.${url.hostname}`);
+    } catch {
+      // Invalid URLs are reported by env validation at runtime; ignore here.
+    }
+  }
+  return [...sources];
+}
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"} https://connect.facebook.net https://analytics.tiktok.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https://connect.facebook.net https://analytics.tiktok.com",
+  ["connect-src 'self'", ...storageConnectSources(), "https://connect.facebook.net https://analytics.tiktok.com"].join(" "),
   "frame-src https://www.facebook.com https://td.doubleclick.net https://www.youtube.com https://player.vimeo.com",
   "object-src 'none'",
   "base-uri 'self'",

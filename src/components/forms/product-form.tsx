@@ -20,7 +20,9 @@ import {
 } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
 import { ProductDescriptionEditor } from "@/components/forms/product-description-editor";
+import { MultiMediaField } from "@/components/media/media-picker";
 import { cn } from "@/lib/utils";
+import type { MediaAssetView } from "@/modules/media/service";
 
 export interface AttributeOption {
   id: string;
@@ -303,7 +305,7 @@ export function ProductForm({
       </Card>
 
       {/* Hidden inputs for selected media IDs */}
-      {selectedImages.map((img, i) => (
+      {selectedImages.map((img) => (
         <input key={img.id} type="hidden" name="mediaIds" value={img.id} />
       ))}
 

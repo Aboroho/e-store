@@ -8,17 +8,22 @@ import { assertPermission } from "@/lib/permissions";
 import { formDataToObject } from "@/lib/validation";
 import type { ActionState } from "@/modules/auth/action-state";
 import { can } from "@/lib/permissions";
-import { mediaForPicker } from "./queries";
+import { mediaForPicker, mediaUsageDetail, pickerContext } from "./queries";
 import type { MediaAssetView } from "./service";
 import {
   attachUsage,
   confirmUpload,
   confirmReplaceMedia,
+  copyFolder,
   copyMediaAsset,
+  copyMediaAssets,
   createFolder,
   deleteFolder,
   deleteMediaAssets,
   detachUsage,
+  listMedia,
+  listMediaFolders,
+  moveFolder,
   moveMediaAssets,
   renameFolder,
   renameMediaAsset,
@@ -165,8 +170,15 @@ export async function deleteFolderAction(_prev: ActionState, formData: FormData)
   try {
     const context = await actor();
     const raw = formDataToObject(formData);
-    await deleteFolder(context, String(raw.folderId ?? ""));
+    const recursive = String(raw.recursive ?? "") === "true";
+    const expectedName = typeof raw.expectedName === "string" && raw.expectedName.length > 0 ? raw.expectedName : undefined;
+    const result = await deleteFolder(context, String(raw.folderId ?? ""), { recursive, expectedName });
     revalidateMedia();
+    if (recursive && (result.deletedAssets > 0 || result.deletedFolders > 1)) {
+      const parts = [`${result.deletedAssets} file${result.deletedAssets === 1 ? "" : "s"}`];
+      if (result.deletedFolders > 1) parts.push(`${result.deletedFolders - 1} sub-folder${result.deletedFolders - 1 === 1 ? "" : "s"}`);
+      return { status: "success", message: `Folder and its contents deleted (${parts.join(", ")})` };
+    }
     return { status: "success", message: "Folder deleted" };
   } catch (error) {
     return toState(error, "Unable to delete the folder");
@@ -310,6 +322,123 @@ export async function searchMediaAction(input: {
     throw AppError.forbidden("You are not allowed to browse the media library");
   }
   return mediaForPicker(session.businessId, input);
+}
+
+/**
+ * Paginated media browsing for the shared file-explorer workspace (admin library
+ * and every picker). Read-only, so either the media permission or the
+ * page-builder permission is enough; `canManage` tells the UI whether the
+ * management actions (upload, rename, move, copy, delete) will be accepted.
+ */
+export async function browseMediaAction(input: {
+  search?: string;
+  folderId?: string | null;
+  mimeGroup?: "image" | "video" | "audio" | "file" | "document" | "all" | "unused";
+  sort?: "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest" | "recently_modified";
+  page?: number;
+  pageSize?: number;
+}): Promise<{
+  rows: MediaAssetView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalBytes: number;
+  canManage: boolean;
+}> {
+  const session = await requireSession();
+  if (!can(session, "media.manage") && !can(session, "page.manage")) {
+    throw AppError.forbidden("You are not allowed to browse the media library");
+  }
+  const result = await listMedia(session.businessId, {
+    search: input.search || undefined,
+    folderId: input.folderId ?? undefined,
+    mimeGroup: input.mimeGroup ?? "all",
+    sort: input.sort ?? "newest",
+    page: input.page ?? 1,
+    pageSize: input.pageSize ?? 30,
+  });
+  return { ...result, canManage: can(session, "media.manage") };
+}
+
+/** Folder tree for the explorer sidebar and destination pickers. */
+export async function listFoldersAction(): Promise<{
+  folders: Array<{ id: string; name: string; path: string; parentId: string | null; assetCount: number }>;
+  canManage: boolean;
+}> {
+  const session = await requireSession();
+  if (!can(session, "media.manage") && !can(session, "page.manage")) {
+    throw AppError.forbidden("You are not allowed to browse the media library");
+  }
+  return { folders: await listMediaFolders(session.businessId), canManage: can(session, "media.manage") };
+}
+
+/** Storage + permission context the picker needs before rendering management UI. */
+export async function mediaCapabilitiesAction(): Promise<{
+  canManage: boolean;
+  configured: boolean;
+  driver: string;
+  maxUploadBytes: number;
+}> {
+  const session = await requireSession();
+  if (!can(session, "media.manage") && !can(session, "page.manage")) {
+    throw AppError.forbidden("You are not allowed to browse the media library");
+  }
+  const context = await pickerContext(session.businessId);
+  return { canManage: can(session, "media.manage"), ...context };
+}
+
+/** Where an asset is referenced, with a human label per usage (delete protection). */
+export async function assetUsagesAction(assetId: string) {
+  const session = await requireSession();
+  if (!can(session, "media.manage") && !can(session, "page.manage")) {
+    throw AppError.forbidden("You are not allowed to browse the media library");
+  }
+  return mediaUsageDetail(session.businessId, assetId);
+}
+
+export async function moveFolderAction(input: { folderId: string; parentId: string | null }): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const context = await actor();
+    await moveFolder(context, input.folderId, input.parentId);
+    revalidateMedia();
+    return { ok: true };
+  } catch (error) {
+    const state = toState(error, "Unable to move the folder");
+    return { ok: false, message: state.message ?? "Unable to move the folder" };
+  }
+}
+
+export async function copyFolderAction(input: {
+  folderId: string;
+  parentId?: string | null;
+}): Promise<{ ok: true; folderId: string } | { ok: false; message: string }> {
+  try {
+    const context = await actor();
+    const folder = await copyFolder(context, input.folderId, input.parentId ?? null);
+    revalidateMedia();
+    return { ok: true, folderId: folder.id };
+  } catch (error) {
+    const state = toState(error, "Unable to copy the folder");
+    return { ok: false, message: state.message ?? "Unable to copy the folder" };
+  }
+}
+
+export async function copyAssetsAction(input: {
+  assetIds: string[];
+  folderId?: string | null;
+}): Promise<
+  | { ok: true; copied: number; failed: Array<{ assetId: string; name: string; error: string }> }
+  | { ok: false; message: string }
+> {
+  try {
+    const context = await actor();
+    const result = await copyMediaAssets(context, input);
+    revalidateMedia();
+    return { ok: true, ...result };
+  } catch (error) {
+    const state = toState(error, "Unable to copy the selected files");
+    return { ok: false, message: state.message ?? "Unable to copy the selected files" };
+  }
 }
 
 /** Step 1 of media replacement: get upload target for the new file. */
