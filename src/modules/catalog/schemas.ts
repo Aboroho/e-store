@@ -46,12 +46,14 @@ export const productInputSchema = z.object({
   categoryIds: z.array(zId).default([]),
   primaryCategoryId: zId.optional(),
   attributeIds: z.array(zId).default([]),
+  mediaIds: z.array(zId).default([]),
   variants: z.array(variantInputSchema).min(1, "A product needs at least one variant"),
 });
 
 export const updateProductSchema = productInputSchema.omit({ variants: true }).partial().extend({
   attributeIds: z.array(zId).optional(),
   categoryIds: z.array(zId).optional(),
+  mediaIds: z.array(zId).optional(),
 });
 
 export const categoryInputSchema = z.object({

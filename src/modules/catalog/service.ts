@@ -223,6 +223,25 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
       await ensureBalance(tx, { locationId, variantId: variant.id });
     }
 
+    // Attach product images from the media library
+    if (input.mediaIds.length > 0) {
+      for (const [index, mediaId] of input.mediaIds.entries()) {
+        await tx.productImage.create({
+          data: { productId: product.id, mediaId, position: index },
+        });
+        await tx.mediaUsage.upsert({
+          where: { mediaId_entityType_entityId_field: { mediaId, entityType: "PRODUCT", entityId: product.id, field: `image-${index}` } },
+          create: { mediaId, entityType: "PRODUCT", entityId: product.id, field: `image-${index}`, productId: product.id },
+          update: { productId: product.id },
+        });
+      }
+      // Sync usage count for each media asset
+      for (const mediaId of input.mediaIds) {
+        const count = await tx.mediaUsage.count({ where: { mediaId } });
+        await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
+      }
+    }
+
     await tx.auditLog.create({
       data: {
         businessId: actor.businessId,
@@ -305,6 +324,38 @@ export async function updateProduct(actor: CatalogActor, productId: string, inpu
           data: input.attributeIds.map((attributeId, index) => ({ productId, attributeId, position: index })),
           skipDuplicates: true,
         });
+      }
+    }
+
+    // Sync product images from media library
+    if (input.mediaIds !== undefined) {
+      // Remove old image associations and their usage records
+      const oldImages = await tx.productImage.findMany({ where: { productId }, select: { mediaId: true, id: true } });
+      for (const oldImg of oldImages) {
+        await tx.mediaUsage.deleteMany({
+          where: { mediaId: oldImg.mediaId, entityType: "PRODUCT", entityId: productId },
+        });
+      }
+      await tx.productImage.deleteMany({ where: { productId } });
+
+      // Create new associations
+      const newMediaIds = input.mediaIds ?? [];
+      for (const [index, mediaId] of newMediaIds.entries()) {
+        await tx.productImage.create({
+          data: { productId, mediaId, position: index },
+        });
+        await tx.mediaUsage.upsert({
+          where: { mediaId_entityType_entityId_field: { mediaId, entityType: "PRODUCT", entityId: productId, field: `image-${index}` } },
+          create: { mediaId, entityType: "PRODUCT", entityId: productId, field: `image-${index}`, productId },
+          update: { productId },
+        });
+      }
+
+      // Sync usage counts for both old and new media
+      const allMediaIds = [...new Set([...oldImages.map((img) => img.mediaId), ...newMediaIds])];
+      for (const mediaId of allMediaIds) {
+        const count = await tx.mediaUsage.count({ where: { mediaId } });
+        await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
       }
     }
 

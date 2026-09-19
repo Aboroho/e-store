@@ -13,6 +13,7 @@ import type { MediaAssetView } from "@/modules/media/service";
 export interface MediaPickerOptions {
   search?: string;
   mimeGroup?: "image" | "document" | "all";
+  folderId?: string | null;
   limit?: number;
   excludeIds?: string[];
 }
@@ -22,6 +23,7 @@ export async function mediaForPicker(businessId: string, options: MediaPickerOpt
   const result = await listMedia(businessId, {
     search: options.search,
     mimeGroup: options.mimeGroup ?? "image",
+    folderId: options.folderId ?? undefined,
     pageSize: Math.min(60, options.limit ?? 24),
     page: 1,
     sort: "newest",

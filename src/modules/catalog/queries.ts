@@ -112,6 +112,12 @@ export async function getProductForEdit(businessId: string, productId: string) {
         },
       },
       priceItems: { select: { priceListId: true, variantId: true, pricePaisa: true, compareAtPricePaisa: true } },
+      images: {
+        orderBy: { position: "asc" },
+        include: {
+          media: { select: { id: true, objectKey: true, originalName: true, title: true, altText: true, mimeType: true, extension: true, sizeBytes: true, width: true, height: true, visibility: true, usageCount: true, folderId: true, createdAt: true, caption: true } },
+        },
+      },
     },
   });
   return product;
