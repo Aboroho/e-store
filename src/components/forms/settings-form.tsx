@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import type { SettingGroup } from "@/modules/settings/service";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { updateBusinessProfileAction, updateBusinessSettingsAction, updateStorefrontSettingsAction } from "@/modules/settings/actions";
 import { Alert, Button, Card, CardContent, CardFooter, CardHeader, CardTitle, FormField, Input, NativeSelect, Textarea } from "@/components/ui/primitives";
 

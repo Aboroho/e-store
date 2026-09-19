@@ -3,7 +3,7 @@
 import { useActionState, useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Trash2 } from "lucide-react";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { bulkUpdateVariantsAction, createProductAction, updateProductAction } from "@/modules/catalog/actions";
 import {
   Alert,

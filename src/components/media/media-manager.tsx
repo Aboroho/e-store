@@ -19,7 +19,7 @@ import {
   requestUploadAction,
   updateAssetAction,
 } from "@/modules/media/actions";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import type { MediaAssetView } from "@/modules/media/service";
 
 /**

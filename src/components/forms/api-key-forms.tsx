@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, FormField, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
 import { CopyButton, Dialog, DialogContent, DialogTrigger, SubmitButton } from "@/components/ui/interactive";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { createApiKeyAction, createWebhookAction, deleteWebhookAction, revokeApiKeyAction, rotateApiKeyAction, rotateWebhookSecretAction, sendTestWebhookAction, updateWebhookAction } from "@/modules/api-keys/actions";
 import { SCOPES, WEBHOOK_EVENTS } from "@/modules/api-keys/scopes";
 

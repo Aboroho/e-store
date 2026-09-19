@@ -12,7 +12,7 @@ import { recordAudit } from "@/lib/audit";
 import { getIntegrationSecrets, setIntegrationSecret, listSecretKeys } from "@/modules/integrations/secrets";
 import { getCourierAdapter } from "@/modules/couriers/providers";
 import { providerSetupRequirements } from "@/modules/couriers/service";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 
 async function actor(permission: string) {
   const session = await requireSession();

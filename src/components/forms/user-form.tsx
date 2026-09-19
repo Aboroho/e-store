@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { createUserAction, resetUserPasswordAction, updateUserAction } from "@/modules/users/actions";
 import {
   Alert,

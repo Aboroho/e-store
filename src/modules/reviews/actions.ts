@@ -13,7 +13,7 @@ import { formDataToObject } from "@/lib/validation";
 import { storageIsConfigured } from "@/modules/media/storage";
 import { confirmUpload, requestUpload } from "@/modules/media/service";
 import { moderateReview, reportReview, reviewImageLimits, submitReview } from "./service";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 
 /**
  * Review actions.

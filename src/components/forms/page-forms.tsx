@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { Alert, FormField, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
 import {

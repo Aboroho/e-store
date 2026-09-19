@@ -7,7 +7,7 @@ import { requireSession } from "@/lib/auth/session";
 import { assertPermission } from "@/lib/permissions";
 import { formDataToObject } from "@/lib/validation";
 import { parseAmountToPaisa } from "@/lib/money";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import {
   applyResellerMarkup,
   createReseller,

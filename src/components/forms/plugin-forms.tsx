@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { Alert, Button, FormField, Input } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { configurePluginAction, installPluginAction, setPluginEnabledAction } from "@/modules/plugins/actions";
 
 /** Plugin install / enable / configure controls. */

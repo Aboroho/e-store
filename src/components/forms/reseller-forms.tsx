@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import {
   applyResellerMarkupAction,
   approvePayoutAction,

@@ -9,7 +9,7 @@ import { formDataToObject, parseInput } from "@/lib/validation";
 import { prisma } from "@/lib/db/client";
 import { recordAudit } from "@/lib/audit";
 import { setIntegrationSecret } from "@/modules/integrations/secrets";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import {
   customerAddressSchema,
   customerNoteSchema,

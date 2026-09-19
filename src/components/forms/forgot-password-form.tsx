@@ -2,7 +2,8 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { initialActionState, requestPasswordResetAction } from "@/modules/auth/actions";
+import { requestPasswordResetAction } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { Alert, Button, Card, CardContent, FormField, Input } from "@/components/ui/primitives";
 
 export function ForgotPasswordForm() {

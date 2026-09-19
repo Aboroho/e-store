@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { Alert, Badge, Button, FormField, Input, NativeSelect } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { deleteMarketingIntegrationAction, retryMarketingEventsAction, saveMarketingIntegrationAction, toggleMarketingIntegrationAction } from "@/modules/marketing/actions";
 import { MARKETING_PROVIDERS } from "@/modules/marketing/providers";
 

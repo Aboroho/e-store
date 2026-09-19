@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { Alert, Button, Textarea } from "@/components/ui/primitives";
 import { Dialog, DialogContent, DialogTrigger, SubmitButton } from "@/components/ui/interactive";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { moderateReviewAction } from "@/modules/reviews/actions";
 
 /**

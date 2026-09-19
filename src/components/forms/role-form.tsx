@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { createRoleAction, updateRoleAction } from "@/modules/users/actions";
 import { Alert, Badge, Button, Card, CardContent, CardFooter, CardHeader, CardTitle, FormField, Input, Textarea } from "@/components/ui/primitives";
 

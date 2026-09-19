@@ -4,7 +4,7 @@ import * as React from "react";
 import { useActionState } from "react";
 import { Alert, Button, Card, CardContent, CardHeader, CardTitle, FormField, Input, Label, Textarea } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { confirmReviewImageUploadAction, reportReviewAction, requestReviewImageUploadAction, submitReviewAction } from "@/modules/reviews/actions";
 
 /**

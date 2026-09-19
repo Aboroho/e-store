@@ -23,7 +23,7 @@ import {
 } from "@/modules/catalog/service";
 import { attributeInputSchema, categoryInputSchema, productInputSchema, variantInputSchema } from "@/modules/catalog/schemas";
 import { setPriceListItem, setPriceListItems } from "@/modules/pricing/service";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import { logger } from "@/lib/logging";
 
 async function actor(permission: string) {
