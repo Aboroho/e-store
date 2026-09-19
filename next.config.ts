@@ -9,10 +9,15 @@ const isProduction = process.env.NODE_ENV === "production";
  * pixels) and the inline bootstrap Next.js requires in the App Router. A nonce based
  * policy would be stricter but needs an edge hook; until then the policy still blocks
  * unknown third parties, object embeds and framing.
+ *
+ * `'unsafe-eval'` is added in development only: the Next.js dev overlay and React
+ * Refresh reconstruct call stacks with `eval()`, and without it the browser logs
+ * "eval() is not supported in this environment" on every page. Production builds never
+ * call `eval()`, so the relaxation is not shipped.
  */
 const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://connect.facebook.net https://analytics.tiktok.com",
+  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"} https://connect.facebook.net https://analytics.tiktok.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",

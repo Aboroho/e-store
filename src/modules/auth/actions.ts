@@ -10,22 +10,9 @@ import { clearCustomerSessionCookie } from "@/lib/auth/customer-session";
 import { enforceRateLimit, RateLimits } from "@/lib/rate-limit";
 import { changePassword, createPasswordResetToken, resetPasswordWithToken, signInWithPassword, signOut } from "@/modules/auth/service";
 import { type ActionState } from "@/modules/auth/action-state";
+import { safeRedirectTarget, signInSchema } from "@/modules/auth/schemas";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logging";
-
-const signInSchema = z.object({
-  email: z.string().trim().min(3).max(200).toLowerCase(),
-  password: z.string().min(1, "Enter your password").max(200),
-  remember: z
-    .union([z.literal("on"), z.literal("true"), z.literal("false"), z.literal(""), z.undefined()])
-    .transform((value) => value === "on" || value === "true"),
-  redirectTo: z.string().optional(),
-});
-
-function safeRedirectTarget(value: string | undefined): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/admin";
-  return value;
-}
 
 export async function signInAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const raw = formDataToObject(formData);
