@@ -478,16 +478,70 @@ export async function renameFolder(actor: MediaActor, folderId: string, name: st
   });
 }
 
-export async function deleteFolder(actor: MediaActor, folderId: string) {
-  const folder = await assertFolder(actor.businessId, folderId);
-  const [childFolders, assets] = await Promise.all([
-    prisma.mediaFolder.count({ where: { businessId: actor.businessId, parentId: folder.id } }),
-    prisma.mediaAsset.count({ where: { businessId: actor.businessId, folderId: folder.id, deletedAt: null } }),
-  ]);
-  if (childFolders > 0) throw AppError.invalidState("Move or delete the sub-folders first");
-  if (assets > 0) throw AppError.invalidState(`This folder still holds ${assets} file${assets === 1 ? "" : "s"}`);
+export interface DeleteFolderOptions {
+  /**
+   * Delete the folder with everything inside it (files + sub-folders).
+   * Without this, non-empty folders are refused exactly as before.
+   */
+  recursive?: boolean;
+  /**
+   * Guards against stale confirmations: when provided, the delete is refused
+   * unless the folder still has this exact name.
+   */
+  expectedName?: string;
+}
 
-  await prisma.mediaFolder.delete({ where: { id: folder.id } });
+export async function deleteFolder(actor: MediaActor, folderId: string, options: DeleteFolderOptions = {}) {
+  const folder = await assertFolder(actor.businessId, folderId);
+  if (options.expectedName !== undefined && folder.name !== options.expectedName) {
+    throw AppError.conflict(`This folder is now named "${folder.name}" — refresh and confirm again`);
+  }
+
+  const descendants = await prisma.mediaFolder.findMany({
+    where: { businessId: actor.businessId, path: { startsWith: `${folder.path}/` } },
+    select: { id: true },
+  });
+  const treeFolderIds = [folder.id, ...descendants.map((child) => child.id)];
+  const treeAssets = await prisma.mediaAsset.findMany({
+    where: { businessId: actor.businessId, folderId: { in: treeFolderIds }, deletedAt: null },
+    select: { id: true, objectKey: true },
+  });
+
+  if (!options.recursive) {
+    if (descendants.length > 0) throw AppError.invalidState("Move or delete the sub-folders first");
+    if (treeAssets.length > 0) {
+      throw AppError.invalidState(`This folder still holds ${treeAssets.length} file${treeAssets.length === 1 ? "" : "s"}`);
+    }
+  }
+
+  if (options.recursive && treeAssets.length > 0) {
+    // Same reference protection as deleting the files directly: a recursive
+    // delete never silently breaks products, pages or other content.
+    const usages = await findUsages(
+      actor.businessId,
+      treeAssets.map((asset) => asset.id),
+    );
+    if (usages.length > 0) {
+      const usedFiles = new Set(usages.map((usage) => usage.mediaId)).size;
+      throw AppError.invalidState(
+        `Cannot delete "${folder.name}": ${usedFiles} file${usedFiles === 1 ? " is" : "s are"} still used by products, pages or other content — remove those usages first`,
+      );
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (treeAssets.length > 0) {
+      const ids = treeAssets.map((asset) => asset.id);
+      await tx.productImage.deleteMany({ where: { mediaId: { in: ids } } });
+      await tx.variantImage.deleteMany({ where: { mediaId: { in: ids } } });
+      await tx.mediaAsset.updateMany({ where: { id: { in: ids } }, data: { deletedAt: new Date(), usageCount: 0 } });
+    }
+    await tx.mediaFolder.deleteMany({ where: { id: { in: treeFolderIds }, businessId: actor.businessId } });
+  });
+
+  // Storage failures must not block the delete: the rows are already gone.
+  await Promise.all(treeAssets.map((asset) => deleteObject(asset.objectKey).catch(() => undefined)));
+
   await recordAudit({
     businessId: actor.businessId,
     actorUserId: actor.userId,
@@ -495,8 +549,13 @@ export async function deleteFolder(actor: MediaActor, folderId: string) {
     entityType: "MediaFolder",
     entityId: folder.id,
     action: "media.folder_deleted",
-    summary: `Deleted media folder ${folder.path}`,
+    summary:
+      treeAssets.length > 0 || descendants.length > 0
+        ? `Deleted media folder ${folder.path} with ${treeAssets.length} file(s) and ${descendants.length} sub-folder(s)`
+        : `Deleted media folder ${folder.path}`,
   });
+
+  return { deletedFolders: treeFolderIds.length, deletedAssets: treeAssets.length };
 }
 
 /** Move a folder to another parent (or the top level), rewriting descendant paths. */

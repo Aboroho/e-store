@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   breadcrumbsFor,
+  confirmNameMatches,
   countFolderTree,
   displayName,
+  explorerViewId,
   formatBytes,
   isDescendantPath,
   kindLabel,
   mediaKindOf,
   previewKindOf,
+  transferPercent,
   validateFolderName,
   type ExplorerFolder,
 } from "@/components/media/explorer-utils";
@@ -137,5 +140,54 @@ describe("displayName", () => {
   it("prefers the title", () => {
     expect(displayName({ title: "Hero", originalName: "img.png" })).toBe("Hero");
     expect(displayName({ title: null, originalName: "img.png" })).toBe("img.png");
+  });
+});
+
+describe("explorerViewId", () => {
+  it("identifies folders, with a stable root id", () => {
+    expect(explorerViewId(false, "abc", "")).toBe("folder:abc");
+    expect(explorerViewId(false, null, "")).toBe("folder:root");
+    expect(explorerViewId(false, "a", "")).not.toBe(explorerViewId(false, "b", ""));
+  });
+
+  it("identifies searches case-insensitively, ignoring the current folder", () => {
+    expect(explorerViewId(true, "abc", "  Shoes ")).toBe("search:shoes");
+    expect(explorerViewId(true, null, "shoes")).toBe("search:shoes");
+    expect(explorerViewId(true, null, "shoes")).not.toBe(explorerViewId(true, null, "boots"));
+    expect(explorerViewId(true, "abc", "shoes")).not.toBe(explorerViewId(false, "abc", ""));
+  });
+});
+
+describe("confirmNameMatches", () => {
+  it("requires the exact folder name", () => {
+    expect(confirmNameMatches("Summer Collection", "Summer Collection")).toBe(true);
+    expect(confirmNameMatches("summer collection", "Summer Collection")).toBe(false);
+    expect(confirmNameMatches("Summer", "Summer Collection")).toBe(false);
+    expect(confirmNameMatches("", "Summer Collection")).toBe(false);
+  });
+
+  it("trims accidental surrounding whitespace", () => {
+    expect(confirmNameMatches("  Summer Collection\n", "Summer Collection")).toBe(true);
+  });
+
+  it("never matches a blank expected name", () => {
+    expect(confirmNameMatches("", "")).toBe(false);
+    expect(confirmNameMatches("   ", "   ")).toBe(false);
+  });
+});
+
+describe("transferPercent", () => {
+  it("reports real byte-level progress", () => {
+    expect(transferPercent(0, 100)).toBe(0);
+    expect(transferPercent(60, 100)).toBe(60);
+    expect(transferPercent(1, 3)).toBe(33);
+    expect(transferPercent(150, 100)).toBe(100);
+  });
+
+  it("returns null when no honest percentage exists", () => {
+    expect(transferPercent(10, 0)).toBeNull();
+    expect(transferPercent(-1, 100)).toBeNull();
+    expect(transferPercent(Number.NaN, 100)).toBeNull();
+    expect(transferPercent(10, Number.NaN)).toBeNull();
   });
 });

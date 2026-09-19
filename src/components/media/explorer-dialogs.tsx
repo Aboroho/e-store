@@ -19,6 +19,7 @@ import type { MediaAssetView } from "@/modules/media/service";
 import { FolderRadioTree } from "./folder-tree";
 import { MediaKindIcon } from "./explorer-kind-icon";
 import {
+  confirmNameMatches,
   countFolderTree,
   displayName,
   formatBytes,
@@ -324,6 +325,8 @@ export function DeleteConfirmDialog({
   const [loadedKey, setLoadedKey] = React.useState("");
   const [force, setForce] = React.useState(false);
   const [working, setWorking] = React.useState(false);
+  const [confirmInputs, setConfirmInputs] = React.useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = React.useState<string[] | null>(null);
   const loadingUsages = assetIds.length > 0 && loadedKey !== assetKey;
 
   React.useEffect(() => {
@@ -357,37 +360,58 @@ export function DeleteConfirmDialog({
     () => folders.map((folder) => ({ folder, ...countFolderTree(allFolders, folder.id) })),
     [folders, allFolders],
   );
-  const blockedFolders = folderInfos.filter((info) => info.files > 0 || info.subfolders > 0);
-  const deletableFolders = folderInfos.filter((info) => info.files === 0 && info.subfolders === 0);
+  const emptyFolders = folderInfos.filter((info) => info.files === 0 && info.subfolders === 0);
+  const nonEmptyFolders = folderInfos.filter((info) => info.files > 0 || info.subfolders > 0);
+  // Every non-empty folder needs its exact name typed before anything is deleted.
+  const allNonEmptyConfirmed = nonEmptyFolders.every((info) =>
+    confirmNameMatches(confirmInputs[info.folder.id] ?? "", info.folder.name),
+  );
 
   const assetsDeletable = assets.length > 0 && (referenced.length === 0 || force);
-  const foldersDeletable = deletableFolders.length > 0;
-  const canConfirm = !working && !loadingUsages && (assetsDeletable || foldersDeletable);
+  const canConfirm = !working && !loadingUsages && (assetsDeletable || folders.length > 0) && allNonEmptyConfirmed;
 
   const handleConfirm = async () => {
+    if (working || !canConfirm) return;
     setWorking(true);
+    setSubmitError(null);
+    const failures: string[] = [];
+    let succeeded = 0;
     try {
       if (assetsDeletable) {
         const result = await deleteAssetsAction({ assetIds, force: referenced.length > 0 && force });
         if (result.ok) {
+          succeeded += 1;
           toast.success(`Deleted ${result.deleted} file${result.deleted === 1 ? "" : "s"}`);
         } else if (result.blocked.length > 0) {
-          toast.error("Some files are still in use and were kept");
+          failures.push("Some files are still in use and were kept");
         } else {
-          toast.error(result.message ?? "Unable to delete the files");
+          failures.push(result.message ?? "Unable to delete the files");
         }
       }
-      for (const info of deletableFolders) {
+      const deleteOneFolder = async (info: { folder: ExplorerFolder }, recursive: boolean) => {
         const formData = new FormData();
         formData.set("folderId", info.folder.id);
+        if (recursive) {
+          formData.set("recursive", "true");
+          formData.set("expectedName", info.folder.name);
+        }
         const result = await deleteFolderAction({ status: "idle" } as ActionState, formData);
         if (result.status === "success") {
-          toast.success(`Folder “${info.folder.name}” deleted`);
+          succeeded += 1;
+          toast.success(result.message ?? `Folder “${info.folder.name}” deleted`);
         } else {
-          toast.error(result.message ?? `Unable to delete “${info.folder.name}”`);
+          failures.push(result.message ?? `Unable to delete “${info.folder.name}”`);
         }
+      };
+      for (const info of emptyFolders) await deleteOneFolder(info, false);
+      for (const info of nonEmptyFolders) await deleteOneFolder(info, true);
+      if (failures.length > 0 && succeeded === 0) {
+        // Nothing was deleted: stay open so the errors can be read and fixed.
+        setSubmitError(failures);
+      } else {
+        for (const failure of failures) toast.error(failure);
+        onDeleted();
       }
-      onDeleted();
     } finally {
       setWorking(false);
     }
@@ -445,19 +469,47 @@ export function DeleteConfirmDialog({
                 Folders ({folders.length})
               </p>
               <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-                {folderInfos.map((info) => (
-                  <li key={info.folder.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                    <span className="flex-1 truncate font-medium text-slate-800">{info.folder.path}</span>
-                    {info.files === 0 && info.subfolders === 0 ? (
-                      <Badge variant="neutral">Empty</Badge>
-                    ) : (
-                      <Badge variant="warning">
-                        {info.files} file{info.files === 1 ? "" : "s"}
-                        {info.subfolders > 0 ? ` · ${info.subfolders} sub-folder${info.subfolders === 1 ? "" : "s"}` : ""}
-                      </Badge>
-                    )}
-                  </li>
-                ))}
+                {folderInfos.map((info) => {
+                  const isEmpty = info.files === 0 && info.subfolders === 0;
+                  const contents = `${info.files} file${info.files === 1 ? "" : "s"}${info.subfolders > 0 ? ` and ${info.subfolders} sub-folder${info.subfolders === 1 ? "" : "s"}` : ""}`;
+                  const confirmed = confirmNameMatches(confirmInputs[info.folder.id] ?? "", info.folder.name);
+                  return (
+                    <li key={info.folder.id} className="px-3 py-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="flex-1 truncate font-medium text-slate-800">{info.folder.path}</span>
+                        {isEmpty ? (
+                          <Badge variant="neutral">Empty</Badge>
+                        ) : (
+                          <Badge variant="warning">{contents}</Badge>
+                        )}
+                      </div>
+                      {isEmpty ? null : (
+                        <div className="mt-2 space-y-1.5 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
+                          <p className="text-xs leading-relaxed text-amber-900">
+                            You are about to delete the folder “{info.folder.name}” and its contents — {contents}.
+                            Everything inside, including nested sub-folders, will be permanently deleted.
+                          </p>
+                          <div className="space-y-1">
+                            <Label htmlFor={`delete-confirm-${info.folder.id}`} className="text-xs">
+                              Type <span className="font-mono font-semibold">{info.folder.name}</span> to confirm
+                            </Label>
+                            <Input
+                              id={`delete-confirm-${info.folder.id}`}
+                              value={confirmInputs[info.folder.id] ?? ""}
+                              onChange={(event) =>
+                                setConfirmInputs((prev) => ({ ...prev, [info.folder.id]: event.target.value }))
+                              }
+                              placeholder={info.folder.name}
+                              autoComplete="off"
+                              aria-invalid={(confirmInputs[info.folder.id] ?? "").length > 0 && !confirmed}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ) : null}
@@ -482,14 +534,22 @@ export function DeleteConfirmDialog({
                   </label>
                 </Alert>
               ) : null}
-              {blockedFolders.length > 0 ? (
-                <Alert variant="warning">
-                  {blockedFolders.length} folder{blockedFolders.length === 1 ? " is" : "s are"} not empty and will be kept.
-                  Move or delete {blockedFolders.length === 1 ? "its" : "their"} contents first.
-                </Alert>
-              ) : null}
             </>
           )}
+
+          {submitError ? (
+            <Alert variant="danger">
+              {submitError.length === 1 ? (
+                (submitError[0] ?? "Deletion failed")
+              ) : (
+                <ul className="list-disc space-y-0.5 pl-4">
+                  {submitError.map((message, index) => (
+                    <li key={`${message}-${index}`}>{message}</li>
+                  ))}
+                </ul>
+              )}
+            </Alert>
+          ) : null}
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={onClose}>

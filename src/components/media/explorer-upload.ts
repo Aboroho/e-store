@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { confirmUploadAction, requestUploadAction } from "@/modules/media/actions";
-import { formatBytes } from "./explorer-utils";
+import { formatBytes, transferPercent } from "./explorer-utils";
 
 /**
  * Shared upload queue for the media explorer.
@@ -109,7 +109,7 @@ export function useUploadQueue(options: UploadQueueOptions) {
     }
     activeRef.current += 1;
     try {
-      updateItem(id, { status: "uploading", progress: 5, error: undefined });
+      updateItem(id, { status: "uploading", progress: 0, error: undefined });
 
       const checksum = await fileChecksum(file);
       const start = await requestUploadAction({
@@ -133,7 +133,7 @@ export function useUploadQueue(options: UploadQueueOptions) {
         return;
       }
 
-      updateItem(id, { status: "uploading", progress: 15, assetId: start.assetId });
+      updateItem(id, { status: "uploading", progress: 0, assetId: start.assetId });
       const uploadUrl = start.uploadUrl;
       const headers = start.headers;
 
@@ -144,7 +144,8 @@ export function useUploadQueue(options: UploadQueueOptions) {
         for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
-            updateItem(id, { progress: 15 + Math.round((event.loaded / event.total) * 70) });
+            const percent = transferPercent(event.loaded, event.total);
+            if (percent !== null) updateItem(id, { progress: percent });
           }
         };
         xhr.onload = () =>
@@ -154,7 +155,7 @@ export function useUploadQueue(options: UploadQueueOptions) {
         xhr.send(file);
       });
 
-      updateItem(id, { status: "processing", progress: 90 });
+      updateItem(id, { status: "processing" });
       const size = await imageSize(file);
       const confirmed = await confirmUploadAction({ assetId: start.assetId, checksum, ...size });
       if (confirmed.ok) {

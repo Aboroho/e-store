@@ -172,6 +172,34 @@ export function countFolderTree(
   return { files, subfolders };
 }
 
+/**
+ * Stable identity of the browsed view: the current folder, or the active
+ * library-wide search. The explorer compares this against the view the last
+ * completed response answered to decide whether stale rows must be hidden.
+ */
+export function explorerViewId(isSearching: boolean, folderId: string | null, search: string): string {
+  if (isSearching) return `search:${search.trim().toLowerCase()}`;
+  return `folder:${folderId ?? "root"}`;
+}
+
+/**
+ * Type-to-confirm matching for destructive folder deletes: the typed value must
+ * equal the folder name exactly, ignoring accidental surrounding whitespace.
+ */
+export function confirmNameMatches(input: string, expectedName: string): boolean {
+  if (expectedName.trim().length === 0) return false;
+  return input.trim() === expectedName;
+}
+
+/**
+ * Honest byte-level transfer percentage, or `null` when the total size is
+ * unknown (the UI must render an indeterminate indicator instead of a guess).
+ */
+export function transferPercent(loaded: number, total: number): number | null {
+  if (!Number.isFinite(loaded) || !Number.isFinite(total) || total <= 0 || loaded < 0) return null;
+  return Math.min(100, Math.round((loaded / total) * 100));
+}
+
 /** Display name used across the explorer (title falls back to the filename). */
 export function displayName(asset: { title: string | null; originalName: string }): string {
   return asset.title ?? asset.originalName;

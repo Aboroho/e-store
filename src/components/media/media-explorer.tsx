@@ -64,6 +64,7 @@ import {
   SORT_OPTIONS,
   breadcrumbsFor,
   displayName,
+  explorerViewId,
   formatBytes,
   formatDate,
   formatDateTime,
@@ -230,6 +231,15 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
   const searching = search.trim().length > 0;
 
+  // Identity of the browsed view (folder or library-wide search). Rows belong
+  // to `displayedViewId` — the view the last completed response answered — so
+  // a navigation can hide stale rows immediately instead of showing Folder A's
+  // files under Folder B's breadcrumb. The ref mirrors the state for the
+  // request callbacks, which must compare against the latest value.
+  const viewId = explorerViewId(searching, searching ? null : folderId, searching ? search.trim() : "");
+  const [displayedViewId, setDisplayedViewId] = React.useState(viewId);
+  const displayedViewRef = React.useRef(viewId);
+
   /* ---------------------------------- data --------------------------------- */
 
   React.useEffect(() => {
@@ -254,6 +264,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
     const trimmed = search.trim();
     const isSearching = trimmed.length > 0;
     const key = viewKeyFor(isSearching, isSearching ? null : folderId, isSearching ? trimmed : "", mimeFilter, sort, page, pageSize, reloadToken);
+    const requestViewId = explorerViewId(isSearching, isSearching ? null : folderId, isSearching ? trimmed : "");
     void browseMediaAction({
       search: isSearching ? trimmed : undefined,
       folderId: isSearching ? undefined : folderId,
@@ -264,6 +275,8 @@ export function MediaExplorer(props: MediaExplorerProps) {
     })
       .then((result) => {
         if (seq !== fetchSeq.current) return;
+        displayedViewRef.current = requestViewId;
+        setDisplayedViewId(requestViewId);
         setViewCache((prev) => {
           const next = new Map(prev);
           for (const row of result.rows) next.set(row.id, row);
@@ -278,6 +291,12 @@ export function MediaExplorer(props: MediaExplorerProps) {
       })
       .catch((error: unknown) => {
         if (seq !== fetchSeq.current) return;
+        // A failed navigation must not leave the previous folder's rows on
+        // screen as if they belonged here; a failed same-view refresh keeps
+        // its (still current) rows with the error banner above them.
+        if (displayedViewRef.current !== requestViewId) setAssets([]);
+        displayedViewRef.current = requestViewId;
+        setDisplayedViewId(requestViewId);
         setLoadError(error instanceof Error ? error.message : "Unable to load the media library");
         setLoadedKey(key);
       });
@@ -366,6 +385,12 @@ export function MediaExplorer(props: MediaExplorerProps) {
   const queryKey = viewKeyFor(searching, searching ? null : folderId, searching ? search.trim() : "", mimeFilter, sort, page, pageSize, reloadToken);
   const refreshing = loadedKey !== queryKey;
   const loading = refreshing && assets.length === 0;
+  // Navigation (folder/search change) hides stale rows immediately and shows
+  // the skeleton until the correct response lands. Same-view refreshes (sort,
+  // filter, page, manual refresh) keep their rows with "Updating…" instead.
+  const viewStale = displayedViewId !== viewId;
+  const showSkeleton = viewStale || loading;
+  const showErrorPanel = !viewStale && loadError !== null && assets.length === 0 && visibleFolders.length === 0;
 
   const crumbs = React.useMemo(() => breadcrumbsFor(folders, folderId), [folders, folderId]);
   const currentFolder = folderId ? folders.find((folder) => folder.id === folderId) : undefined;
@@ -871,6 +896,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
   /* --------------------------------- keyboard -------------------------------- */
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
+    // The open context menu owns the keyboard: it handles keys through its
+    // own document-level listener (which also works inside modal focus
+    // traps), so explorer shortcuts stay quiet until it closes.
+    if (menu) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest("input, textarea, select, [role='dialog'], [role='menu']")) return;
     const mod = event.ctrlKey || event.metaKey;
@@ -1244,9 +1273,16 @@ export function MediaExplorer(props: MediaExplorerProps) {
         </div>
       ) : null}
 
-      {loadError ? (
+      {loadError && !showErrorPanel ? (
         <div className="shrink-0 px-3 pt-2 sm:px-4">
-          <Alert variant="danger">{loadError}</Alert>
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <Alert variant="danger">{loadError}</Alert>
+            </div>
+            <Button variant="outline" size="sm" className="h-8 shrink-0 bg-white" onClick={refreshAll}>
+              <RefreshCw className="h-3.5 w-3.5" /> Retry
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -1300,8 +1336,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
         {/* Content */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col" onContextMenu={handleEmptyContextMenu}>
           <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
-            {loading ? (
+            {showSkeleton ? (
               <LoadingSkeleton viewMode={viewMode} />
+            ) : showErrorPanel ? (
+              <LoadErrorState message={loadError ?? "Unable to load the media library"} onRetry={refreshAll} />
             ) : visibleAssets.length === 0 && visibleFolders.length === 0 ? (
               <EmptyState
                 searching={searching}
@@ -1459,9 +1497,15 @@ export function MediaExplorer(props: MediaExplorerProps) {
           {/* Pagination */}
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-3 py-2 text-xs text-slate-500 sm:px-4">
             <span>
-              {searching ? `${total} result${total === 1 ? "" : "s"}` : `${total} file${total === 1 ? "" : "s"}`}
-              {visibleFolders.length > 0 ? ` · ${visibleFolders.length} folder${visibleFolders.length === 1 ? "" : "s"}` : ""} ·{" "}
-              {formatBytes(totalBytes)}
+              {viewStale ? (
+                "Loading…"
+              ) : (
+                <>
+                  {searching ? `${total} result${total === 1 ? "" : "s"}` : `${total} file${total === 1 ? "" : "s"}`}
+                  {visibleFolders.length > 0 ? ` · ${visibleFolders.length} folder${visibleFolders.length === 1 ? "" : "s"}` : ""} ·{" "}
+                  {formatBytes(totalBytes)}
+                </>
+              )}
             </span>
             {pages > 1 ? (
               <div className="flex items-center gap-1">
@@ -1790,10 +1834,19 @@ function UploadRow({ item, onRetry, onCancel }: { item: UploadItem; onRetry: (id
         <p className="text-[10px] text-slate-500">{formatBytes(item.size)}</p>
       </div>
       {item.status === "uploading" ? (
-        <div className="flex w-28 items-center gap-2">
-          <Progress value={item.progress} />
-          <span className="text-[10px] tabular-nums text-slate-500">{item.progress}%</span>
-        </div>
+        item.progress > 0 ? (
+          <div className="flex w-32 items-center gap-2" title={`${item.progress}% uploaded`}>
+            <Progress value={item.progress} />
+            <span className="text-[10px] tabular-nums text-slate-500">{item.progress}%</span>
+          </div>
+        ) : (
+          <div className="flex w-32 items-center gap-2" title="Uploading…">
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label={`Uploading ${item.fileName}`}>
+              <div className="h-full w-full animate-pulse rounded-full bg-brand-300" />
+            </div>
+            <span className="shrink-0 text-[10px] text-slate-500">Uploading…</span>
+          </div>
+        )
       ) : null}
       {item.status === "waiting" ? <span className="text-[10px] text-slate-400">Waiting…</span> : null}
       {item.status === "processing" ? <span className="text-[10px] font-medium text-brand-600">Processing…</span> : null}
@@ -1913,6 +1966,23 @@ function EmptyState({
   );
 }
 
+function LoadErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex h-full min-h-64 flex-col items-center justify-center px-4 py-16 text-center" role="alert">
+      <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-red-400">
+        <CloudOff className="h-7 w-7" />
+      </span>
+      <p className="mt-4 text-base font-semibold text-slate-800">Unable to load this folder</p>
+      <p className="mt-1 max-w-sm text-sm text-slate-500">{message}</p>
+      <div className="mt-4">
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          <RefreshCw className="h-3.5 w-3.5" /> Try again
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Grid cards                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -1923,7 +1993,6 @@ function CardMenuButton({ onClick, label }: { onClick: (event: React.MouseEvent)
       type="button"
       aria-label={label}
       onClick={onClick}
-      onContextMenu={(event) => event.stopPropagation()}
       className="rounded-md bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm ring-1 ring-slate-200 transition-opacity hover:bg-white hover:text-slate-800 focus-visible:opacity-100 group-hover:opacity-100"
     >
       <MoreVertical className="h-3.5 w-3.5" />
@@ -1968,14 +2037,14 @@ function FolderCard({
       onDrop={uploadsAllowed ? onDrop : undefined}
       className={cn(
         "group relative overflow-hidden rounded-xl border bg-white transition-all hover:shadow-md",
-        selected ? "border-brand-400 ring-2 ring-brand-500/40" : "border-slate-200",
+        selected ? "border-brand-400 ring-2 ring-brand-500/40" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60",
         dropTarget && "border-brand-500 bg-brand-50 ring-2 ring-brand-500/50",
         cut && "opacity-50 saturate-50",
       )}
     >
       <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5">
         {selectable ? (
-          <span onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>
+          <span onClick={(event) => event.stopPropagation()}>
             <Checkbox checked={selected} onCheckedChange={() => onSelect(false)} aria-label={`Select ${folder.name}`} className="bg-white" />
           </span>
         ) : null}
@@ -1984,8 +2053,22 @@ function FolderCard({
       <div className="absolute right-1.5 top-1.5 z-10">
         <CardMenuButton onClick={onMenuButton} label={`Actions for ${folder.name}`} />
       </div>
-      <button type="button" onClick={onOpen} onDoubleClick={onOpen} className="block w-full px-3 pb-2 pt-9 text-left" aria-label={`Open ${folder.name}`}>
-        <Folder className={cn("h-9 w-9", selected ? "text-brand-500" : "text-slate-300")} strokeWidth={1.5} />
+      <button
+        type="button"
+        onClick={(event) => {
+          // Familiar explorer behaviour: mouse single-click selects, mouse
+          // double-click opens (its second click carries detail 2 and is
+          // ignored here). Keyboard activation (detail 0) opens, matching the
+          // button's primary action. In pick mode folders are navigation-only.
+          if (!selectable) onOpen();
+          else if (event.detail === 0) onOpen();
+          else if (event.detail === 1) onSelect(event.shiftKey);
+        }}
+        onDoubleClick={selectable ? onOpen : undefined}
+        className="block w-full cursor-pointer px-3 pb-2 pt-9 text-left"
+        aria-label={selectable ? `${folder.name} — select, double-click to open` : `Open ${folder.name}`}
+      >
+        <Folder className={cn("h-9 w-9 transition-colors", selected ? "text-brand-500" : "text-slate-300 group-hover:text-slate-400")} strokeWidth={1.5} />
         <p className="mt-2 truncate text-xs font-medium text-slate-800" title={folder.name}>
           {folder.name}
         </p>
@@ -2024,12 +2107,12 @@ function AssetCard({
       onContextMenu={onContextMenu}
       className={cn(
         "group relative overflow-hidden rounded-xl border bg-white transition-all hover:shadow-md",
-        selected ? "border-brand-400 ring-2 ring-brand-500/40" : "border-slate-200",
+        selected ? "border-brand-400 ring-2 ring-brand-500/40" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60",
         cut && "opacity-50 saturate-50",
       )}
     >
       <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5">
-        <span onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()}>
+        <span onClick={(event) => event.stopPropagation()}>
           <Checkbox
             checked={selected}
             onCheckedChange={() => onSelect(false)}
@@ -2054,7 +2137,7 @@ function AssetCard({
       <button
         type="button"
         aria-label={`${displayName(asset)} — select, double-click to preview`}
-        className="block aspect-square w-full bg-slate-100"
+        className="block aspect-square w-full cursor-pointer bg-slate-100"
         onClick={(event) => {
           if (event.detail === 2) onPreview();
           else onSelect(event.shiftKey);
@@ -2065,7 +2148,7 @@ function AssetCard({
           // eslint-disable-next-line @next/next/no-img-element
           <img src={asset.url} alt={asset.altText ?? asset.originalName} className="h-full w-full object-cover" loading="lazy" />
         ) : (
-          <span className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-slate-400">
+          <span className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-slate-400 transition-colors group-hover:text-slate-500">
             <MediaKindIcon mimeType={asset.mimeType} className="h-9 w-9" />
             <span className="max-w-[80%] truncate text-[10px]">{kindLabel(mediaKindOf(asset.mimeType))}</span>
           </span>
@@ -2125,16 +2208,34 @@ function FolderRow({
   onMenuButton: (event: React.MouseEvent) => void;
 }) {
   return (
-    <tr onContextMenu={onContextMenu} className={cn("transition-colors hover:bg-slate-50", selected && "bg-brand-50/60", cut && "opacity-50")}>
+    <tr
+      onContextMenu={onContextMenu}
+      onClick={(event) => {
+        if (!selectable) return;
+        if ((event.target as HTMLElement).closest("button, a, input")) return;
+        onSelect(event.shiftKey);
+      }}
+      onDoubleClick={onOpen}
+      className={cn("transition-colors hover:bg-slate-50", selected && "bg-brand-50/60 hover:bg-brand-100/60", cut && "opacity-50")}
+    >
       <td className="px-3 py-2">
         {selectable ? (
-          <span onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()} className="flex">
+          <span onClick={(event) => event.stopPropagation()} className="flex">
             <Checkbox checked={selected} onCheckedChange={() => onSelect(false)} aria-label={`Select ${folder.name}`} />
           </span>
         ) : null}
       </td>
       <td className="px-2 py-2" colSpan={1}>
-        <button type="button" onClick={onOpen} className="flex w-full items-center gap-2.5 text-left">
+        <button
+          type="button"
+          onClick={(event) => {
+            if (!selectable) onOpen();
+            else if (event.detail === 0) onOpen();
+            else if (event.detail === 1) onSelect(event.shiftKey);
+          }}
+          onDoubleClick={selectable ? onOpen : undefined}
+          className="flex w-full cursor-pointer items-center gap-2.5 text-left"
+        >
           <Folder className={cn("h-5 w-5 shrink-0", selected ? "text-brand-500" : "text-slate-400")} />
           <span className="truncate font-medium text-slate-800">{folder.name}</span>
           {cut ? <Badge variant="neutral" className="px-1.5 py-0 text-[9px]">Cut</Badge> : null}
@@ -2186,10 +2287,10 @@ function AssetRow({
         onSelect(event.shiftKey);
       }}
       onDoubleClick={onPreview}
-      className={cn("cursor-default transition-colors hover:bg-slate-50", selected && "bg-brand-50/60", cut && "opacity-50")}
+      className={cn("cursor-default transition-colors hover:bg-slate-50", selected && "bg-brand-50/60 hover:bg-brand-100/60", cut && "opacity-50")}
     >
       <td className="px-3 py-2">
-        <span onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()} className="flex">
+        <span onClick={(event) => event.stopPropagation()} className="flex">
           <Checkbox
             checked={selected}
             onCheckedChange={() => onSelect(false)}

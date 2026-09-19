@@ -170,8 +170,15 @@ export async function deleteFolderAction(_prev: ActionState, formData: FormData)
   try {
     const context = await actor();
     const raw = formDataToObject(formData);
-    await deleteFolder(context, String(raw.folderId ?? ""));
+    const recursive = String(raw.recursive ?? "") === "true";
+    const expectedName = typeof raw.expectedName === "string" && raw.expectedName.length > 0 ? raw.expectedName : undefined;
+    const result = await deleteFolder(context, String(raw.folderId ?? ""), { recursive, expectedName });
     revalidateMedia();
+    if (recursive && (result.deletedAssets > 0 || result.deletedFolders > 1)) {
+      const parts = [`${result.deletedAssets} file${result.deletedAssets === 1 ? "" : "s"}`];
+      if (result.deletedFolders > 1) parts.push(`${result.deletedFolders - 1} sub-folder${result.deletedFolders - 1 === 1 ? "" : "s"}`);
+      return { status: "success", message: `Folder and its contents deleted (${parts.join(", ")})` };
+    }
     return { status: "success", message: "Folder deleted" };
   } catch (error) {
     return toState(error, "Unable to delete the folder");
