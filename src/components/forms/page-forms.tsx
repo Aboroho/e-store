@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { initialActionState } from "@/modules/auth/action-state";
 import { Alert, FormField, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
+import { MediaImageField } from "@/components/media/media-field";
 import { SubmitButton } from "@/components/ui/interactive";
 import {
   addDomainAction,
@@ -44,6 +45,7 @@ export interface PageValues {
   seoTitle: string | null;
   seoDescription: string | null;
   seoKeywords: string | null;
+  ogMediaId: string | null;
   canonicalUrl: string | null;
   robots: string;
 }
@@ -99,6 +101,7 @@ export function PageForm({ storefronts }: { storefronts: StorefrontOption[] }) {
 
 export function PageSettingsForm({ page, storefronts }: { page: PageValues; storefronts: StorefrontOption[] }) {
   const [state, action] = useActionState(updatePageAction, initialActionState);
+  const [ogMediaId, setOgMediaId] = useState<string | null>(page.ogMediaId);
   return (
     <form action={action} className="space-y-3">
       {state.status === "error" ? <Alert variant="danger">{state.message}</Alert> : null}
@@ -147,6 +150,13 @@ export function PageSettingsForm({ page, storefronts }: { page: PageValues; stor
         <FormField label="Keywords" htmlFor="settings-seo-keywords">
           <Input id="settings-seo-keywords" name="seoKeywords" defaultValue={page.seoKeywords ?? ""} />
         </FormField>
+        <MediaImageField
+          label="Social share image"
+          name="ogMediaId"
+          value={ogMediaId}
+          onChange={setOgMediaId}
+          help="Shared library image used for link previews (Open Graph). Clearing detaches it; the file stays in the library."
+        />
         <FormField label="Canonical URL" htmlFor="settings-canonical">
           <Input id="settings-canonical" name="canonicalUrl" defaultValue={page.canonicalUrl ?? ""} placeholder="https://example.com/about-us" />
         </FormField>

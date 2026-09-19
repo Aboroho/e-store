@@ -255,6 +255,7 @@ export async function createCategoryAction(_prev: ActionState, formData: FormDat
       {
         ...raw,
         parentId: raw.parentId || undefined,
+        imageMediaId: raw.imageMediaId || undefined,
         isActive: raw.isActive === "on",
         isFeatured: raw.isFeatured === "on",
       },
@@ -397,4 +398,85 @@ export async function setSinglePriceAction(variantId: string, priceListId: strin
   await setPriceListItem(context, { priceListId, variantId, pricePaisa });
   revalidatePath("/admin/catalog/products");
   revalidatePath(`/admin/catalog/price-lists`);
+}
+
+// ------------------------------------------------------------------ media
+// Product galleries, variant images and attribute-value images reference shared
+// media assets; these actions own the associations (never the bytes).
+
+export async function setProductGalleryAction(input: {
+  productId: string;
+  mediaIds: string[];
+  primaryMediaId?: string | null;
+}): Promise<{ ok: true; count: number } | { ok: false; message: string }> {
+  try {
+    const context = await actor("product.update");
+    const { setProductGallery } = await import("@/modules/catalog/media");
+    const images = await setProductGallery(context, input);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath(`/admin/catalog/products/${input.productId}`);
+    return { ok: true, count: images.length };
+  } catch (error) {
+    const state = toState(error, "Unable to save the gallery");
+    return { ok: false, message: state.message ?? "Unable to save the gallery" };
+  }
+}
+
+export async function setVariantImagesAction(input: {
+  variantId: string;
+  mediaIds: string[];
+}): Promise<{ ok: true; count: number } | { ok: false; message: string }> {
+  try {
+    const context = await actor("product.update");
+    const { setVariantImages } = await import("@/modules/catalog/media");
+    const images = await setVariantImages(context, { variantId: input.variantId, mediaIds: input.mediaIds });
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, count: images.length };
+  } catch (error) {
+    const state = toState(error, "Unable to save the variant images");
+    return { ok: false, message: state.message ?? "Unable to save the variant images" };
+  }
+}
+
+export async function bulkApplyVariantImageAction(input: {
+  productId: string;
+  mediaId: string;
+  attributeValueId: string;
+}): Promise<{ ok: true; affected: Array<{ id: string; name: string; sku: string }> } | { ok: false; message: string }> {
+  try {
+    const context = await actor("product.update");
+    const { bulkApplyVariantImage } = await import("@/modules/catalog/media");
+    const result = await bulkApplyVariantImage(context, input);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath(`/admin/catalog/products/${input.productId}`);
+    return { ok: true, affected: result.affected };
+  } catch (error) {
+    const state = toState(error, "Unable to apply the image");
+    return { ok: false, message: state.message ?? "Unable to apply the image" };
+  }
+}
+
+export async function previewBulkVariantTargetsAction(input: {
+  productId: string;
+  attributeValueId: string;
+}): Promise<Array<{ id: string; name: string; sku: string }>> {
+  const context = await actor("product.update");
+  const { previewBulkVariantImageTargets } = await import("@/modules/catalog/media");
+  return previewBulkVariantImageTargets(context.businessId, input);
+}
+
+export async function setAttributeValueImageAction(input: {
+  attributeValueId: string;
+  mediaId: string | null;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const context = await actor("attribute.manage");
+    const { setAttributeValueImage } = await import("@/modules/catalog/service");
+    await setAttributeValueImage(context, input.attributeValueId, input.mediaId);
+    revalidatePath("/admin/catalog/attributes");
+    return { ok: true };
+  } catch (error) {
+    const state = toState(error, "Unable to save the value image");
+    return { ok: false, message: state.message ?? "Unable to save the value image" };
+  }
 }

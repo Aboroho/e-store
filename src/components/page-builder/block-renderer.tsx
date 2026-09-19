@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db/client";
 import { mediaUrlFor } from "@/modules/media/service";
+import { renderRichText } from "@/modules/media/rich-text";
 import { productCards, productReviews, storefrontCatalog, type StorefrontContext } from "@/modules/storefront/queries";
 import { blockDefinition } from "@/modules/page-builder/blocks";
 import { safePageDocument, type PageBlock, type PageDocument, type PageSection } from "@/modules/page-builder/schema";
@@ -188,6 +189,19 @@ async function renderBlock(type: string, props: Record<string, unknown>, storefr
             </p>
           ))}
         </div>
+      );
+    }
+
+    case "richText": {
+      const sizeClass = { sm: "text-sm", md: "text-base", lg: "text-lg" }[String(props.size ?? "md")] ?? "text-base";
+      const html = await renderRichText(storefront.businessId, String(props.content ?? ""));
+      return (
+        // The HTML comes from the shared sanitizer above — allow-listed elements only.
+        <div
+          className={`rich-text max-w-none space-y-3 ${sizeClass} ${ALIGN_CLASS[String(props.align ?? "left")]}`}
+          style={props.color ? { color: String(props.color) } : undefined}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
       );
     }
 

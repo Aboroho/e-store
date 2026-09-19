@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { recordAudit } from "@/lib/audit";
+import { replaceSingleEntityUsage, syncUsageCountsTx } from "@/modules/media/service";
 import { parsePageDocument, documentBlockCount, documentMediaIds, emptyDocument, pageDocumentSchema, type PageDocument } from "./schema";
 import { z } from "zod";
 
@@ -37,6 +38,8 @@ export const pageInputSchema = z.object({
   canonicalUrl: z.string().trim().max(300).optional(),
   robots: z.enum(["index,follow", "noindex,follow", "index,nofollow", "noindex,nofollow"]).default("index,follow"),
   isHomepage: z.coerce.boolean().default(false),
+  /** Social/OG share image. `undefined` = leave unchanged (meta updates), `null` = clear. */
+  ogMediaId: z.string().uuid().nullable().optional(),
   document: pageDocumentSchema.optional(),
 });
 
@@ -98,10 +101,18 @@ async function assertMediaOwnership(businessId: string, document: PageDocument) 
   }
 }
 
-/** Replace the page's media usages so the media manager shows accurate references. */
+/**
+ * Replace the page's layout media usages so the media manager shows accurate references.
+ *
+ * Only the `block` field scope is touched — the page also carries an `og-image` usage
+ * (managed by updatePageMeta) and deleting it here would silently detach the OG image.
+ * Counters are resynced for newly referenced ids *and* for ids that lost their last
+ * PAGE/block row, so removed images stop showing as "in use".
+ */
 async function syncPageUsages(tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0], page: { id: string; businessId: string }, document: PageDocument) {
   const ids = documentMediaIds(document);
-  await tx.mediaUsage.deleteMany({ where: { entityType: "PAGE", entityId: page.id } });
+  const previous = await tx.mediaUsage.findMany({ where: { entityType: "PAGE", entityId: page.id, field: "block" }, select: { mediaId: true } });
+  await tx.mediaUsage.deleteMany({ where: { entityType: "PAGE", entityId: page.id, field: "block" } });
   for (const mediaId of ids) {
     await tx.mediaUsage.upsert({
       where: { mediaId_entityType_entityId_field: { mediaId, entityType: "PAGE", entityId: page.id, field: "block" } },
@@ -109,7 +120,8 @@ async function syncPageUsages(tx: Parameters<Parameters<typeof prisma.$transacti
       update: {},
     });
   }
-  for (const mediaId of ids) {
+  const resync = new Set([...ids, ...previous.map((row) => row.mediaId)]);
+  for (const mediaId of resync) {
     const count = await tx.mediaUsage.count({ where: { mediaId } });
     await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
   }
@@ -124,6 +136,10 @@ export async function createPage(actor: PageActor, input: PageInput) {
 
   const document = parsed.document ?? emptyDocument();
   await assertMediaOwnership(actor.businessId, document);
+  if (parsed.ogMediaId) {
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: parsed.ogMediaId, businessId: actor.businessId, deletedAt: null }, select: { id: true } });
+    if (!asset) throw AppError.validation("The selected social image is not in this business's media library");
+  }
 
   const page = await prisma.$transaction(async (tx) => {
     if (parsed.isHomepage) {
@@ -142,12 +158,16 @@ export async function createPage(actor: PageActor, input: PageInput) {
         seoTitle: parsed.seoTitle ?? parsed.title,
         seoDescription: parsed.seoDescription ?? null,
         seoKeywords: parsed.seoKeywords ?? null,
+        ogMediaId: parsed.ogMediaId ?? null,
         canonicalUrl: parsed.canonicalUrl ?? null,
         robots: parsed.robots,
         currentVersion: 1,
         createdByUserId: actor.userId,
       },
     });
+    if (parsed.ogMediaId) {
+      await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "PAGE", entityId: created.id, field: "og-image" }, parsed.ogMediaId);
+    }
     const version = await tx.pageVersion.create({
       data: {
         pageId: created.id,
@@ -187,6 +207,10 @@ export async function updatePageMeta(actor: PageActor, input: PageInput & { page
   const page = await getPage(actor.businessId, input.pageId);
   const parsed = pageInputSchema.parse(input);
   if (parsed.storefrontId) await assertStorefront(actor.businessId, parsed.storefrontId);
+  if (parsed.ogMediaId) {
+    const asset = await prisma.mediaAsset.findFirst({ where: { id: parsed.ogMediaId, businessId: actor.businessId, deletedAt: null }, select: { id: true } });
+    if (!asset) throw AppError.validation("The selected social image is not in this business's media library");
+  }
 
   const clash = await prisma.page.findFirst({
     where: { businessId: actor.businessId, storefrontId: parsed.storefrontId, slug: parsed.slug, deletedAt: null, id: { not: page.id } },
@@ -196,6 +220,10 @@ export async function updatePageMeta(actor: PageActor, input: PageInput & { page
   const updated = await prisma.$transaction(async (tx) => {
     if (parsed.isHomepage) {
       await tx.page.updateMany({ where: { businessId: actor.businessId, storefrontId: parsed.storefrontId, isHomepage: true, id: { not: page.id } }, data: { isHomepage: false } });
+    }
+    // `undefined` leaves the OG image untouched; `null` clears it (detaching the usage row).
+    if (parsed.ogMediaId !== undefined) {
+      await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "PAGE", entityId: page.id, field: "og-image" }, parsed.ogMediaId);
     }
     return tx.page.update({
       where: { id: page.id },
@@ -209,6 +237,7 @@ export async function updatePageMeta(actor: PageActor, input: PageInput & { page
         seoTitle: parsed.seoTitle ?? null,
         seoDescription: parsed.seoDescription ?? null,
         seoKeywords: parsed.seoKeywords ?? null,
+        ...(parsed.ogMediaId !== undefined ? { ogMediaId: parsed.ogMediaId } : {}),
         canonicalUrl: parsed.canonicalUrl ?? null,
         robots: parsed.robots,
         updatedByUserId: actor.userId,
@@ -371,6 +400,8 @@ export async function duplicatePage(actor: PageActor, pageId: string) {
     seoDescription: page.seoDescription ?? undefined,
     robots: page.robots as never,
     isHomepage: false,
+    // The copy shares the same OG asset (its own usage row), never a copied binary.
+    ogMediaId: page.ogMediaId ?? undefined,
     document,
   });
 }
@@ -381,7 +412,9 @@ export async function deletePage(actor: PageActor, pageId: string) {
 
   await prisma.$transaction(async (tx) => {
     await tx.page.update({ where: { id: page.id }, data: { deletedAt: new Date(), status: "ARCHIVED", archivedAt: new Date(), isHomepage: false } });
+    const usages = await tx.mediaUsage.findMany({ where: { entityType: "PAGE", entityId: page.id }, select: { mediaId: true } });
     await tx.mediaUsage.deleteMany({ where: { entityType: "PAGE", entityId: page.id } });
+    await syncUsageCountsTx(tx, usages.map((usage) => usage.mediaId));
   });
 
   await recordAudit({

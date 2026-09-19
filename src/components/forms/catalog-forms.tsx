@@ -1,14 +1,19 @@
 "use client";
 
 import { useRef, useState, useActionState } from "react";
+import { useRouter } from "next/navigation";
 import { initialActionState } from "@/modules/auth/action-state";
 import {
   addAttributeValueAction,
   createCategoryAction,
   createAttributeAction,
+  setAttributeValueImageAction,
   setPriceAction,
   updateCategoryAction,
 } from "@/modules/catalog/actions";
+import { createBrandAction, updateBrandAction } from "@/modules/catalog/brand-actions";
+import { MediaImageField } from "@/components/media/media-field";
+import { MediaPicker } from "@/components/media/media-picker";
 import { createSupplierAction, updateSupplierAction } from "@/modules/purchasing/actions";
 import { recordAdjustmentAction } from "@/modules/inventory/actions";
 import { allocatePreordersAction } from "@/modules/preorders/actions";
@@ -32,9 +37,10 @@ export function CategoryForm({
   category,
 }: {
   categories: Array<{ id: string; name: string; path: string | null }>;
-  category?: { id: string; name: string; slug: string; parentId: string | null; description: string | null; position: number; isActive: boolean; isFeatured: boolean };
+  category?: { id: string; name: string; slug: string; parentId: string | null; description: string | null; imageMediaId: string | null; position: number; isActive: boolean; isFeatured: boolean };
 }) {
   const [state, formAction, pending] = useActionState(category ? updateCategoryAction : createCategoryAction, initialActionState);
+  const [imageMediaId, setImageMediaId] = useState<string | null>(category?.imageMediaId ?? null);
 
   return (
     <form action={formAction}>
@@ -67,6 +73,13 @@ export function CategoryForm({
           <FormField label="Description" htmlFor={`cat-desc-${category?.id ?? "new"}`}>
             <Textarea id={`cat-desc-${category?.id ?? "new"}`} name="description" rows={2} defaultValue={category?.description ?? ""} />
           </FormField>
+          <MediaImageField
+            label="Category image"
+            name="imageMediaId"
+            value={imageMediaId}
+            onChange={setImageMediaId}
+            help="Shared library image shown on category tiles and collection pages."
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Position" htmlFor={`cat-pos-${category?.id ?? "new"}`} hint="Lower numbers appear first.">
               <Input id={`cat-pos-${category?.id ?? "new"}`} name="position" type="number" min={0} defaultValue={category?.position ?? 0} />
@@ -97,6 +110,7 @@ export function AttributeForm() {
   const [state, formAction, pending] = useActionState(createAttributeAction, initialActionState);
   const nextKey = useRef(1);
   const [rows, setRows] = useState<number[]>([0]);
+  const [rowMedia, setRowMedia] = useState<Record<number, { id: string; url: string | null }>>({});
 
   const addRow = () => {
     setRows((prev) => [...prev, nextKey.current]);
@@ -105,6 +119,11 @@ export function AttributeForm() {
 
   const removeRow = (key: number) => {
     setRows((prev) => (prev.length > 1 ? prev.filter((row) => row !== key) : prev));
+    setRowMedia((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   return (
@@ -147,7 +166,8 @@ export function AttributeForm() {
               </Button>
             </div>
             <p className="text-xs text-slate-500">
-              Add as many values as you need — one per box. The hex colour is optional and only used for colour attributes.
+              Add as many values as you need — one per box. The hex colour is optional and only used for colour attributes. The image becomes the
+              default variant image for combinations carrying that value.
             </p>
             <div className="space-y-2">
               {rows.map((key, index) => (
@@ -159,6 +179,32 @@ export function AttributeForm() {
                     className="flex-1"
                   />
                   <Input name="valueColors" placeholder="#dc2626" className="w-32" aria-label="Hex colour (optional)" />
+                  <input type="hidden" name="valueMediaIds" value={rowMedia[key]?.id ?? ""} />
+                  {rowMedia[key]?.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={rowMedia[key]!.url!} alt="" className="h-9 w-9 shrink-0 rounded border object-cover" />
+                  ) : null}
+                  <MediaPicker
+                    mode="single"
+                    title="Value image"
+                    trigger={<Button type="button" variant="outline" size="sm">{rowMedia[key] ? "Change" : "Image"}</Button>}
+                    onConfirm={(assets) => {
+                      const asset = assets[0];
+                      if (!asset) return;
+                      setRowMedia((prev) => ({ ...prev, [key]: { id: asset.id, url: asset.url } }));
+                    }}
+                  />
+                  {rowMedia[key] ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setRowMedia((prev) => { const next = { ...prev }; delete next[key]; return next; })}
+                      aria-label="Remove image"
+                    >
+                      ✕
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
@@ -186,21 +232,91 @@ export function AttributeForm() {
 
 export function AttributeValueForm({ attributeId }: { attributeId: string }) {
   const [state, formAction, pending] = useActionState(addAttributeValueAction, initialActionState);
+  const [mediaId, setMediaId] = useState<string | null>(null);
 
   return (
     <form action={formAction} className="flex flex-wrap items-end gap-2">
       <input type="hidden" name="attributeId" value={attributeId} />
       {state.status === "error" && state.message ? <p className="w-full text-xs text-red-600">{state.message}</p> : null}
-      <FormField label="Add value" htmlFor={`value-${attributeId}`} className="flex-1">
+      <FormField label="Add value" htmlFor={`value-${attributeId}`} className="min-w-40 flex-1">
         <Input id={`value-${attributeId}`} name="value" required className="h-9" />
       </FormField>
       <FormField label="Hex (optional)" htmlFor={`color-${attributeId}`}>
         <Input id={`color-${attributeId}`} name="colorHex" placeholder="#dc2626" className="h-9 w-28" />
       </FormField>
+      <div className="space-y-1">
+        <Label>Image (optional)</Label>
+        <div className="flex h-9 items-center gap-2">
+          <input type="hidden" name="mediaId" value={mediaId ?? ""} />
+          <MediaPicker
+            mode="single"
+            title="Value image"
+            trigger={<Button type="button" variant="outline" size="sm">{mediaId ? "Change" : "Choose"}</Button>}
+            onConfirm={(assets) => setMediaId(assets[0]?.id ?? null)}
+          />
+          {mediaId ? (
+            <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => setMediaId(null)}>
+              Clear
+            </button>
+          ) : null}
+        </div>
+      </div>
       <Button type="submit" variant="outline" size="sm" disabled={pending}>
         {pending ? "Adding…" : "Add"}
       </Button>
     </form>
+  );
+}
+
+/** Change the default image of an existing attribute value (shared-media reference). */
+export function AttributeValueImageControl({
+  attributeValueId,
+  mediaId,
+  imageUrl,
+}: {
+  attributeValueId: string;
+  mediaId: string | null;
+  imageUrl: string | null;
+}) {
+  const router = useRouter();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (next: string | null) => {
+    setSaving(true);
+    setError(null);
+    const result = await setAttributeValueImageAction({ attributeValueId, mediaId: next });
+    setSaving(false);
+    if (result.ok) router.refresh();
+    else setError(result.message);
+  };
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      {imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={imageUrl} alt="" className="h-5 w-5 rounded-full border object-cover" />
+      ) : null}
+      <MediaPicker
+        mode="single"
+        value={mediaId ? [mediaId] : []}
+        title="Value image"
+        trigger={
+          <button type="button" disabled={saving} className="text-[11px] text-indigo-600 hover:underline disabled:opacity-50">
+            {mediaId ? "Change image" : "Set image"}
+          </button>
+        }
+        onConfirm={(assets) => {
+          if (assets[0]) void save(assets[0].id);
+        }}
+      />
+      {mediaId ? (
+        <button type="button" disabled={saving} className="text-[11px] text-slate-400 hover:underline disabled:opacity-50" onClick={() => void save(null)}>
+          Clear
+        </button>
+      ) : null}
+      {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
+    </span>
   );
 }
 
@@ -417,6 +533,78 @@ export function StockAdjustmentForm({
         <CardFooter>
           <Button type="submit" disabled={pending}>
             {pending ? "Recording…" : "Record adjustment"}
+          </Button>
+        </CardFooter>
+      </Card>
+    </form>
+  );
+}
+
+export function BrandForm({
+  brand,
+}: {
+  brand?: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    website: string | null;
+    logoMediaId: string | null;
+    position: number;
+    isActive: boolean;
+  };
+}) {
+  const [state, formAction, pending] = useActionState(brand ? updateBrandAction : createBrandAction, initialActionState);
+  const [logoMediaId, setLogoMediaId] = useState<string | null>(brand?.logoMediaId ?? null);
+  const key = brand?.id ?? "new";
+
+  return (
+    <form action={formAction}>
+      <Card>
+        <CardHeader>
+          <CardTitle>{brand ? "Edit brand" : "New brand"}</CardTitle>
+          <p className="text-xs text-slate-500">
+            Canonical brands give products a shared logo. Products keep a free-text brand name; the logo resolves by exact name match.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {brand ? <input type="hidden" name="brandId" value={brand.id} /> : null}
+          {state.status === "error" && state.message ? <Alert variant="danger">{state.message}</Alert> : null}
+          {state.status === "success" ? <Alert variant="success">{state.message}</Alert> : null}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="Name" htmlFor={`brand-name-${key}`} required error={state.fieldErrors?.name}>
+              <Input id={`brand-name-${key}`} name="name" defaultValue={brand?.name} required />
+            </FormField>
+            <FormField label="Slug" htmlFor={`brand-slug-${key}`} hint="Generated from the name when left blank.">
+              <Input id={`brand-slug-${key}`} name="slug" defaultValue={brand?.slug} />
+            </FormField>
+          </div>
+          <FormField label="Description" htmlFor={`brand-desc-${key}`}>
+            <Textarea id={`brand-desc-${key}`} name="description" rows={2} defaultValue={brand?.description ?? ""} />
+          </FormField>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label="Website" htmlFor={`brand-website-${key}`}>
+              <Input id={`brand-website-${key}`} name="website" defaultValue={brand?.website ?? ""} placeholder="https://" />
+            </FormField>
+            <FormField label="Position" htmlFor={`brand-pos-${key}`} hint="Lower numbers appear first.">
+              <Input id={`brand-pos-${key}`} name="position" type="number" min={0} defaultValue={brand?.position ?? 0} />
+            </FormField>
+          </div>
+          <MediaImageField
+            label="Brand logo"
+            name="logoMediaId"
+            value={logoMediaId}
+            onChange={setLogoMediaId}
+            help="Shared library image reused by every product of this brand."
+          />
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="isActive" defaultChecked={brand?.isActive ?? true} className="h-4 w-4 rounded border-slate-300" />
+            Active
+          </label>
+        </CardContent>
+        <CardFooter>
+          <Button type="submit" disabled={pending}>
+            {pending ? "Saving…" : brand ? "Save brand" : "Create brand"}
           </Button>
         </CardFooter>
       </Card>

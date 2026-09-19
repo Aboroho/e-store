@@ -130,6 +130,7 @@ model Business {
   storefronts          Storefront[]
   customers            Customer[]
   categories           Category[]
+  brands               Brand[]
   products             Product[]
   attributes           Attribute[]
   priceLists           PriceList[]
@@ -744,6 +745,28 @@ model Category {
   @@unique([businessId, slug])
   @@index([businessId, isActive, position])
   @@index([parentId])
+}
+
+/// Canonical brands. The logo is a shared media asset (see MediaUsage with
+/// entityType BRAND); products keep a free-text brand name for flexibility and
+/// resolve the canonical logo by exact name match (see brands service).
+model Brand {
+  id           String   @id @default(uuid())
+  businessId   String
+  name         String
+  slug         String
+  description  String?
+  website      String?
+  logoMediaId  String?
+  position     Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, slug])
+  @@index([businessId, isActive, position])
 }
 
 model Product {

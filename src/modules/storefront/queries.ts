@@ -702,6 +702,44 @@ export const listStorefrontSummaries = cache(async (businessId: string): Promise
   }));
 });
 
+/**
+ * Storefront branding images (header logo, homepage banner).
+ *
+ * The settings hold shared-media asset ids; URLs are resolved fresh on every
+ * render so a rotated file or a revoked asset never leaves a stale `<img>`.
+ * Missing, deleted or foreign assets resolve to `null` and the chrome falls
+ * back to the storefront name.
+ */
+export async function storefrontBranding(storefront: StorefrontContext): Promise<{
+  logoUrl: string | null;
+  logoAlt: string;
+  bannerUrl: string | null;
+  bannerAlt: string;
+}> {
+  const rows = await prisma.storefrontSetting.findMany({
+    where: { storefrontId: storefront.id, key: { in: ["storefront.logo_media_id", "storefront.banner_media_id"] } },
+    select: { key: true, value: true },
+  });
+  const idFor = (key: string): string | null => {
+    const row = rows.find((entry) => entry.key === key);
+    return typeof row?.value === "string" && /^[0-9a-f-]{36}$/i.test(row.value) ? row.value : null;
+  };
+  const resolve = async (mediaId: string | null) => {
+    if (!mediaId) return null;
+    const asset = await prisma.mediaAsset.findFirst({
+      where: { id: mediaId, businessId: storefront.businessId, deletedAt: null },
+      select: { objectKey: true, visibility: true, originalName: true, extension: true, altText: true, title: true },
+    });
+    if (!asset) return null;
+    return {
+      url: await mediaUrlFor({ objectKey: asset.objectKey, visibility: asset.visibility, originalName: asset.originalName, extension: asset.extension }),
+      alt: asset.altText ?? asset.title ?? asset.originalName,
+    };
+  };
+  const [logo, banner] = await Promise.all([resolve(idFor("storefront.logo_media_id")), resolve(idFor("storefront.banner_media_id"))]);
+  return { logoUrl: logo?.url ?? null, logoAlt: logo?.alt ?? "", bannerUrl: banner?.url ?? null, bannerAlt: banner?.alt ?? "" };
+}
+
 /** Full storefront record for the management screen. */
 export async function getStorefront(businessId: string, storefrontId: string) {
   const storefront = await prisma.storefront.findFirst({

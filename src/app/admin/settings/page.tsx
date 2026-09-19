@@ -18,7 +18,7 @@ export default async function SettingsPage() {
   const [business, groups, storefronts] = await Promise.all([
     prisma.business.findUnique({
       where: { id: session.businessId },
-      select: { name: true, legalName: true, phone: true, email: true, address: true, currency: true },
+      select: { name: true, legalName: true, phone: true, email: true, address: true, currency: true, logoMediaId: true },
     }),
     businessSettingGroups(session.businessId),
     prisma.storefront.findMany({

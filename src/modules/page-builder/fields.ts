@@ -8,7 +8,7 @@ import { BLOCK_DEFINITIONS } from "./blocks";
  * its controls here: the field list is explicit, typed and safe to send to the client.
  */
 
-export type FieldKind = "text" | "textarea" | "number" | "select" | "checkbox" | "color" | "media" | "product" | "category" | "link";
+export type FieldKind = "text" | "textarea" | "richtext" | "number" | "select" | "checkbox" | "color" | "media" | "product" | "category" | "link";
 
 export interface FieldSpec {
   name: string;
@@ -56,6 +56,21 @@ export const BLOCK_FIELDS: Record<string, FieldSpec[]> = {
         { value: "md", label: "Medium" },
         { value: "lg", label: "Large" },
         { value: "xl", label: "Extra large" },
+      ],
+    },
+    align(),
+    { name: "color", label: "Colour", kind: "color" },
+  ],
+  richText: [
+    { name: "content", label: "Content", kind: "richtext", help: "Formatting and images from the shared media library." },
+    {
+      name: "size",
+      label: "Size",
+      kind: "select",
+      options: [
+        { value: "sm", label: "Small" },
+        { value: "md", label: "Medium" },
+        { value: "lg", label: "Large" },
       ],
     },
     align(),

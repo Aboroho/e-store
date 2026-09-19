@@ -16,10 +16,10 @@ import {
   FormField,
   Input,
   NativeSelect,
-  Textarea,
   buttonVariants,
 } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
+import { RichTextEditor } from "@/components/media/rich-text-editor";
 import { cn } from "@/lib/utils";
 
 export interface AttributeOption {
@@ -262,9 +262,7 @@ export function ProductForm({
           <FormField label="Short description" htmlFor="shortDescription">
             <Input id="shortDescription" name="shortDescription" defaultValue={product?.shortDescription ?? ""} />
           </FormField>
-          <FormField label="Description" htmlFor="description">
-            <Textarea id="description" name="description" rows={5} defaultValue={product?.description ?? ""} />
-          </FormField>
+          <ProductDescriptionField defaultValue={product?.description ?? ""} error={state.fieldErrors?.description?.[0]} />
 
           <div className="grid gap-4 sm:grid-cols-3">
             <FormField label="SEO title" htmlFor="seoTitle">
@@ -546,6 +544,23 @@ export function ProductForm({
         </CardFooter>
       </Card>
     </form>
+  );
+}
+
+/** Product description edited with the shared rich-text editor (images via the Media Picker). */
+function ProductDescriptionField({ defaultValue, error }: { defaultValue: string; error?: string }) {
+  const [value, setValue] = useState(defaultValue);
+  return (
+    <div>
+      <RichTextEditor
+        label="Description"
+        name="description"
+        value={value}
+        onChange={setValue}
+        help="Formatting and images are shown on the storefront. Images are shared library files."
+      />
+      {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : null}
+    </div>
   );
 }
 

@@ -8,6 +8,7 @@ import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
 import { MediaPicker } from "@/components/media/media-picker";
+import { RichTextEditor } from "@/components/media/rich-text-editor";
 import { BLOCK_DEFINITIONS, blockDefinition, blocksByCategory } from "@/modules/page-builder/blocks";
 import { SECTION_FIELDS, fieldsFor, type FieldSpec } from "@/modules/page-builder/fields";
 import { publishPageAction, saveDraftAction } from "@/modules/page-builder/actions";
@@ -642,6 +643,8 @@ function previewText(type: string, props: Record<string, unknown>): string {
       return String(props.text ?? props.heading ?? "Heading");
     case "text":
       return String(props.text ?? "").slice(0, 120) || "Text block";
+    case "richText":
+      return String(props.content ?? "").replace(/<[^>]*>/g, "").trim().slice(0, 120) || "Rich text block";
     case "image":
       return props.mediaId ? "Image selected" : "No image selected";
     case "button":
@@ -688,6 +691,18 @@ function Field({
         <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 rounded border-slate-300" />
         {spec.label}
       </label>
+    );
+  }
+
+  if (spec.kind === "richtext") {
+    return (
+      <RichTextEditor
+        label={spec.label}
+        value={typeof value === "string" ? value : ""}
+        onChange={(html) => onChange(html)}
+        help={spec.help}
+        minHeight={160}
+      />
     );
   }
 

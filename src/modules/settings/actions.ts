@@ -72,6 +72,7 @@ const optionalText = (max: number) =>
 
 const businessProfileSchema = z.object({
   name: z.string().trim().min(2, "Enter the trading name").max(160),
+  logoMediaId: z.string().uuid().nullable().optional(),
   legalName: optionalText(200),
   phone: optionalText(24),
   email: optionalText(200).pipe(z.union([zEmail, z.undefined()])),
@@ -89,6 +90,7 @@ export async function updateBusinessProfileAction(_prev: ActionState, formData: 
     const session = await requireSession();
     assertPermission(session, "settings.manage");
 
+    const logoMediaId = String(formData.get("logoMediaId") ?? "");
     const parsed = businessProfileSchema.safeParse({
       name: formData.get("name"),
       legalName: formData.get("legalName") ?? undefined,
@@ -96,6 +98,7 @@ export async function updateBusinessProfileAction(_prev: ActionState, formData: 
       email: formData.get("email") ?? undefined,
       address: formData.get("address") ?? undefined,
       currency: formData.get("currency") ?? undefined,
+      logoMediaId: logoMediaId || null,
     });
     if (!parsed.success) {
       return {
@@ -116,6 +119,7 @@ export async function updateBusinessProfileAction(_prev: ActionState, formData: 
         email: parsed.data.email || undefined,
         address: parsed.data.address ?? undefined,
         currency: parsed.data.currency || undefined,
+        logoMediaId: parsed.data.logoMediaId ?? null,
       },
     );
     revalidatePath("/admin/settings");

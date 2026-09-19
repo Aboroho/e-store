@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BLOCK_TYPES, MAX_BLOCKS_PER_SECTION, MAX_SECTIONS, SPACING, ALIGNMENTS, blockDefinition, responsiveSchema } from "./blocks";
+import { extractRichTextMediaIds } from "@/modules/media/rich-text-shared";
 
 /**
  * Page document schema.
@@ -114,6 +115,10 @@ export function documentMediaIds(document: PageDocument): string[] {
     for (const block of section.blocks) {
       for (const [key, value] of Object.entries(block.props)) {
         if (typeof value === "string" && /mediaid$/i.test(key) && /^[0-9a-f-]{36}$/i.test(value)) ids.add(value);
+      }
+      // Rich-text blocks embed image references inside their HTML content.
+      if (block.type === "richText" && typeof block.props.content === "string") {
+        for (const id of extractRichTextMediaIds(block.props.content)) ids.add(id);
       }
     }
   }

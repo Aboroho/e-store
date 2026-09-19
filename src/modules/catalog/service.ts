@@ -4,6 +4,8 @@ import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { slugify } from "@/lib/utils";
 import { defaultLocationId, ensureBalance } from "@/modules/inventory/service";
+import { assertMediaOwned, replaceSingleEntityUsage, syncUsageCountsTx } from "@/modules/media/service";
+import { syncRichTextUsages } from "@/modules/media/rich-text";
 import type { AttributeInput, CategoryInput, ProductInput, VariantInput } from "@/modules/catalog/schemas";
 
 /**
@@ -221,7 +223,25 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
       });
 
       await ensureBalance(tx, { locationId, variantId: variant.id });
+
+      // Attribute-value image defaults: a value with an image (e.g. the Black
+      // swatch) seeds the variant gallery, so merchandisers only override
+      // exceptions. The same shared asset is referenced, never duplicated.
+      const defaultMediaIds = [...new Set(variantInput.attributeValueIds.map((id) => valueById.get(id)?.mediaId).filter((id): id is string => Boolean(id)))];
+      if (defaultMediaIds.length > 0) {
+        await assertMediaOwned(tx, actor.businessId, defaultMediaIds, { imagesOnly: true, label: "attribute images" });
+        for (const [position, mediaId] of defaultMediaIds.entries()) {
+          await tx.variantImage.create({ data: { variantId: variant.id, mediaId, position } });
+          await tx.mediaUsage.create({
+            data: { mediaId, entityType: "VARIANT", entityId: variant.id, field: `variant-${position}`, productId: product.id, variantId: variant.id },
+          });
+        }
+        await syncUsageCountsTx(tx, defaultMediaIds);
+      }
     }
+
+    // Rich-text description images (if any) are tracked like gallery images.
+    await syncRichTextUsages(tx, actor.businessId, { entityType: "PRODUCT", entityId: product.id, fieldPrefix: "description-" }, input.description);
 
     await tx.auditLog.create({
       data: {
@@ -306,6 +326,10 @@ export async function updateProduct(actor: CatalogActor, productId: string, inpu
           skipDuplicates: true,
         });
       }
+    }
+
+    if (input.description !== undefined) {
+      await syncRichTextUsages(tx, actor.businessId, { entityType: "PRODUCT", entityId: productId, fieldPrefix: "description-" }, input.description);
     }
 
     await tx.auditLog.create({
@@ -570,6 +594,7 @@ export async function createCategory(actor: CatalogActor, input: CategoryInput) 
         slug,
         parentId: input.parentId ?? null,
         description: input.description ?? null,
+        imageMediaId: input.imageMediaId ?? null,
         position: input.position,
         isActive: input.isActive,
         isFeatured: input.isFeatured,
@@ -578,6 +603,10 @@ export async function createCategory(actor: CatalogActor, input: CategoryInput) 
       },
       select: { id: true, name: true, slug: true, parentId: true },
     });
+
+    if (input.imageMediaId) {
+      await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "CATEGORY", entityId: category.id, field: "image" }, input.imageMediaId);
+    }
 
     await recalculateCategoryPath(tx, category.id);
     await tx.auditLog.create({
@@ -658,7 +687,12 @@ export async function deleteCategory(actor: CatalogActor, categoryId: string): P
     if (category._count.children > 0) {
       throw AppError.conflict("This category has sub-categories. Move or delete them first.");
     }
+    // The category row goes away, so its image usage goes with it — the shared
+    // asset itself stays in the library for other references.
+    const usages = await tx.mediaUsage.findMany({ where: { entityType: "CATEGORY", entityId: categoryId }, select: { mediaId: true } });
+    await tx.mediaUsage.deleteMany({ where: { entityType: "CATEGORY", entityId: categoryId } });
     await tx.category.delete({ where: { id: categoryId } });
+    await syncUsageCountsTx(tx, usages.map((usage) => usage.mediaId));
     await tx.auditLog.create({
       data: {
         businessId: actor.businessId,
@@ -698,6 +732,11 @@ export async function createAttribute(actor: CatalogActor, input: AttributeInput
     const existing = await tx.attribute.findFirst({ where: { businessId: actor.businessId, slug } });
     if (existing) throw AppError.conflict(`An attribute with the slug "${slug}" already exists`);
 
+    const valueMediaIds = [...new Set(input.values.map((value) => value.mediaId).filter((id): id is string => Boolean(id)))];
+    if (valueMediaIds.length > 0) {
+      await assertMediaOwned(tx, actor.businessId, valueMediaIds, { imagesOnly: true, label: "attribute images" });
+    }
+
     const attribute = await tx.attribute.create({
       data: {
         businessId: actor.businessId,
@@ -712,6 +751,7 @@ export async function createAttribute(actor: CatalogActor, input: AttributeInput
                 value: value.value,
                 slug: slugify(value.value) || `value-${index + 1}`,
                 colorHex: value.colorHex ?? null,
+                mediaId: value.mediaId ?? null,
                 position: index,
               })),
             }
@@ -719,6 +759,14 @@ export async function createAttribute(actor: CatalogActor, input: AttributeInput
       },
       select: { id: true, name: true, slug: true },
     });
+
+    if (valueMediaIds.length > 0) {
+      const created = await tx.attributeValue.findMany({ where: { attributeId: attribute.id, mediaId: { not: null } }, select: { id: true, mediaId: true } });
+      for (const row of created) {
+        await tx.mediaUsage.create({ data: { mediaId: row.mediaId!, entityType: "ATTRIBUTE_VALUE", entityId: row.id, field: "image" } });
+      }
+      await syncUsageCountsTx(tx, valueMediaIds);
+    }
 
     await tx.auditLog.create({
       data: {
@@ -739,7 +787,7 @@ export async function createAttribute(actor: CatalogActor, input: AttributeInput
 export async function addAttributeValue(
   actor: CatalogActor,
   attributeId: string,
-  input: { value: string; colorHex?: string },
+  input: { value: string; colorHex?: string; mediaId?: string | null },
 ): Promise<void> {
   await withTransaction(async (tx) => {
     const attribute = await tx.attribute.findFirst({ where: { id: attributeId, businessId: actor.businessId } });
@@ -748,9 +796,12 @@ export async function addAttributeValue(
     const clash = await tx.attributeValue.findFirst({ where: { attributeId, slug } });
     if (clash) throw AppError.conflict("That value already exists for this attribute");
     const count = await tx.attributeValue.count({ where: { attributeId } });
-    await tx.attributeValue.create({
-      data: { attributeId, value: input.value, slug, colorHex: input.colorHex ?? null, position: count },
+    const created = await tx.attributeValue.create({
+      data: { attributeId, value: input.value, slug, colorHex: input.colorHex ?? null, mediaId: input.mediaId ?? null, position: count },
     });
+    if (input.mediaId) {
+      await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "ATTRIBUTE_VALUE", entityId: created.id, field: "image" }, input.mediaId);
+    }
     await tx.auditLog.create({
       data: {
         businessId: actor.businessId,
@@ -760,6 +811,31 @@ export async function addAttributeValue(
         entityType: "Attribute",
         entityId: attributeId,
         summary: `Added value "${input.value}" to ${attribute.name}`,
+        changedFields: ["values"],
+      },
+    });
+  });
+}
+
+/** Change (or clear) the default image of an existing attribute value. */
+export async function setAttributeValueImage(actor: CatalogActor, attributeValueId: string, mediaId: string | null): Promise<void> {
+  await withTransaction(async (tx) => {
+    const row = await tx.attributeValue.findFirst({
+      where: { id: attributeValueId, attribute: { businessId: actor.businessId } },
+      select: { id: true, value: true, attributeId: true },
+    });
+    if (!row) throw AppError.notFound("Attribute value not found");
+    await tx.attributeValue.update({ where: { id: row.id }, data: { mediaId } });
+    await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "ATTRIBUTE_VALUE", entityId: row.id, field: "image" }, mediaId);
+    await tx.auditLog.create({
+      data: {
+        businessId: actor.businessId,
+        actorUserId: actor.userId,
+        actorLabel: actor.actorLabel,
+        action: "attribute.value_image_changed",
+        entityType: "Attribute",
+        entityId: row.attributeId,
+        summary: `${mediaId ? "Set" : "Cleared"} the image for value "${row.value}"`,
         changedFields: ["values"],
       },
     });

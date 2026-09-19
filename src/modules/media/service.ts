@@ -596,13 +596,29 @@ export async function deleteMediaAssets(actor: MediaActor, input: unknown) {
     return { deleted: 0, blocked: conflicts };
   }
 
+  const ids = assets.map((asset) => asset.id);
   await prisma.$transaction(async (tx) => {
     if (usages.length > 0) {
-      await tx.mediaUsage.deleteMany({ where: { mediaId: { in: assets.map((asset) => asset.id) } } });
-      await tx.productImage.deleteMany({ where: { mediaId: { in: assets.map((asset) => asset.id) } } });
-      await tx.variantImage.deleteMany({ where: { mediaId: { in: assets.map((asset) => asset.id) } } });
+      await tx.mediaUsage.deleteMany({ where: { mediaId: { in: ids } } });
+      await tx.productImage.deleteMany({ where: { mediaId: { in: ids } } });
+      await tx.variantImage.deleteMany({ where: { mediaId: { in: ids } } });
+      await tx.reviewImage.deleteMany({ where: { mediaId: { in: ids } } });
+      // Scalar single-image references point at nothing after a force delete.
+      await tx.category.updateMany({ where: { imageMediaId: { in: ids } }, data: { imageMediaId: null } });
+      await tx.attributeValue.updateMany({ where: { mediaId: { in: ids } }, data: { mediaId: null } });
+      await tx.variant.updateMany({ where: { imageMediaId: { in: ids } }, data: { imageMediaId: null } });
+      await tx.page.updateMany({ where: { ogMediaId: { in: ids } }, data: { ogMediaId: null } });
+      await tx.brand.updateMany({ where: { logoMediaId: { in: ids } }, data: { logoMediaId: null } });
+      await tx.business.updateMany({ where: { logoMediaId: { in: ids } }, data: { logoMediaId: null } });
+      // Storefront branding holds media ids as setting values; clear matches.
+      const brandingKeys = ["storefront.logo_media_id", "storefront.banner_media_id"];
+      const settings = await tx.storefrontSetting.findMany({ where: { key: { in: brandingKeys } }, select: { id: true, value: true } });
+      const stale = settings.filter((setting) => typeof setting.value === "string" && ids.includes(setting.value)).map((setting) => setting.id);
+      if (stale.length > 0) {
+        await tx.storefrontSetting.deleteMany({ where: { id: { in: stale } } });
+      }
     }
-    await tx.mediaAsset.updateMany({ where: { id: { in: assets.map((asset) => asset.id) } }, data: { deletedAt: new Date(), usageCount: 0 } });
+    await tx.mediaAsset.updateMany({ where: { id: { in: ids } }, data: { deletedAt: new Date(), usageCount: 0 } });
   });
 
   // Storage failures must not block the soft delete: the row is already hidden.
@@ -659,8 +675,101 @@ export async function detachUsage(actor: MediaActor, input: unknown) {
 
 /** Keep the denormalised counter honest — it is what the media grid displays. */
 async function syncUsageCount(tx: Prisma.TransactionClient, mediaId: string) {
-  const count = await tx.mediaUsage.count({ where: { mediaId } });
-  await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
+  await syncUsageCountsTx(tx, [mediaId]);
+}
+
+/** Recompute usage counters for a set of assets inside a transaction. */
+export async function syncUsageCountsTx(tx: Prisma.TransactionClient, mediaIds: string[]): Promise<void> {
+  for (const mediaId of [...new Set(mediaIds)]) {
+    const count = await tx.mediaUsage.count({ where: { mediaId } });
+    await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
+  }
+}
+
+/** Recompute usage counters outside a transaction (admin repairs, backfills). */
+export async function refreshUsageCounts(mediaIds: string[]): Promise<void> {
+  for (const mediaId of [...new Set(mediaIds)]) {
+    const count = await prisma.mediaUsage.count({ where: { mediaId } });
+    await prisma.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
+  }
+}
+
+/**
+ * Validate that every id points at a live asset of this business.
+ * Used by every module before it stores a media reference — products, variants,
+ * categories, brands, pages, reviews and storefront branding all share it.
+ */
+export async function assertMediaOwned(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+  mediaIds: string[],
+  options: { imagesOnly?: boolean; label?: string } = {},
+): Promise<Array<{ id: string; mimeType: string }>> {
+  const unique = [...new Set(mediaIds)];
+  if (unique.length === 0) return [];
+  const assets = await tx.mediaAsset.findMany({
+    where: { id: { in: unique }, businessId, deletedAt: null },
+    select: { id: true, mimeType: true },
+  });
+  if (assets.length !== unique.length) {
+    throw AppError.validation(`One or more ${options.label ?? "media files"} no longer exist in the media library`);
+  }
+  if (options.imagesOnly) {
+    const nonImage = assets.find((asset) => !asset.mimeType.startsWith("image/"));
+    if (nonImage) throw AppError.validation("Only images can be used here");
+  }
+  return assets;
+}
+
+/** Fetch asset views for an explicit id list, skipping missing or deleted rows. */
+export async function getMediaAssetsByIds(businessId: string, assetIds: string[]): Promise<MediaAssetView[]> {
+  const unique = [...new Set(assetIds)];
+  if (unique.length === 0) return [];
+  const rows = await prisma.mediaAsset.findMany({
+    where: { id: { in: unique }, businessId, deletedAt: null },
+    include: { folder: { select: { path: true } } },
+  });
+  const views = await Promise.all(rows.map((row) => toAssetView(row)));
+  const byId = new Map(views.map((view) => [view.id, view]));
+  return unique.map((id) => byId.get(id)).filter((view): view is MediaAssetView => Boolean(view));
+}
+
+export interface SingleEntityReference {
+  entityType: string;
+  entityId: string;
+  field: string;
+}
+
+/**
+ * Point a single-image scalar reference (category image, brand logo, page OG
+ * image, …) at a new asset — or clear it with `null`.
+ *
+ * The caller updates its own row; this helper owns the MediaUsage bookkeeping
+ * (detach old, attach new, resync counters) so scalar references can never leak
+ * usages or silently orphan them.
+ */
+export async function replaceSingleEntityUsage(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+  reference: SingleEntityReference,
+  nextMediaId: string | null,
+): Promise<void> {
+  if (nextMediaId) {
+    await assertMediaOwned(tx, businessId, [nextMediaId], { imagesOnly: true, label: "images" });
+  }
+  const previous = await tx.mediaUsage.findMany({
+    where: { entityType: reference.entityType, entityId: reference.entityId, field: reference.field },
+    select: { mediaId: true },
+  });
+  await tx.mediaUsage.deleteMany({
+    where: { entityType: reference.entityType, entityId: reference.entityId, field: reference.field },
+  });
+  if (nextMediaId) {
+    await tx.mediaUsage.create({
+      data: { mediaId: nextMediaId, entityType: reference.entityType, entityId: reference.entityId, field: reference.field },
+    });
+  }
+  await syncUsageCountsTx(tx, [...previous.map((usage) => usage.mediaId), ...(nextMediaId ? [nextMediaId] : [])]);
 }
 
 export async function listUsageTargets(businessId: string, assetId: string) {
@@ -680,6 +789,37 @@ export async function listOrphanMedia(businessId: string, olderThanDays = 30) {
     take: 200,
     select: { id: true, originalName: true, sizeBytes: true, createdAt: true, objectKey: true, mimeType: true, extension: true, visibility: true, title: true, altText: true, caption: true, width: true, height: true, usageCount: true, folderId: true },
   });
+}
+
+/**
+ * Remove abandoned upload reservations: rows created by `requestUpload()` whose
+ * bytes never arrived (the browser closed, the PUT failed, confirm never ran).
+ *
+ * Only rows still flagged `pendingUpload` with zero usages are touched, and only
+ * after a grace period — a slow upload in progress is never reaped. This is the
+ * automatic half of the orphan strategy (see docs/MEDIA_MANAGER.md); genuinely
+ * unused *confirmed* assets are listed for a human in the library cleanup tab
+ * and are never deleted by automation.
+ */
+export async function cleanupStalePendingUploads(olderThanHours = 24): Promise<{ removed: number }> {
+  const cutoff = new Date(Date.now() - olderThanHours * 3600 * 1000);
+  const candidates = await prisma.mediaAsset.findMany({
+    where: { deletedAt: null, createdAt: { lt: cutoff }, usageCount: 0 },
+    select: { id: true, objectKey: true, metadata: true },
+    take: 500,
+  });
+  const stale = candidates.filter((row) => {
+    const metadata = row.metadata as { pendingUpload?: unknown } | null;
+    return Boolean(metadata && typeof metadata === "object" && metadata.pendingUpload === true);
+  });
+  if (stale.length === 0) return { removed: 0 };
+
+  await prisma.mediaAsset.updateMany({
+    where: { id: { in: stale.map((row) => row.id) } },
+    data: { deletedAt: new Date(), metadata: { abandonedUpload: true } },
+  });
+  await Promise.all(stale.map((row) => deleteObject(row.objectKey).catch(() => undefined)));
+  return { removed: stale.length };
 }
 
 /** Issue a fresh download URL for a private asset (audited). */

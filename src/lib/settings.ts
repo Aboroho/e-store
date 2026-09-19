@@ -74,6 +74,8 @@ export const STOREFRONT_SETTINGS = {
   checkoutShowPreorderBadge: define({ key: "checkout.show_preorder_badge", label: "Show preorder badge", description: "Display a preorder badge for items that are not in stock.", group: "Checkout", defaultValue: true }),
   storefrontAnnouncement: define({ key: "storefront.announcement", label: "Announcement bar", description: "Optional announcement shown at the top of the storefront.", group: "Appearance", defaultValue: "" }),
   storefrontPrimaryColor: define({ key: "storefront.primary_color", label: "Primary colour", description: "Storefront theme primary colour.", group: "Appearance", defaultValue: "#4f46e5" }),
+  storefrontLogoMediaId: define({ key: "storefront.logo_media_id", label: "Logo", description: "Shared library image shown in the storefront header.", group: "Appearance", defaultValue: "" }),
+  storefrontBannerMediaId: define({ key: "storefront.banner_media_id", label: "Homepage banner", description: "Shared library image shown behind the default homepage hero.", group: "Appearance", defaultValue: "" }),
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTINGS;

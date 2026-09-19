@@ -11,14 +11,16 @@
 export interface AttributeValueDraft {
   value: string;
   colorHex?: string;
+  mediaId?: string;
 }
 
-export function attributeValuesFromForm(entries: { texts: string[]; colors: string[] }): AttributeValueDraft[] {
+export function attributeValuesFromForm(entries: { texts: string[]; colors: string[]; mediaIds?: string[] }): AttributeValueDraft[] {
   return entries.texts
     .map((rawText, index) => ({
       text: rawText.trim(),
       colorHex: (entries.colors[index] ?? "").trim(),
+      mediaId: (entries.mediaIds?.[index] ?? "").trim(),
     }))
     .filter((row) => row.text !== "")
-    .map((row) => ({ value: row.text, colorHex: row.colorHex || undefined }));
+    .map((row) => ({ value: row.text, colorHex: row.colorHex || undefined, mediaId: row.mediaId || undefined }));
 }

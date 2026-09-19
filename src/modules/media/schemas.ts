@@ -86,7 +86,18 @@ export const folderInputSchema = z.object({
 
 export const mediaUsageSchema = z.object({
   mediaId: z.string().uuid(),
-  entityType: z.enum(["PRODUCT", "VARIANT", "PAGE", "REVIEW", "STOREFRONT", "NAVIGATION", "PLUGIN"]),
+  entityType: z.enum([
+    "PRODUCT",
+    "VARIANT",
+    "PAGE",
+    "REVIEW",
+    "STOREFRONT",
+    "NAVIGATION",
+    "PLUGIN",
+    "CATEGORY",
+    "BRAND",
+    "ATTRIBUTE_VALUE",
+  ]),
   entityId: z.string().uuid(),
   field: z.string().trim().min(1).max(40).default("image"),
   productId: z.string().uuid().optional(),
@@ -95,3 +106,4 @@ export const mediaUsageSchema = z.object({
 
 export type MediaVisibilityInput = z.infer<typeof mediaVisibilitySchema>;
 export type UpdateAssetInput = z.infer<typeof updateAssetSchema>;
+export type MediaUsageEntityType = z.infer<typeof mediaUsageSchema>["entityType"];

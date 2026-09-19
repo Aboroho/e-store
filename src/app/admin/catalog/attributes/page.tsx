@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
 import { listAttributes } from "@/modules/catalog/queries";
+import { getMediaAssetsByIds } from "@/modules/media/service";
 import { createStarterAttributesAction } from "@/modules/catalog/actions";
 import { AttributeForm, AttributeValueForm } from "@/components/forms/catalog-forms";
 import { Badge, Card, CardContent, CardFooter, CardHeader, CardTitle, EmptyState, PageHeader } from "@/components/ui/primitives";
@@ -16,6 +17,9 @@ export default async function AttributesPage() {
 
   const attributes = await listAttributes(session.businessId);
   const canManage = can(session, "attribute.manage");
+  const valueMediaIds = [...new Set(attributes.flatMap((attribute) => attribute.values.map((value) => value.mediaId).filter((id): id is string => Boolean(id))))];
+  const valueMedia = valueMediaIds.length > 0 ? await getMediaAssetsByIds(session.businessId, valueMediaIds) : [];
+  const valueImageByMediaId = new Map(valueMedia.map((asset) => [asset.id, asset.url]));
 
   return (
     <div className="space-y-6">

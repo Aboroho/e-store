@@ -121,7 +121,7 @@ export async function listCategoryOptions(businessId: string) {
   return prisma.category.findMany({
     where: { businessId, deletedAt: null },
     orderBy: [{ path: "asc" }, { position: "asc" }],
-    select: { id: true, name: true, slug: true, path: true, parentId: true, isActive: true, position: true, isFeatured: true, _count: { select: { products: true } } },
+    select: { id: true, name: true, slug: true, path: true, parentId: true, description: true, imageMediaId: true, isActive: true, position: true, isFeatured: true, _count: { select: { products: true } } },
   });
 }
 
@@ -130,7 +130,7 @@ export async function listAttributes(businessId: string) {
     where: { businessId },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     include: {
-      values: { orderBy: [{ position: "asc" }, { value: "asc" }], select: { id: true, value: true, slug: true, colorHex: true } },
+      values: { orderBy: [{ position: "asc" }, { value: "asc" }], select: { id: true, value: true, slug: true, colorHex: true, mediaId: true } },
       _count: { select: { productLinks: true } },
     },
   });

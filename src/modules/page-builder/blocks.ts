@@ -46,7 +46,7 @@ export interface BlockDefinition {
   category: "Basic" | "Media" | "Commerce" | "Layout" | "Social";
   description: string;
   /** What the builder canvas shows without running the real renderer. */
-  preview: "heading" | "text" | "image" | "button" | "banner" | "products" | "product" | "categories" | "reviews" | "embed" | "spacer" | "divider" | "contact";
+  preview: "heading" | "text" | "richtext" | "image" | "button" | "banner" | "products" | "product" | "categories" | "reviews" | "embed" | "spacer" | "divider" | "contact";
   propsSchema: z.ZodTypeAny;
   defaultProps: Record<string, unknown>;
   /** Blocks that need a media asset (kept so the builder can require a picker). */
@@ -63,6 +63,14 @@ const headingProps = z.object({
 
 const textProps = z.object({
   text: z.string().trim().max(4000),
+  align: z.enum(ALIGNMENTS).default("left"),
+  size: z.enum(["sm", "md", "lg"]).default("md"),
+  color: optionalHexColor,
+});
+
+/** Rich text authored with the shared editor; images are media references rendered server-side. */
+const richTextProps = z.object({
+  content: z.string().trim().max(8000).default(""),
   align: z.enum(ALIGNMENTS).default("left"),
   size: z.enum(["sm", "md", "lg"]).default("md"),
   color: optionalHexColor,
@@ -174,6 +182,15 @@ export const BLOCK_DEFINITIONS: BlockDefinition[] = [
     preview: "text",
     propsSchema: textProps,
     defaultProps: { text: "Write something your customers should read.", align: "left", size: "md" },
+  },
+  {
+    type: "richText",
+    label: "Rich text",
+    category: "Basic",
+    description: "Formatted text with images from the shared media library.",
+    preview: "richtext",
+    propsSchema: richTextProps,
+    defaultProps: { content: "", align: "left", size: "md" },
   },
   {
     type: "image",

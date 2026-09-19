@@ -1,10 +1,21 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import type { SettingGroup } from "@/modules/settings/service";
 import { initialActionState } from "@/modules/auth/action-state";
 import { updateBusinessProfileAction, updateBusinessSettingsAction, updateStorefrontSettingsAction } from "@/modules/settings/actions";
 import { Alert, Button, Card, CardContent, CardFooter, CardHeader, CardTitle, FormField, Input, NativeSelect, Textarea } from "@/components/ui/primitives";
+import { MediaImageField } from "@/components/media/media-field";
+
+function MediaSettingControl({ definition }: { definition: SettingGroup["items"][number] }) {
+  const initial = typeof definition.value === "string" && definition.value ? definition.value : null;
+  const [mediaId, setMediaId] = useState<string | null>(initial);
+  return (
+    <div className="sm:col-span-2">
+      <MediaImageField label={definition.label} name={definition.key} value={mediaId} onChange={setMediaId} help={definition.description} />
+    </div>
+  );
+}
 
 function SettingControl({ definition }: { definition: SettingGroup["items"][number] }) {
   const id = `setting-${definition.key}`;
@@ -57,6 +68,11 @@ function SettingControl({ definition }: { definition: SettingGroup["items"][numb
         <Textarea id={id} name={definition.key} rows={2} defaultValue={String(value ?? "")} />
       </FormField>
     );
+  }
+
+  // Branding keys hold shared-media asset ids — picked through the Media Manager, never typed.
+  if (definition.key.endsWith("_media_id")) {
+    return <MediaSettingControl definition={definition} />;
   }
 
   return (
@@ -151,9 +167,10 @@ export function StorefrontSettingsForm({
 export function BusinessProfileForm({
   business,
 }: {
-  business: { name: string; legalName: string | null; phone: string | null; email: string | null; address: string | null; currency: string };
+  business: { name: string; legalName: string | null; phone: string | null; email: string | null; address: string | null; currency: string; logoMediaId: string | null };
 }) {
   const [state, formAction, pending] = useActionState(updateBusinessProfileAction, initialActionState);
+  const [logoMediaId, setLogoMediaId] = useState<string | null>(business.logoMediaId);
 
   return (
     <form action={formAction}>
@@ -184,6 +201,13 @@ export function BusinessProfileForm({
               <Input id="business-currency" name="currency" maxLength={3} defaultValue={business.currency} />
             </FormField>
           </div>
+          <MediaImageField
+            label="Business logo"
+            name="logoMediaId"
+            value={logoMediaId}
+            onChange={setLogoMediaId}
+            help="Shared library image used wherever the business brand appears. Clearing detaches it; the file stays in the library."
+          />
         </CardContent>
         <CardFooter>
           <Button type="submit" disabled={pending}>

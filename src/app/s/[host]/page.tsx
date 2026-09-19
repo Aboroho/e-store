@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db/client";
 import { PageRenderer } from "@/components/page-builder/block-renderer";
-import { resolveStorefrontByHost, storefrontHome } from "@/modules/storefront/queries";
+import { resolveStorefrontByHost, storefrontBranding, storefrontHome } from "@/modules/storefront/queries";
 import { safePageDocument } from "@/modules/page-builder/schema";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +33,7 @@ export default async function StorefrontHomePage({ params }: { params: Promise<{
   const storefront = await resolveStorefrontByHost(decodeURIComponent(host));
   if (!storefront) notFound();
 
-  const home = await storefrontHome(storefront);
+  const [home, branding] = await Promise.all([storefrontHome(storefront), storefrontBranding(storefront)]);
 
   if (home.homepagePageId) {
     const page = await prisma.page.findFirst({
@@ -50,14 +50,20 @@ export default async function StorefrontHomePage({ params }: { params: Promise<{
 
   return (
     <div className="mx-auto max-w-6xl space-y-12 px-4 py-10">
-      <section className="rounded-2xl bg-slate-900 px-8 py-14 text-white">
-        <h1 className="text-3xl font-semibold sm:text-4xl">{storefront.name}</h1>
-        <p className="mt-3 max-w-2xl text-sm text-slate-300">
-          {storefront.description ?? `Browse ${home.totalProducts} products with cash on delivery across Bangladesh.`}
-        </p>
-        <Link href="/products" className="mt-6 inline-flex rounded-md bg-white px-5 py-2.5 text-sm font-medium text-slate-900 hover:bg-slate-100">
-          Shop all products
-        </Link>
+      <section
+        className="relative overflow-hidden rounded-2xl bg-slate-900 px-8 py-14 text-white"
+        style={branding.bannerUrl ? { backgroundImage: `url(${branding.bannerUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
+      >
+        {branding.bannerUrl ? <div className="pointer-events-none absolute inset-0 bg-slate-900/55" aria-hidden /> : null}
+        <div className="relative">
+          <h1 className="text-3xl font-semibold sm:text-4xl">{storefront.name}</h1>
+          <p className="mt-3 max-w-2xl text-sm text-slate-300">
+            {storefront.description ?? `Browse ${home.totalProducts} products with cash on delivery across Bangladesh.`}
+          </p>
+          <Link href="/products" className="mt-6 inline-flex rounded-md bg-white px-5 py-2.5 text-sm font-medium text-slate-900 hover:bg-slate-100">
+            Shop all products
+          </Link>
+        </div>
       </section>
 
       {home.categories.length > 0 ? (

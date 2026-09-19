@@ -59,6 +59,8 @@ export const categoryInputSchema = z.object({
   slug: zOptionalSlug,
   parentId: zId.optional(),
   description: zOptionalText(500),
+  /** Shared-media image reference (Category.imageMediaId + CATEGORY usage). */
+  imageMediaId: z.string().uuid().nullable().optional(),
   position: z.coerce.number().int().min(0).max(10_000).default(0),
   isActive: z.boolean().default(true),
   isFeatured: z.boolean().default(false),
@@ -81,6 +83,8 @@ export const attributeInputSchema = z.object({
           .trim()
           .regex(/^#[0-9a-fA-F]{6}$/, "Colour must be a hex value such as #ff0000")
           .optional(),
+        /** Shared library image for swatches/tiles (optional, images only). */
+        mediaId: z.string().uuid().nullable().optional(),
       }),
     )
     .default([]),

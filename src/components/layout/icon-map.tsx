@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  Award,
   Banknote,
   BarChart3,
   Bell,
@@ -40,6 +41,7 @@ import type { LucideIcon } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
   Activity,
+  Award,
   AlertTriangle,
   Banknote,
   BarChart3,

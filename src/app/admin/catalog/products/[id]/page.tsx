@@ -10,6 +10,8 @@ import { variantReferenceCounts } from "@/modules/catalog/service";
 import { availableQuantity } from "@/modules/inventory/service";
 import { archiveProductAction, archiveVariantAction, restoreProductAction } from "@/modules/catalog/actions";
 import { BulkVariantEditor, ProductForm } from "@/components/forms/product-form";
+import { ProductGalleryManager, VariantImageManager } from "@/components/forms/product-media";
+import { listProductImages, listVariantImages } from "@/modules/catalog/media";
 import {
   Badge,
   Card,
@@ -42,6 +44,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     listPriceLists(session.businessId),
   ]);
   if (!product) notFound();
+
+  const [gallery, variantGalleries] = await Promise.all([
+    listProductImages(session.businessId, id),
+    Promise.all(product.variants.map(async (variant) => ({ variantId: variant.id, images: await listVariantImages(session.businessId, variant.id) }))),
+  ]);
+  const variantPrimaryById = new Map(variantGalleries.map((entry) => [entry.variantId, entry.images[0] ?? null]));
 
   const defaultPriceList = priceLists.find((list) => list.isDefault) ?? priceLists[0];
   const referenceCounts = new Map(
@@ -163,6 +171,34 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </Table>
         </CardContent>
       </Card>
+
+      {canUpdate ? (
+        <ProductGalleryManager
+          productId={product.id}
+          images={gallery.map((image) => ({ mediaId: image.mediaId, url: image.asset.url, alt: image.altText ?? image.asset.altText, title: image.asset.title ?? image.asset.originalName }))}
+        />
+      ) : null}
+
+      {canUpdate ? (
+        <VariantImageManager
+          productId={product.id}
+          variants={product.variants.map((variant) => {
+            const primary = variantPrimaryById.get(variant.id) ?? null;
+            return {
+              id: variant.id,
+              name: variant.name,
+              sku: variant.sku,
+              attributeValueIds: variant.attributeValues.map((entry) => entry.attributeValueId),
+              image: primary ? { mediaId: primary.mediaId, url: primary.asset.url, alt: primary.altText ?? primary.asset.altText, title: primary.asset.title ?? primary.asset.originalName } : null,
+            };
+          })}
+          attributes={attributes.map((attribute) => ({
+            id: attribute.id,
+            name: attribute.name,
+            values: attribute.values.map((value) => ({ id: value.id, value: value.value })),
+          }))}
+        />
+      ) : null}
 
       {canUpdate ? (
         <BulkVariantEditor

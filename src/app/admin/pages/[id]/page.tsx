@@ -72,6 +72,7 @@ export default async function PageDetail({ params }: { params: Promise<{ id: str
                   seoTitle: page.seoTitle,
                   seoDescription: page.seoDescription,
                   seoKeywords: page.seoKeywords,
+                  ogMediaId: page.ogMediaId,
                   canonicalUrl: page.canonicalUrl,
                   robots: page.robots ?? "index,follow",
                 }}

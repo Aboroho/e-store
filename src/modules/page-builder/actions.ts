@@ -66,6 +66,8 @@ function readMeta(raw: Record<string, string | string[]>) {
     canonicalUrl: String(value("canonicalUrl") ?? "").trim() || undefined,
     robots: (value("robots") ?? "index,follow") as "index,follow" | "noindex,follow" | "index,nofollow" | "noindex,nofollow",
     isHomepage: value("isHomepage") === "true" || value("isHomepage") === "on",
+    // Empty string clears the OG image; a missing field leaves it unchanged.
+    ...("ogMediaId" in raw ? { ogMediaId: String(value("ogMediaId") ?? "") || null } : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db/client";
-import { storefrontNavigation, storefrontSettingsFor, type StorefrontContext } from "@/modules/storefront/queries";
+import { storefrontBranding, storefrontNavigation, storefrontSettingsFor, type StorefrontContext } from "@/modules/storefront/queries";
 import { CartLink } from "@/components/storefront/cart";
 
 /**
@@ -18,9 +18,10 @@ export async function StorefrontChrome({
   children: React.ReactNode;
   preview?: boolean;
 }) {
-  const [navigation, settings, publishedPages] = await Promise.all([
+  const [navigation, settings, branding, publishedPages] = await Promise.all([
     storefrontNavigation(storefront.id, "main"),
     storefrontSettingsFor(storefront.id),
+    storefrontBranding(storefront),
     prisma.page.findMany({
       where: { storefrontId: storefront.id, status: "PUBLISHED", deletedAt: null, isHomepage: false },
       orderBy: { title: "asc" },
@@ -45,7 +46,11 @@ export async function StorefrontChrome({
 
       <header className="border-b bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <Link href="/" className="text-lg font-semibold" style={{ color: accentColor }}>
+          <Link href="/" className="flex items-center gap-2 text-lg font-semibold" style={{ color: accentColor }}>
+            {branding.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={branding.logoUrl} alt={branding.logoAlt || `${storefront.name} logo`} className="h-8 w-auto max-w-40 object-contain" />
+            ) : null}
             {storefront.name}
           </Link>
           <nav aria-label="Main" className="order-3 w-full sm:order-2 sm:w-auto">

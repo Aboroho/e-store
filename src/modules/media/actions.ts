@@ -7,17 +7,21 @@ import { requireSession } from "@/lib/auth/session";
 import { assertPermission } from "@/lib/permissions";
 import { formDataToObject } from "@/lib/validation";
 import type { ActionState } from "@/modules/auth/action-state";
-import { can } from "@/lib/permissions";
-import { mediaForPicker } from "./queries";
+import { can, canAny } from "@/lib/permissions";
+import { pickerContext } from "./queries";
 import type { MediaAssetView } from "./service";
 import {
   attachUsage,
+  cleanupStalePendingUploads,
   confirmUpload,
   copyMediaAsset,
   createFolder,
   deleteFolder,
   deleteMediaAssets,
   detachUsage,
+  getMediaAssetsByIds,
+  listMedia,
+  listMediaFolders,
   moveMediaAssets,
   renameFolder,
   renameMediaAsset,
@@ -38,6 +42,42 @@ async function actor() {
   const session = await requireSession();
   assertPermission(session, "media.manage");
   return { businessId: session.businessId, userId: session.id, actorLabel: session.email };
+}
+
+/** Anyone allowed to add files to the library (managing implies uploading). */
+async function uploadActor() {
+  const session = await requireSession();
+  if (!canAny(session, ["media.manage", "media.upload"])) {
+    throw AppError.forbidden("You are not allowed to upload media files");
+  }
+  return { businessId: session.businessId, userId: session.id, actorLabel: session.email };
+}
+
+/**
+ * Permissions that may browse the library through the shared picker.
+ * Every surface that references media (products, categories, pages, reviews,
+ * storefronts, navigation) needs read access without granting full library
+ * management (delete/move/organise stay behind `media.manage`).
+ */
+const PICKER_BROWSE_PERMISSIONS = [
+  "media.manage",
+  "media.upload",
+  "product.view",
+  "category.manage",
+  "attribute.manage",
+  "page.manage",
+  "storefront.manage",
+  "navigation.manage",
+  "review.moderate",
+  "settings.manage",
+];
+
+async function pickerSession() {
+  const session = await requireSession();
+  if (!canAny(session, PICKER_BROWSE_PERMISSIONS)) {
+    throw AppError.forbidden("You are not allowed to browse the media library");
+  }
+  return session;
 }
 
 function toState(error: unknown, fallback: string): ActionState {
@@ -87,7 +127,7 @@ export async function confirmUploadAction(input: {
   height?: number;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
-    const context = await actor();
+    const context = await uploadActor();
     await confirmUpload(context, input);
     revalidateMedia();
     return { ok: true };
@@ -280,31 +320,98 @@ export async function detachUsageAction(_prev: ActionState, formData: FormData):
   try {
     const context = await actor();
     const raw = formDataToObject(formData);
+    const mediaId = String(raw.mediaId ?? "");
+    const entityType = String(raw.entityType ?? "PRODUCT");
+    const entityId = String(raw.entityId ?? "");
+    const field = String(raw.field ?? "image");
     await detachUsage(context, {
-      mediaId: String(raw.mediaId ?? ""),
-      entityType: String(raw.entityType ?? "PRODUCT") as "PRODUCT",
-      entityId: String(raw.entityId ?? ""),
-      field: String(raw.field ?? "image"),
+      mediaId,
+      entityType: entityType as "PRODUCT",
+      entityId,
+      field,
     });
+    // Removing a reference must also drop the join row that renders it, so the
+    // owning record stops pointing at the asset. The asset itself is untouched.
+    const { prisma } = await import("@/lib/db/client");
+    if (entityType === "PRODUCT") {
+      await prisma.productImage.deleteMany({ where: { productId: entityId, mediaId } });
+    } else if (entityType === "VARIANT") {
+      await prisma.variantImage.deleteMany({ where: { variantId: entityId, mediaId } });
+    } else if (entityType === "REVIEW") {
+      await prisma.reviewImage.deleteMany({ where: { reviewId: entityId, mediaId } });
+    }
     revalidateMedia();
-    return { status: "success", message: "Reference removed" };
+    return { status: "success", message: "Reference removed — the file stays in the library" };
   } catch (error) {
     return toState(error, "Unable to remove the reference");
   }
 }
 
 /**
- * Media search for pickers (page builder, product form). Read-only, so either the
- * media permission or the page-builder permission is enough.
+ * Media search for the shared picker. Read-only and paged; every content-editing
+ * role may browse (see PICKER_BROWSE_PERMISSIONS), management stays separate.
  */
 export async function searchMediaAction(input: {
   search?: string;
   mimeGroup?: "image" | "document" | "all";
   excludeIds?: string[];
-}): Promise<MediaAssetView[]> {
-  const session = await requireSession();
-  if (!can(session, "media.manage") && !can(session, "page.manage")) {
-    throw AppError.forbidden("You are not allowed to browse the media library");
+  folderId?: string | null;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ rows: MediaAssetView[]; total: number; page: number; pageSize: number }> {
+  const session = await pickerSession();
+  const result = await listMedia(session.businessId, {
+    search: input.search,
+    mimeGroup: input.mimeGroup ?? "all",
+    folderId: input.folderId === undefined ? undefined : input.folderId,
+    page: input.page ?? 1,
+    pageSize: Math.min(60, Math.max(1, input.pageSize ?? 24)),
+    sort: "newest",
+  });
+  const excluded = new Set(input.excludeIds ?? []);
+  return { ...result, rows: result.rows.filter((asset) => !excluded.has(asset.id)) };
+}
+
+/** Folders, limits and upload rights for the shared picker. */
+export async function pickerContextAction(): Promise<{
+  folders: Array<{ id: string; name: string; path: string; parentId: string | null; assetCount: number }>;
+  maxUploadBytes: number;
+  allowedTypes: string[];
+  canUpload: boolean;
+  configured: boolean;
+  driver: string;
+}> {
+  const session = await pickerSession();
+  const [folders, context] = await Promise.all([listMediaFolders(session.businessId), pickerContext(session.businessId)]);
+  const { getBusinessSettings } = await import("@/lib/settings");
+  const { ALLOWED_MEDIA_TYPES } = await import("./schemas");
+  const settings = await getBusinessSettings(session.businessId);
+  const allowed = Array.isArray(settings["media.allowed_types"]) ? (settings["media.allowed_types"] as string[]) : [...ALLOWED_MEDIA_TYPES];
+  return {
+    folders,
+    maxUploadBytes: context.maxUploadBytes,
+    allowedTypes: allowed,
+    canUpload: can(session, "media.manage") || can(session, "media.upload"),
+    configured: context.configured,
+    driver: context.driver,
+  };
+}
+
+/** Resolve asset previews for forms that store media ids (category, brand, OG image). */
+export async function resolveMediaAction(assetIds: string[]): Promise<MediaAssetView[]> {
+  const session = await pickerSession();
+  return getMediaAssetsByIds(session.businessId, assetIds.slice(0, 50));
+}
+
+/** Delete abandoned upload reservations (never-confirmed PUTs). Audited per batch. */
+export async function cleanupStaleUploadsAction(olderThanHours = 24): Promise<{ ok: true; removed: number } | { ok: false; message: string }> {
+  try {
+    await actor();
+    const result = await cleanupStalePendingUploads(Math.min(168, Math.max(1, olderThanHours)));
+    revalidateMedia();
+    return { ok: true, removed: result.removed };
+  } catch (error) {
+    const state = toState(error, "Unable to clean up abandoned uploads");
+    return { ok: false, message: state.message ?? "Unable to clean up abandoned uploads" };
   }
-  return mediaForPicker(session.businessId, input);
 }

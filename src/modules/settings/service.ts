@@ -8,6 +8,7 @@ import {
   getStorefrontSettings,
   type SettingDefinition,
 } from "@/lib/settings";
+import { replaceSingleEntityUsage } from "@/modules/media/service";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -90,6 +91,10 @@ function coerce(definition: SettingDefinition<unknown>, raw: string): unknown {
   }
   if (definition.key === "storefront.primary_color" && value && !/^#[0-9a-fA-F]{6}$/.test(value)) {
     throw AppError.validation("Primary colour must be a hex value such as #4f46e5");
+  }
+  // Branding settings hold shared-media asset ids (picked in the UI, never typed).
+  if (definition.key.endsWith("_media_id") && value && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(value)) {
+    throw AppError.validation(`"${definition.label}" must be chosen from the media library`);
   }
   if (definition.key === "order.prefix" && value && !/^[A-Za-z0-9-]{1,8}$/.test(value)) {
     throw AppError.validation("Order prefix must be 1-8 letters, numbers or dashes");
@@ -189,6 +194,12 @@ export async function updateStorefrontSettings(
         },
         update: { value: jsonValue, valueType: update.definition.valueType, updatedByUserId: actor.userId },
       });
+      // Branding images are shared references: keep the usage rows (and the
+      // "in use" protection) in sync with the stored asset id.
+      if (update.key.endsWith("_media_id")) {
+        const mediaId = typeof update.value === "string" && update.value ? update.value : null;
+        await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "STOREFRONT", entityId: storefrontId, field: update.key }, mediaId);
+      }
     }
     await tx.auditLog.create({
       data: {
@@ -210,15 +221,18 @@ export async function updateStorefrontSettings(
 
 export async function updateBusinessProfile(
   actor: { userId: string; businessId: string; actorLabel: string },
-  input: { name: string; legalName?: string; phone?: string; email?: string; address?: string; currency?: string },
+  input: { name: string; legalName?: string; phone?: string; email?: string; address?: string; currency?: string; logoMediaId: string | null },
 ) {
   const before = await prisma.business.findUnique({
     where: { id: actor.businessId },
-    select: { name: true, legalName: true, phone: true, email: true, address: true, currency: true },
+    select: { name: true, legalName: true, phone: true, email: true, address: true, currency: true, logoMediaId: true },
   });
   if (!before) throw AppError.notFound("Business not found");
 
   const updated = await prisma.$transaction(async (tx) => {
+    // The logo is a shared-media reference: the usage row keeps the asset
+    // protected while it is the business logo (clearing detaches, never deletes).
+    await replaceSingleEntityUsage(tx, actor.businessId, { entityType: "BUSINESS", entityId: actor.businessId, field: "logo" }, input.logoMediaId);
     const result = await tx.business.update({
       where: { id: actor.businessId },
       data: {
@@ -228,6 +242,7 @@ export async function updateBusinessProfile(
         email: input.email || null,
         address: input.address || null,
         ...(input.currency ? { currency: input.currency } : {}),
+        logoMediaId: input.logoMediaId,
       },
       select: { id: true, name: true },
     });

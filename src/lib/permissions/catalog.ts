@@ -90,6 +90,7 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { key: "storefront.manage", group: "Content", label: "Manage storefronts and domains", isDangerous: true },
   { key: "page.manage", group: "Content", label: "Manage pages and the page builder" },
   { key: "media.manage", group: "Content", label: "Manage media library" },
+  { key: "media.upload", group: "Content", label: "Upload to the media library" },
   { key: "navigation.manage", group: "Content", label: "Manage navigation menus" },
   { key: "review.moderate", group: "Content", label: "Moderate reviews" },
 
@@ -150,6 +151,7 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
       "product.update",
       "category.manage",
       "attribute.manage",
+      "media.upload",
       "inventory.view",
       "inventory.adjust",
       "inventory.count",
