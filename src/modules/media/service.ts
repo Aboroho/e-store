@@ -152,7 +152,7 @@ export async function toAssetView(asset: {
 export interface MediaListFilter {
   search?: string;
   folderId?: string | null;
-  mimeGroup?: "image" | "document" | "all" | "video" | "audio";
+  mimeGroup?: "image" | "document" | "all" | "video" | "audio" | "unused";
   visibility?: MediaVisibility;
   page?: number;
   pageSize?: number;
@@ -180,7 +180,9 @@ export async function listMedia(businessId: string, filter: MediaListFilter = {}
           ? { mimeType: { startsWith: "video/" } }
           : filter.mimeGroup === "audio"
             ? { mimeType: { startsWith: "audio/" } }
-            : {};
+            : filter.mimeGroup === "unused"
+              ? { usageCount: 0 }
+              : {};
 
   const where: Prisma.MediaAssetWhereInput = {
     businessId,

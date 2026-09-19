@@ -20,6 +20,7 @@ import {
   buttonVariants,
 } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
+import { MultiMediaField, type MediaAssetView } from "@/components/media/media-picker";
 import { cn } from "@/lib/utils";
 
 export interface AttributeOption {
@@ -114,6 +115,7 @@ export function ProductForm({
     categoryIds: string[];
     primaryCategoryId: string | null;
     attributeIds: string[];
+    images: MediaAssetView[];
     variants: Array<{
       id: string;
       name: string;
@@ -155,6 +157,7 @@ export function ProductForm({
   const [selectedValueIds, setSelectedValueIds] = useState<string[]>(
     product ? [...new Set(product.variants.flatMap((variant) => variant.attributeValueIds))] : [],
   );
+  const [selectedImages, setSelectedImages] = useState<MediaAssetView[]>(product?.images ?? []);
 
   const relevantAttributes = useMemo(
     () => attributes.filter((attribute) => selectedAttributeIds.includes(attribute.id)),
@@ -297,6 +300,29 @@ export function ProductForm({
           <FormField label="Preorder note" htmlFor="preorderNote" hint="Shown to customers when the item is not in stock.">
             <Input id="preorderNote" name="preorderNote" defaultValue={product?.preorderNote ?? ""} />
           </FormField>
+        </CardContent>
+      </Card>
+
+      {/* Hidden inputs for selected media IDs */}
+      {selectedImages.map((img, i) => (
+        <input key={img.id} type="hidden" name="mediaIds" value={img.id} />
+      ))}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Media</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <MultiMediaField
+            label="Product images"
+            value={selectedImages}
+            onChange={setSelectedImages}
+            maxSelection={20}
+            mimeGroup="image"
+          />
+          <p className="mt-2 text-xs text-slate-500">
+            The first image is used as the primary product image. Drag to reorder after selection.
+          </p>
         </CardContent>
       </Card>
 

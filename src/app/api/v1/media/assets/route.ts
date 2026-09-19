@@ -22,8 +22,8 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const search = url.searchParams.get("q") || undefined;
     const folderId = url.searchParams.get("folder") || undefined;
-    const mimeGroup = (url.searchParams.get("type") || "all") as "image" | "document" | "all" | "video" | "audio";
-    const sort = (url.searchParams.get("sort") || "newest") as "newest" | "oldest" | "name" | "largest" | "smallest" | "recently_modified";
+    const mimeGroup = (url.searchParams.get("type") || "all") as "image" | "document" | "all" | "video" | "audio" | "unused";
+    const sort = (url.searchParams.get("sort") || "newest") as "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest" | "recently_modified";
     const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
     const pageSize = Math.min(100, Math.max(6, Number(url.searchParams.get("pageSize")) || 30));
     const includeFolders = url.searchParams.get("folders") !== "false";
@@ -33,8 +33,8 @@ export async function GET(request: Request) {
       listMedia(session.businessId, {
         search,
         folderId: folderId === "root" ? undefined : folderId,
-        mimeGroup: mimeGroup === "video" || mimeGroup === "audio" ? "all" : mimeGroup,
-        sort: sort === "smallest" || sort === "recently_modified" ? "newest" : sort,
+        mimeGroup,
+        sort,
         page,
         pageSize,
       }),

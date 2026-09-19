@@ -9,6 +9,7 @@ import { getProductForEdit, listAttributes, listCategoryOptions, listPriceLists 
 import { variantReferenceCounts } from "@/modules/catalog/service";
 import { availableQuantity } from "@/modules/inventory/service";
 import { archiveProductAction, archiveVariantAction, restoreProductAction } from "@/modules/catalog/actions";
+import { toAssetView } from "@/modules/media/service";
 import { BulkVariantEditor, ProductForm } from "@/components/forms/product-form";
 import {
   Badge,
@@ -213,6 +214,15 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             categoryIds: product.categories.map((entry) => entry.categoryId),
             primaryCategoryId: product.categories.find((entry) => entry.isPrimary)?.categoryId ?? null,
             attributeIds: product.attributes.map((entry) => entry.attributeId),
+            images: await Promise.all(
+              (product.images ?? []).map(async (img) => {
+                const view = await toAssetView({
+                  ...img.media,
+                  folder: null,
+                });
+                return view;
+              }),
+            ),
             variants: product.variants.map((variant) => ({
               id: variant.id,
               name: variant.name,

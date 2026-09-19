@@ -43,8 +43,8 @@ export default async function MediaPage({
     listMedia(session.businessId, {
       search: filters.search || undefined,
       folderId: filters.folderId ? filters.folderId : undefined,
-      mimeGroup: filters.mimeGroup as "image" | "document" | "all",
-      sort: filters.sort as "newest" | "oldest" | "name" | "largest",
+      mimeGroup: filters.mimeGroup as "image" | "document" | "all" | "unused",
+      sort: filters.sort as "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest" | "recently_modified",
       page,
       pageSize: 30,
     }),

@@ -696,6 +696,7 @@ export function MediaManager(props: MediaManagerProps) {
                 <option value="all">All types</option>
                 <option value="image">Images</option>
                 <option value="document">Documents</option>
+                <option value="unused">Unused only</option>
               </NativeSelect>
 
               {/* Sort */}
@@ -1076,6 +1077,8 @@ function MediaDetailPanel({ asset, folders, products, onClose, onRefresh }: {
 }) {
   const [state, setState] = React.useState<ActionState>({ status: "idle" });
   const [saving, setSaving] = React.useState(false);
+  const [usages, setUsages] = React.useState<Array<{ entityType: string; entityId: string; field: string; label: string }>>([]);
+  const [loadingUsages, setLoadingUsages] = React.useState(true);
   const [form, setForm] = React.useState({
     title: asset.title ?? "",
     altText: asset.altText ?? "",
@@ -1083,6 +1086,25 @@ function MediaDetailPanel({ asset, folders, products, onClose, onRefresh }: {
     visibility: asset.visibility,
     folderId: asset.folderId ?? "",
   });
+
+  // Load usage details from API
+  React.useEffect(() => {
+    setLoadingUsages(true);
+    fetch(`/api/v1/media/assets/${asset.id}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.usages) {
+          setUsages(data.usages.map((u: { entityType: string; entityId: string; field: string; label: string }) => ({
+            entityType: u.entityType,
+            entityId: u.entityId,
+            field: u.field,
+            label: u.label || `${u.entityType} ${u.entityId.slice(0, 8)}`,
+          })));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingUsages(false));
+  }, [asset.id]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -1130,6 +1152,25 @@ function MediaDetailPanel({ asset, folders, products, onClose, onRefresh }: {
               <div className="flex justify-between"><dt className="text-slate-500">Uploaded</dt><dd className="text-slate-800">{formatDateTime(asset.createdAt)}</dd></div>
               <div className="flex justify-between"><dt className="text-slate-500">References</dt><dd>{asset.usageCount > 0 ? <Badge variant="brand">{asset.usageCount} use{asset.usageCount !== 1 ? "s" : ""}</Badge> : <Badge variant="neutral">Unused</Badge>}</dd></div>
             </dl>
+
+            {/* Usage details */}
+            {usages.length > 0 ? (
+              <div className="space-y-1 border-t pt-2">
+                <p className="text-xs font-medium text-slate-600">Used in:</p>
+                <ul className="space-y-1">
+                  {usages.map((usage, i) => (
+                    <li key={i} className="flex items-center gap-1.5 text-xs text-slate-600">
+                      <Badge variant="neutral" className="px-1.5 py-0 text-[10px]">{usage.entityType}</Badge>
+                      <span className="truncate">{usage.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : !loadingUsages && asset.usageCount === 0 ? (
+              <div className="border-t pt-2">
+                <p className="text-xs text-slate-400">Not used anywhere yet.</p>
+              </div>
+            ) : null}
           </div>
 
           {/* Edit form */}
