@@ -101,6 +101,7 @@ export async function createProductAction(_prev: ActionState, formData: FormData
         categoryIds: formData.getAll("categoryIds").map(String),
         primaryCategoryId: raw.primaryCategoryId || undefined,
         attributeIds: formData.getAll("attributeIds").map(String),
+        mediaIds: formData.getAll("mediaIds").map(String),
         variants: variantsFromFormData(formData),
       },
       "Create product",
@@ -140,6 +141,7 @@ export async function updateProductAction(_prev: ActionState, formData: FormData
         categoryIds: formData.getAll("categoryIds").map(String),
         primaryCategoryId: raw.primaryCategoryId || undefined,
         attributeIds: formData.getAll("attributeIds").map(String),
+        mediaIds: formData.getAll("mediaIds").map(String),
       },
       "Update product",
     );
