@@ -109,6 +109,8 @@ SSLCommerz sandbox calls, S3 bucket uploads, load/performance behaviour.
 | 2 | `deliverDueMarketingEvents` selected and claimed `status = "PENDING"` only, so a 503 (`FAILED` with a future `nextAttemptAt`) was never retried. | One shared `due` filter (`PENDING`/`FAILED`, `nextAttemptAt` null or past) for the candidate query **and** the `updateMany` claim. |
 | 3 | A conversion skipped for missing consent stayed blocked by its own dedupe key even after the shopper consented, so the purchase was never reported. | `queueMarketingEvent` promotes the existing `SKIPPED_NO_CONSENT` row (records consent, resets attempts) instead of dropping the event. |
 | 4 | Storefront product views and checkout starts were not measured at all. | `TrackViewContent`/`TrackInitiateCheckout`/`TrackPurchase` browser events wired into the product page, checkout form and confirmation page, keyed so the server-side `Purchase` deduplicates with them. |
+| 5 | Multi-column page sections rendered nested grids (`repeat(n, …)` inline), producing n² tracks and squeezing columns on a phone. | `SectionBody` uses responsive literal classes (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3\|4`), respects `stackOnMobile`, and stacks blocks inside a column. Verified on the running server. |
+| 6 | The storefront product page read `reviewMaxImages` through a cast on a context object that never had the property, so it always showed the fallback limit. | The page asks `reviewImageLimits(businessId)` — the same server-side setting the review action enforces. |
 
 ## 4. Known gaps and risks
 
