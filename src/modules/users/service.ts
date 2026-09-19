@@ -145,6 +145,7 @@ export async function updateStaffUser(actor: ActorContext, userId: string, input
         summary: `Updated user ${user.email}`,
         before,
         after: { ...result, roles: roles.map((role) => role.slug) },
+        changedFields: ["user", "roles"],
       },
     });
 
@@ -261,6 +262,7 @@ export async function createRole(actor: ActorContext, input: CreateRoleInput) {
         entityId: created.id,
         summary: `Created role ${created.name}`,
         after: { permissions: permissions.map((permission) => permission.key) },
+        changedFields: ["role"],
       },
     });
     return created;
@@ -331,6 +333,7 @@ export async function updateRole(
         summary: `Updated role ${role.name}`,
         before: { permissions: before, name: role.name },
         after: { permissions: input.permissions, name: result.name },
+        changedFields: ["role", "permissions"],
       },
     });
 
@@ -363,6 +366,7 @@ export async function deleteRole(actor: ActorContext, roleId: string): Promise<v
         entityId: roleId,
         summary: `Deleted role ${role.name}`,
         before: { name: role.name, slug: role.slug },
+        changedFields: ["role"],
       },
     });
   });

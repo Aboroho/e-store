@@ -143,6 +143,7 @@ export async function createPriceList(
         entityType: "PriceList",
         entityId: priceList.id,
         summary: `Created price list ${priceList.name} (${input.channel})`,
+        changedFields: ["priceList"],
       },
     });
 

@@ -242,6 +242,7 @@ export async function updateBusinessProfile(
         summary: "Updated business profile",
         before,
         after: { ...input },
+        changedFields: ["businessProfile"],
       },
     });
     return result;

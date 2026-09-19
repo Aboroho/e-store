@@ -22,6 +22,7 @@ import {
   updateVariant,
 } from "@/modules/catalog/service";
 import { attributeInputSchema, categoryInputSchema, productInputSchema, variantInputSchema } from "@/modules/catalog/schemas";
+import { attributeValuesFromForm } from "@/modules/catalog/attribute-form-values";
 import { setPriceListItem, setPriceListItems } from "@/modules/pricing/service";
 import type { ActionState } from "@/modules/auth/action-state";
 import { logger } from "@/lib/logging";
@@ -318,14 +319,12 @@ export async function createAttributeAction(_prev: ActionState, formData: FormDa
   }
 
   const raw = formDataToObject(formData);
-  const values = formData
-    .getAll("values")
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((value) => {
-      const [text, color] = value.split("|");
-      return { value: text ?? "", colorHex: color || undefined };
-    });
+  // Values arrive as parallel arrays from the dynamic row editor: one
+  // `valueTexts` input per row plus an optional `valueColors` hex input.
+  const values = attributeValuesFromForm({
+    texts: formData.getAll("valueTexts").map(String),
+    colors: formData.getAll("valueColors").map(String),
+  });
 
   const parsed = parseInput(
     attributeInputSchema,

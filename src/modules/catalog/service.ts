@@ -589,6 +589,7 @@ export async function createCategory(actor: CatalogActor, input: CategoryInput) 
         entityType: "Category",
         entityId: category.id,
         summary: `Created category ${category.name}`,
+        changedFields: ["category"],
       },
     });
     return category;
@@ -668,6 +669,7 @@ export async function deleteCategory(actor: CatalogActor, categoryId: string): P
         entityId: categoryId,
         summary: `Deleted category ${category.name}`,
         before: { name: category.name, slug: category.slug },
+        changedFields: ["category"],
       },
     });
   });
@@ -727,6 +729,7 @@ export async function createAttribute(actor: CatalogActor, input: AttributeInput
         entityType: "Attribute",
         entityId: attribute.id,
         summary: `Created attribute ${attribute.name} with ${input.values.length} value(s)`,
+        changedFields: ["attribute"],
       },
     });
     return attribute;
@@ -757,6 +760,7 @@ export async function addAttributeValue(
         entityType: "Attribute",
         entityId: attributeId,
         summary: `Added value "${input.value}" to ${attribute.name}`,
+        changedFields: ["values"],
       },
     });
   });

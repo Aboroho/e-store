@@ -245,6 +245,7 @@ export async function allocatePreorderQueue(
         entityId: input.variantId,
         summary: `Allocated ${result.allocated} unit(s) of ${variant.sku} to ${result.commitments.length} preorder(s)`,
         after: { allocated: result.allocated, skipped, commitments: result.commitments.length, available },
+        changedFields: ["preorderCommitted", "reserved"],
       },
     });
 
@@ -298,6 +299,7 @@ export async function cancelPreorderCommitment(actor: PreorderActor, commitmentI
         reason,
         before: { status: commitment.status, allocatedQuantity: commitment.allocatedQuantity },
         after: { status: "CANCELLED" },
+        changedFields: ["status", "cancelledAt", "cancelReason"],
       },
     });
   });

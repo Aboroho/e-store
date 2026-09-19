@@ -995,7 +995,7 @@ model AuditLog {
   summary       String?
   before        Json?
   after         Json?
-  changedFields String[]
+  changedFields String[] @default([])
   reason        String?
   requestId     String?
   correlationId String?

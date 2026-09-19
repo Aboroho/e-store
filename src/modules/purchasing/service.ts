@@ -55,6 +55,7 @@ export async function createSupplier(actor: PurchasingActor, input: SupplierInpu
         entityType: "Supplier",
         entityId: supplier.id,
         summary: `Created supplier ${supplier.name}`,
+        changedFields: ["supplier"],
       },
     });
     return supplier;
@@ -149,6 +150,7 @@ export async function createPurchaseOrder(actor: PurchasingActor, input: Purchas
         entityId: purchaseOrder.id,
         summary: `Created purchase order ${purchaseOrder.code} for ${supplier.name}`,
         after: { code: purchaseOrder.code, items: input.items.length, totalPaisa: purchaseOrder.totalPaisa },
+        changedFields: ["purchaseOrder"],
       },
     });
 
@@ -198,6 +200,7 @@ export async function submitPurchaseOrder(actor: PurchasingActor, purchaseOrderI
         summary: `Submitted purchase order ${po.code}`,
         before: { status: po.status },
         after: { status: "ORDERED" },
+        changedFields: ["status"],
       },
     });
   });
@@ -252,6 +255,7 @@ export async function cancelPurchaseOrder(actor: PurchasingActor, purchaseOrderI
         reason,
         before: { status: po.status },
         after: { status: "CANCELLED" },
+        changedFields: ["status"],
       },
     });
   });
@@ -563,6 +567,7 @@ export async function recordSupplierPayment(
         entityId: input.supplierId,
         summary: `Recorded supplier payment of ${input.amountPaisa} paisa`,
         after: { amountPaisa: input.amountPaisa, method: input.method, purchaseOrderId: input.purchaseOrderId ?? null },
+        changedFields: ["payment"],
       },
     });
 
