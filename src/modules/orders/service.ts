@@ -11,6 +11,7 @@ import { applyStockMovement, defaultLocationId, lockAvailableQuantity } from "@/
 import { createPreorderCommitment, fulfilPreorderCommitment } from "@/modules/preorders/service";
 import { resolveVariantPrice } from "@/modules/pricing/service";
 import { findOrCreateCustomer, recalculateCustomerStats } from "@/modules/customers/service";
+import { reconcilePayoutAfterVoid, recordResellerEarnings, voidResellerEarnings } from "@/modules/resellers/earnings";
 import type { CreateOrderInput } from "@/modules/orders/schemas";
 
 /**
@@ -763,6 +764,27 @@ export async function cancelOrder(actor: OrderActor, input: { orderId: string; r
       },
     });
 
+    // Cancelling a reseller order voids anything not yet payable and reverses whatever
+    // was already allocated to a payout, so no money can be paid twice.
+    if (order.resellerId) {
+      const voided = await voidResellerEarnings(tx, {
+        orderId: order.id,
+        reason: `Order cancelled: ${input.reason}`,
+        actorUserId: actor.userId ?? null,
+        resellerId: order.resellerId,
+      });
+
+      // A payout that was waiting on those entries is re-costed, or cancelled when
+      // nothing is left in it — it must never be paid for money that is no longer owed.
+      for (const payoutId of voided.affectedPayoutIds) {
+        await reconcilePayoutAfterVoid(tx, {
+          payoutId,
+          reason: `Order ${order.orderNumber} cancelled: ${input.reason}`,
+          actorUserId: actor.userId ?? null,
+        });
+      }
+    }
+
     await recordAudit(
       {
         businessId: actor.businessId,
@@ -1053,6 +1075,13 @@ export async function markOrderDelivered(actor: OrderActor, orderId: string, not
       },
     });
     if (order.customerId) await recalculateCustomerStats(tx, order.customerId);
+
+    // A delivered reseller order becomes a *pending* ledger entry: delivery is not
+    // money. It only becomes payable once the COD settlement is reconciled
+    // (see modules/resellers/earnings.ts).
+    if (order.resellerId) {
+      await recordResellerEarnings(tx, { orderId: order.id, actorUserId: actor.userId ?? null });
+    }
 
     return updated;
   });

@@ -123,7 +123,67 @@ only writer of shipment state — so a webhook, a manual update and a poll canno
 - React error boundaries (`error.tsx`) present a recoverable message with the error digest; the
   full stack stays on the server.
 
-## Module map (Stage 2)
+## 7. Reseller, payout and reporting flow (Stage 4)
+
+Resellers are a sales channel, not a second catalogue: an order placed on behalf of a
+reseller is the same `Order` row with `channel = RESELLER`, a dedicated price list and
+three extra snapshot columns (`resellerCollectionPaisa`, `resellerCostPaisa`,
+`resellerEarningPaisa`).
+
+```
+order created ─► delivered ─► COD collected ─► statement imported ─► reconciled
+     │               │              │                  │                 │
+  collection      earnings       codCollection     settlementEntry     ledger entries
+  snapshot        snapshot       (per shipment)    status = MATCHED    PENDING → ELIGIBLE
+                  PENDING                                              (payout-eligible)
+```
+
+Earnings are recorded by `recordResellerEarnings()` inside the delivery transaction and
+land in `ResellerLedgerEntry` as an append-only set of entries: one earning credit plus
+one debit per charge (packaging, courier, COD). Nothing is ever edited; a cancellation
+either voids a not-yet-paid entry or posts an opposing `REVERSAL` entry when the money
+has already left the business.
+
+Eligibility is a *derived* property: an entry becomes payable only when the shipment's
+own statement row is `MATCHED` and its statement has been taken in
+(`RECONCILED`/`PARTIALLY_RECONCILED`) and the COD collection is attached to it. Orders
+paid directly (no courier cash) become payable once they are fully paid. The promotion
+runs from the settlement import, the manual row resolution and the reconcile action, and
+is idempotent.
+
+`resellerBalance()` never stores a balance column. It is computed from the ledger in
+three buckets — `pendingPaisa` (awaiting settlement), `eligiblePaisa` (payable now),
+`allocatedPaisa` (claimed by a payout that has not been paid yet) — plus `paidPaisa`,
+and the three unpaid buckets add up to `outstandingPaisa`.
+
+Payouts are the only writer of `PAID`:
+
+```
+createPayout (ELIGIBLE, payoutId = null) ──► entries claimed (payoutId set, still ELIGIBLE)
+        │                                              │
+        ├─ approvePayout ──► markPayoutPaid ──► entries PAID + ResellerPayoutTransaction
+        └─ cancelPayout / failPayout / order cancellation ──► claims released, payout re-costed or cancelled
+```
+
+Two guards make a double payout impossible: the amount is always recomputed from the
+selected entries (never from a number the client sends), and `ResellerPayoutEntry.ledgerEntryId`
+is unique in the database, so one ledger entry can only ever belong to one payout.
+
+### Reports
+
+Reports are pure read queries in `src/modules/reports/queries.ts`. Each returns the same
+`ReportResult` shape (`columns`, `rows`, `totals`, `meta`, optional `sections`), which is
+what makes one screen, one PDF renderer and one XLSX writer enough for every report. The
+export engine (`src/modules/reports/export.ts`) is the only place that formats a report
+for download; replacing `pdfkit` or `exceljs` touches that file and nothing else.
+
+The vocabulary is deliberate: **revenue is not profit**. The profit report lists revenue,
+inventory cost, packaging, courier charges and refunds as separate lines and only then a
+gross-profit total; reseller payouts are shown as a memo line because they move margin
+that was never the platform's revenue. Cost and profit columns require
+`report.view_cost`, both on screen and in the export.
+
+## Module map
 
 Each domain module owns its schema validation, service (the only place that writes its
 tables), server actions (permission checks + revalidation) and read queries:
@@ -135,6 +195,13 @@ src/modules/
   inventory/   ledger engine, balances, adjustments, stock history
   purchasing/  suppliers, purchase orders, receipts, landed cost, payments
   preorders/   commitments, FIFO allocation, cancellation
+  orders/      order lifecycle, dispatch, delivery, cancellation           (Stage 3)
+  payments/    payments, provider flows, refunds, COD collection           (Stage 3)
+  couriers/    provider adapters, shipments, tracking, charges             (Stage 3)
+  settlements/ statement import, matching, reconciliation                  (Stage 3)
+  exchanges/   return window, inspection, replacement stock                (Stage 3)
+  resellers/   resellers, negotiated pricing, earnings ledger, payouts      (Stage 4)
+  reports/     report definitions, database queries, PDF/XLSX export engine (Stage 4)
 ```
 
 Dependency direction is one-way: `catalog → pricing/inventory`, `purchasing →

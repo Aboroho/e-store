@@ -48,14 +48,22 @@ production build must all pass before the next stage starts. This plan is the wo
 | Tests | 29 new integration tests (orders 11, fulfilment 8, storefront/webhooks 10) — suite now 101 tests | done |
 | Docs | API, BUSINESS_RULES (§8–10), TESTING (§4), ARCHITECTURE (§5–6) | done |
 
-## Stage 4 — Resellers, settlement reconciliation, payouts, reports
+## Stage 4 — Resellers, settlement reconciliation, payouts, reports ✅ complete
 
-- Resellers with price lists, per-order earnings, immutable ledger (PENDING → ELIGIBLE → PAID/VOID).
-- Courier COD settlement import/reconciliation; earnings become payable only after the settlement
-  row is reconciled (`ledgerProcessedAt`).
-- Payout runs with entries, approval and immutable history.
-- Reports (sales, inventory, profit, reseller, COD) with PDF and XLSX exports.
-- Docs: reporting definitions and reconciliation procedure.
+| Area | Deliverable | Status |
+| --- | --- | --- |
+| Resellers | `createReseller` (auto code, own `RESELLER` price list), profile editing, suspend/reactivate, phone/district/payout details, minimum payout and credit limit | done |
+| Reseller pricing | negotiated price per variant, per-list minimum quantity, remove override, bulk markup in basis points over the default list | done |
+| Reseller orders | `createResellerOrder` (server-side price resolution, packaging rule, delivery/COD charge from the reseller), collection amount snapshot + audited changes | done |
+| Earnings | `recordResellerEarnings` inside the delivery transaction: earning credit plus packaging/courier/COD debit lines, per-order snapshot, idempotent per order | done |
+| Eligibility | payable only when the shipment's statement row is matched and the statement was taken in (or a directly paid order is settled); promotion from statement import, manual row resolution, reconcile action and the admin refresh button | done |
+| Ledger | append-only entries with idempotency keys, void on cancellation, opposing REVERSAL when money already moved, manual adjustments payable immediately, derived balances (pending / payable / claimed / paid) | done |
+| Payouts | `createPayout` recomputes the amount from selected entries, minimum checks, approval, paid with a mandatory reference, cancel releases claims, fail, re-cost/cancel after an order cancellation, `ResellerPayoutEntry.ledgerEntryId` unique = database double-payout guard | done |
+| Reports | 11 database-backed reports (sales by date/product, inventory valuation/movements/damaged, preorders, purchase history, gross profit, payments, courier charges & differences, reseller earnings) sharing one `ReportResult` shape, cost masking via `report.view_cost` | done |
+| Exports | one replaceable engine (`src/modules/reports/export.ts`) rendering PDF (streamed, repeating headers, page numbers) and XLSX (one sheet per table, frozen header, bold totals), mandatory download headers, audited | done |
+| UI | resellers list/detail/pricing/ledger, payouts list/new/detail, reports hub + viewer, nav entries, balance tiles that separate "awaiting settlement" from "payable now" | done |
+| Tests | `tests/integration/resellers.test.ts` — 9 tests (suite now 110) covering settlement received vs merely delivered, partial settlement, eligibility, partial payout, duplicate payout prevention, ledger reversal and report reconciliation | done |
+| Docs | ARCHITECTURE (§7), BUSINESS_RULES (§11–12), TESTING (§5), API (`/api/v1/reports/{key}/export`) | done |
 
 ## Stage 5 — Storefronts, page builder, media, reviews, integrations, hardening
 

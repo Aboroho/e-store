@@ -9,7 +9,7 @@ export const metadata: Metadata = { title: { default: "Admin", template: "%s · 
 export const dynamic = "force-dynamic";
 
 /** Current implementation stage; navigation entries from later stages are shown disabled. */
-const CURRENT_STAGE = 3;
+const CURRENT_STAGE = 4;
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();

@@ -3,6 +3,7 @@ import type { CourierProviderCode, Prisma } from "@/generated/prisma/client";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { recordAudit } from "@/lib/audit";
+import { refreshResellerEligibility } from "@/modules/resellers/earnings";
 import { formatPaisa } from "@/lib/money";
 
 /**
@@ -53,7 +54,7 @@ export async function importCourierSettlement(actor: SettlementActor, input: Imp
   if (input.rows.length === 0) throw AppError.validation("The settlement has no rows");
   if (input.rows.length > 5000) throw AppError.validation("Split statements larger than 5000 rows before importing");
 
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     if (input.idempotencyKey) {
       const existing = await tx.courierSettlement.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
       if (existing) return { settlement: existing, reused: true as const, matched: 0, unmatched: 0 };
@@ -216,6 +217,14 @@ export async function importCourierSettlement(actor: SettlementActor, input: Imp
 
     return { settlement: updated, reused: false as const, matched, unmatched };
   });
+
+  // Every row that matched brought cash in, so the reseller earnings those orders
+  // carried can become payable straight away — the rows still in dispute cannot.
+  if (!result.reused && ["RECONCILED", "PARTIALLY_RECONCILED"].includes(result.settlement.status)) {
+    await promoteResellerEarnings(actor.businessId, result.settlement.id);
+  }
+
+  return result;
 }
 
 /** Manually attach an unmatched row to a shipment (or ignore it). */
@@ -231,10 +240,12 @@ export async function resolveSettlementEntry(
     if (!entry || entry.settlement.businessId !== actor.businessId) throw AppError.notFound("Settlement row not found");
 
     if (input.ignore) {
-      return tx.courierSettlementEntry.update({
+      const ignored = await tx.courierSettlementEntry.update({
         where: { id: entry.id },
         data: { status: "IGNORED", note: input.note ?? entry.note, matchedByUserId: actor.userId ?? null, matchedAt: new Date() },
       });
+      const after = await recomputeSettlement(tx, entry.settlementId);
+      return { resolved: ignored, settlementStatus: after.status, settlementId: entry.settlementId };
     }
 
     if (!input.shipmentId) throw AppError.validation("Choose the shipment this row belongs to");
@@ -284,7 +295,13 @@ export async function resolveSettlementEntry(
       tx,
     );
 
-    return resolved;
+    const settlementAfter = await recomputeSettlement(tx, entry.settlementId);
+    return { resolved, settlementStatus: settlementAfter.status, settlementId: entry.settlementId };
+  }).then(async (result) => {
+    if (result.settlementStatus === "RECONCILED" || result.settlementStatus === "PARTIALLY_RECONCILED") {
+      await promoteResellerEarnings(actor.businessId, result.settlementId);
+    }
+    return result.resolved;
   });
 }
 
@@ -343,6 +360,16 @@ export async function reconcileSettlement(actor: SettlementActor, settlementId: 
 
     return updated;
   });
+}
+
+/**
+ * Promote reseller earnings that this settlement has now paid for.
+ *
+ * Runs after the settlement is reconciled: a reseller is only paid once the courier's
+ * cash has actually reached the business and been matched to a shipment.
+ */
+export async function promoteResellerEarnings(businessId: string, settlementId: string) {
+  return refreshResellerEligibility(businessId, { settlementId });
 }
 
 export async function listSettlements(businessId: string, params: Record<string, string | string[] | undefined>) {

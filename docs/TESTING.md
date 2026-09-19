@@ -104,7 +104,18 @@ No test in these suites performs a network call: the outbox path is exercised wi
 provider that has no credentials (the realistic half-configured state), and provider
 payload builders are pure functions.
 
-## 5. Manual verification recorded per stage
+## 5. Stage 4 suite
+
+| File | Tests | What it proves |
+| --- | --- | --- |
+| `tests/integration/resellers.test.ts` | 9 | a new reseller gets its own price list and a bulk markup lands at the marked-up price; delivery alone leaves earnings `PENDING` and the reconciling statement is what makes them `ELIGIBLE`; a delivery with cash recorded but no statement stays unpaid; a partially matched statement unlocks only the rows that matched (and the short-paid row survives an ignore + close without unlocking); the payable pool equals the ledger sums, a partial payout allocates a strict subset, a reserved entry cannot be claimed twice, a payout cannot spend the balance twice, the database refuses a duplicate allocation, a paid payout cannot be paid again with a second reference; cancelling before the payout is paid voids the entry, drops the claim and cancels the payout; cancelling after payment posts an opposing `REVERSAL` and leaves the paid row untouched; collection changes and adjustments are new auditable rows; every report figure reconciles with the ledger, the order totals and the stock balances it is derived from |
+
+The suite drives the real services end to end (`createResellerOrder` → `dispatchOrder` →
+`markOrderDelivered` → `recordCodCollection` → `importCourierSettlement` → `createPayout`
+→ `markPayoutPaid`), so a change that breaks any link in the chain fails here. No provider
+HTTP call is made: `MANUAL` is the own-delivery provider.
+
+## 6. Manual verification recorded per stage
 
 Each stage ends with a smoke pass against the running dev server using a real session
 cookie (minted with the application's own `createSession`), verifying that every new
@@ -126,7 +137,18 @@ rendered real rows. `/checkout` rendered the live catalogue and `/account` rende
 sign-in form without a session; `/admin/orders` without a cookie redirected to
 `/login?next=%2Fadmin%2Forders`.
 
-## 6. Adding tests
+Stage 4 smoke results: a demo reseller, stock and reseller order were created through the
+service layer, the COD cash was collected and the statement imported and reconciled, then
+these routes were fetched with a real session cookie — `/admin/resellers`,
+`/admin/resellers/<id>`, `/admin/resellers/<id>/pricing`, `/admin/resellers/<id>/ledger`,
+`/admin/payouts`, `/admin/payouts/new`, `/admin/payouts/<id>`, `/admin/reports` and all
+eleven `/admin/reports/<key>` screens — every one returned `200` and rendered the expected
+balances (`awaiting settlement`, `payable now`, `claimed by a pending payout`). The export
+endpoint returned a real PDF (`%PDF-` magic, `Content-Disposition: attachment`) and a real
+XLSX (PK zip with a `Gross profit` sheet); an unauthenticated request was redirected to
+`/admin/login`, an unknown report was `404` and an unsupported format was `422`.
+
+## 7. Adding tests
 
 1. Put pure logic in `tests/lib`, database behaviour in `tests/integration`.
 2. Use `createTestBusiness()` from `tests/integration/fixtures.ts`; never touch the
@@ -135,7 +157,7 @@ sign-in form without a session; `/admin/orders` without a cookie redirected to
 4. Prefer concurrent `Promise.all` assertions for anything that must survive races.
 5. If a test exposes a real bug, fix the service and keep the test.
 
-## 7. Not covered yet (deliberate)
+## 8. Not covered yet (deliberate)
 
 - Browser/E2E automation (Playwright) — deferred to Stage 5 hardening.
 - Payment/courier provider sandboxes — the adapters are covered by payload-builder and

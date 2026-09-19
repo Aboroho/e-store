@@ -17,6 +17,7 @@ import {
   KeyRound,
   Landmark,
   LayoutDashboard,
+  AlertTriangle,
   Package,
   Palette,
   Plug,
@@ -39,6 +40,7 @@ import type { LucideIcon } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
   Activity,
+  AlertTriangle,
   Banknote,
   BarChart3,
   Bell,

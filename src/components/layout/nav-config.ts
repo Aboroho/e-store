@@ -66,14 +66,14 @@ export const ADMIN_NAV: NavSection[] = [
     title: "Resellers",
     items: [
       { label: "Resellers", href: "/admin/resellers", permission: "reseller.view", icon: "Store", stage: 4 },
-      { label: "Payouts", href: "/admin/resellers/payouts", permission: "reseller.payout", icon: "Banknote", stage: 4 },
+      { label: "Payouts", href: "/admin/payouts", permission: "reseller.payout", icon: "Banknote", stage: 4 },
     ],
   },
   {
     title: "Finance",
     items: [
       { label: "Courier settlements", href: "/admin/settlements", permission: "courier.view", icon: "Landmark", stage: 3 },
-      { label: "Reseller ledger", href: "/admin/resellers/ledger", permission: "reseller.ledger_view", icon: "BookOpen", stage: 4 },
+      { label: "Reconciliation issues", href: "/admin/settlements?status=DISPUTED", permission: "courier.reconcile", icon: "AlertTriangle", stage: 4 },
     ],
   },
   {

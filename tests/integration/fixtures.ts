@@ -83,8 +83,12 @@ export async function destroyTestBusiness(businessId: string): Promise<void> {
   // Stage 3 rows first: exchanges restrict their order, and settlements/COD
   // collections point at shipments, so they must go before the orders.
   await prisma.resellerPayoutEntry.deleteMany({ where: { payout: { businessId } } });
+  await prisma.resellerPayoutTransaction.deleteMany({ where: { payout: { businessId } } });
   await prisma.resellerPayout.deleteMany({ where: { businessId } });
+  await prisma.resellerLedgerEntry.deleteMany({ where: { businessId, reversesEntryId: null } });
   await prisma.resellerLedgerEntry.deleteMany({ where: { businessId } });
+  await prisma.resellerOrderEarning.deleteMany({ where: { businessId } });
+  await prisma.resellerCollectionChange.deleteMany({ where: { resellerId: { in: (await prisma.reseller.findMany({ where: { businessId }, select: { id: true } })).map((r) => r.id) } } });
   await prisma.exchangeItem.deleteMany({ where: { exchangeRequest: { businessId } } });
   await prisma.exchangeStatusHistory.deleteMany({ where: { exchangeRequest: { businessId } } });
   await prisma.refundAttempt.deleteMany({ where: { refund: { businessId } } });
@@ -128,6 +132,7 @@ export async function destroyTestBusiness(businessId: string): Promise<void> {
   await prisma.preorderCommitment.deleteMany({ where: { businessId } });
   await prisma.order.deleteMany({ where: { businessId } });
   await prisma.supplier.deleteMany({ where: { businessId } });
+  await prisma.reseller.deleteMany({ where: { businessId } });
   await prisma.priceListItem.deleteMany({ where: { priceList: { businessId } } });
   await prisma.inventoryBalance.deleteMany({ where: { variant: { product: { businessId } } } });
   await prisma.product.deleteMany({ where: { businessId } });

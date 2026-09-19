@@ -8,7 +8,7 @@ import { assertPermission } from "@/lib/permissions";
 import { formDataToObject } from "@/lib/validation";
 import { formatPaisa } from "@/lib/money";
 import type { ActionState } from "@/modules/auth/actions";
-import { importCourierSettlement, reconcileSettlement, resolveSettlementEntry } from "@/modules/settlements/service";
+import { importCourierSettlement, promoteResellerEarnings, reconcileSettlement, resolveSettlementEntry } from "@/modules/settlements/service";
 import { parseStatementCsv } from "@/modules/settlements/csv";
 
 /**
@@ -108,9 +108,18 @@ export async function reconcileSettlementAction(_prev: ActionState, formData: Fo
   const settlementId = String(raw.settlementId ?? "");
   try {
     const settlement = await reconcileSettlement(context, settlementId);
+    // Reconciled cash is what makes reseller earnings payable.
+    const promoted = await promoteResellerEarnings(context.businessId, settlementId);
     revalidatePath("/admin/settlements");
     revalidatePath(`/admin/settlements/${settlementId}`);
-    return { status: "success", message: `Settlement ${settlement.reference} reconciled` };
+    revalidatePath("/admin/resellers");
+    return {
+      status: "success",
+      message:
+        promoted.promoted > 0
+          ? `Settlement ${settlement.reference} reconciled — ${promoted.promoted} reseller ledger entr${promoted.promoted === 1 ? "y" : "ies"} became payable`
+          : `Settlement ${settlement.reference} reconciled`,
+    };
   } catch (error) {
     return toState(error, "Unable to reconcile the settlement");
   }

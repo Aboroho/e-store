@@ -111,6 +111,25 @@ shipment by consignment id or tracking code, and applied through the same status
 the admin UI uses. Unknown tracking codes are stored as `IGNORED` and return `200` so the
 provider stops retrying.
 
+### `GET /api/v1/reports/{key}/export`
+
+Downloads a report. Requires the same `report.view` permission as the screen plus
+`report.export`; cost and profit columns are stripped for users without `report.view_cost`.
+
+| Query | Values | Notes |
+| --- | --- | --- |
+| `format` | `pdf` (default) or `xlsx` | anything else is a `422` |
+| `from` / `to` | `YYYY-MM-DD` | defaults to the last 30 days; point-in-time reports ignore it |
+
+The response is always an attachment (`Content-Disposition: filename="<report>-<from>_<to>.<ext>"`),
+`Cache-Control: no-store`, and the export is recorded in the audit log. An unauthenticated
+browser request is redirected to `/admin/login?next=…` rather than returning JSON, because
+this endpoint is reached by clicking a link.
+
+`key` is one of: `sales-by-date`, `sales-by-product`, `inventory-valuation`,
+`inventory-movements`, `damaged-stock`, `preorders-outstanding`, `purchase-history`,
+`profit-summary`, `payments-collected`, `courier-charges`, `reseller-earnings`.
+
 ## Webhooks and retries
 
 * Provider calls outbound (courier booking, status polling) run in the worker: the web
