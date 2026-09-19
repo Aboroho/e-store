@@ -30,6 +30,7 @@ Stable error codes come from `src/lib/errors.ts`: `VALIDATION_ERROR`, `UNAUTHENT
 | Staff | `estore_session` cookie (opaque 256-bit token, hashed at rest) | admin screens, orders API |
 | Shopper | `estore_customer_session` cookie, issued only after a one-time code is verified | order tracking |
 | Provider | HMAC signature over the raw body with the encrypted webhook secret | courier and payment callbacks |
+| Integration | `Authorization: Bearer esk_…` or `X-API-Key: esk_…`, scoped | outbound product/order/report reads and writes |
 
 Staff endpoints check the session **and** the permission server-side (`can(session, …)`);
 a hidden button is never the only guard. Anonymous order tracking requires both the order
@@ -130,6 +131,64 @@ this endpoint is reached by clicking a link.
 `inventory-movements`, `damaged-stock`, `preorders-outstanding`, `purchase-history`,
 `profit-summary`, `payments-collected`, `courier-charges`, `reseller-earnings`.
 
+### `GET /api/v1/media/storage/upload` · `GET /api/v1/media/storage/download`
+
+The signed-URL endpoints behind the media manager. The browser holds no storage credential:
+`requestUpload()` (admin action) returns a one-time signed target, and these routes validate the
+signature, expiry and object key before streaming. They answer `404` unless the local driver is
+active, `410` when the signature has expired, `403` on a bad signature and `413` above the
+64 MB hard cap. In S3 mode the equivalent URLs come straight from the bucket, so these routes
+stay dormant.
+
+| Query | Values | Notes |
+| --- | --- | --- |
+| `key` | object key | namespaced per business; path traversal is rejected |
+| `expires` | unix seconds | short TTL, checked server-side |
+| `signature` | hex HMAC-SHA256 | `put`/`get` scoped, constant-time compared |
+
+### `GET /api/health`
+
+Unauthenticated liveness probe for the reverse proxy and uptime monitor. Returns
+`200 {"status":"ok","service":…,"time":…,"checks":[{"name":"database"|"storage"|"worker","status":…}]}`
+and `503` when the database is unreachable. It reports only healthy/degraded per component —
+never versions, configuration values, counts or error text.
+
+## API keys
+
+Machine clients authenticate with `Authorization: Bearer <key>` or `X-API-Key: <key>`. Keys look
+like `esk_<prefix>.<secret>`; only `sha256` of the full plaintext is stored, and the secret is
+displayed exactly once at creation.
+
+| Property | Behaviour |
+| --- | --- |
+| Scopes | `products:read`, `orders:read`, `orders:write`, `shipments:read`, `customers:read`, `reports:read`. Every request is checked against the scope the endpoint declares. |
+| Expiry / revocation | `expiresAt` and `status` (`ACTIVE`, `REVOKED`, `EXPIRED`); a revoked key fails immediately. |
+| IP allowlist | optional CIDR list; a request from outside it is `403`. |
+| Rate limit | 120 requests/minute per key; `X-RateLimit-*` and `429` with `Retry-After` when exceeded. |
+| Last used / usage | `usageCount` and `lastUsedAt` are bumped per authenticated request; `ApiRequestLog` records method, path, status and duration. |
+| Unknown fields | a write payload with unknown fields is rejected (`422`), never silently ignored. |
+
+An invalid, expired or revoked key is an error — the request is never downgraded to an anonymous
+one. Staff sessions that hit the same routes keep their permission check, so an API scope can
+never widen a session's access.
+
+## Webhook subscriptions
+
+Subscriptions are per event type: `order.created`, `order.confirmed`, `order.dispatched`,
+`order.delivered`, `order.cancelled`, `payment.recorded`, `payment.refunded`,
+`shipment.updated`, `shipment.delivered`, `review.approved`, `reseller.payout_paid`,
+`inventory.low_stock`.
+
+* The signing secret (`whsec_…`) is shown once; it is stored encrypted (AES-256-GCM) with a
+  separate hash for verification.
+* Every delivery carries `X-EStore-Event`, `X-EStore-Delivery` and
+  `X-EStore-Signature: sha256=<HMAC-SHA256 of the raw body>` — verify with
+  `verifyPayloadSignature`, which strips the prefix before comparing.
+* Payloads are capped at 64 KB, delivered with a 10-second timeout, and retried with backoff
+  until the subscription is paused/deleted (then the delivery is parked as `DEAD`).
+* Deliveries are deduplicated per `(eventType, dedupeKey)`, so a replayed domain action cannot
+  double-notify a consumer.
+
 ## Webhooks and retries
 
 * Provider calls outbound (courier booking, status polling) run in the worker: the web
@@ -138,7 +197,11 @@ this endpoint is reached by clicking a link.
   `OutboxEvent.maxAttempts`, then the event is marked `FAILED` and the shipment keeps the
   reason in `failureReason` so an operator can requeue it from the UI.
 * `npm run worker` runs continuously; `npm run worker:once` drains the queue once (useful
-  in cron).
+  in cron). The same worker drains webhook deliveries and marketing events (see above) and
+  is observable at `/admin/jobs`.
+* Marketing conversion events follow the same pattern per integration: `PENDING` → `SENT`,
+  or `FAILED` with backoff, or `SKIPPED_NO_CONSENT`/discarded when the visitor declined or
+  the integration was switched off.
 
 ## Conventions for integrators
 

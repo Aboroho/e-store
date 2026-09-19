@@ -6,6 +6,7 @@ import { AppError } from "@/lib/errors";
 import { recordAudit } from "@/lib/audit";
 import { formatPaisa } from "@/lib/money";
 import type { RecordPaymentInput, RefundInput } from "@/modules/orders/schemas";
+import { emitWebhookEvent } from "@/modules/api-keys/events";
 
 /**
  * Payments.
@@ -66,7 +67,7 @@ async function recalculateOrderPayments(tx: Tx, orderId: string) {
 
 /** Staff-recorded payment (cash, bank transfer, manual confirmation of a wallet payment). */
 export async function recordPayment(actor: PaymentActor, input: RecordPaymentInput) {
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     if (input.idempotencyKey) {
       const existing = await tx.payment.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
       if (existing) {
@@ -140,6 +141,23 @@ export async function recordPayment(actor: PaymentActor, input: RecordPaymentInp
 
     return { payment, order: updated, reused: false as const };
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "payment.recorded",
+    dedupeKey: result.payment.id,
+    payload: {
+      paymentId: result.payment.id,
+      orderId: result.order.id,
+      orderNumber: result.order.orderNumber,
+      amountPaisa: result.payment.amountPaisa,
+      method: result.payment.method,
+      paymentStatus: result.order.paymentStatus,
+      duePaisa: result.order.duePaisa,
+    },
+  });
+
+  return result;
 }
 
 /**
@@ -451,7 +469,7 @@ export async function settleRefund(
   actor: PaymentActor,
   input: { refundId: string; providerReference?: string | null; failed?: boolean; failureReason?: string | null },
 ) {
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     const refund = await tx.refund.findFirst({ where: { id: input.refundId, businessId: actor.businessId } });
     if (!refund) throw AppError.notFound("Refund not found");
     if (refund.status === "COMPLETED") return { refund, order: null, reused: true as const };
@@ -531,6 +549,21 @@ export async function settleRefund(
 
     return { refund: completed, order, reused: false as const };
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "payment.refunded",
+    dedupeKey: `${result.refund.id}:refunded`,
+    payload: {
+      refundId: result.refund.id,
+      orderId: result.refund.orderId,
+      amountPaisa: result.refund.amountPaisa,
+      method: result.refund.method,
+      status: result.refund.status,
+    },
+  });
+
+  return result;
 }
 
 /** COD money collected by the courier and recorded against the order. */

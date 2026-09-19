@@ -15,3 +15,10 @@ process.env.APP_URL ??= "http://localhost:3000";
 process.env.SESSION_SECRET ??= "test-session-secret-0123456789abcdef";
 process.env.APP_ENCRYPTION_KEY ??= "test-encryption-key-0123456789abcdef";
 process.env.LOG_LEVEL ??= "error";
+
+// Media tests exercise the local storage driver: uploads are written to a throwaway
+// directory inside the repository (git-ignored) and served through the app's own signed
+// URLs. The development `.env` may have storage disabled, which would make every upload
+// path untestable.
+env.STORAGE_DRIVER = "local";
+env.LOCAL_STORAGE_DIR = ".cache/test-uploads";

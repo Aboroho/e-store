@@ -8,6 +8,7 @@ import { formatPaisa } from "@/lib/money";
 import { getIntegrationSecrets } from "@/modules/integrations/secrets";
 import { getCourierAdapter, listCourierAdapters } from "@/modules/couriers/providers";
 import { CourierRequestError, asRecord, type OutgoingShipmentData } from "@/modules/couriers/providers/types";
+import { emitWebhookEvent } from "@/modules/api-keys/events";
 
 /**
  * Courier service.
@@ -196,7 +197,7 @@ export async function updateShipmentStatus(input: {
   courierChargePaisa?: number | null;
   providerEventId?: string | null;
 }) {
-  return withTransaction(async (tx) => {
+  const updated = await withTransaction(async (tx) => {
     const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId } });
     if (!shipment) throw AppError.notFound("Shipment not found");
 
@@ -276,6 +277,23 @@ export async function updateShipmentStatus(input: {
 
     return updated;
   });
+
+  await emitWebhookEvent({
+    businessId: updated.businessId,
+    eventType: updated.status === "DELIVERED" ? "shipment.delivered" : "shipment.updated",
+    dedupeKey: `${updated.id}:${updated.status}`,
+    payload: {
+      shipmentId: updated.id,
+      orderId: updated.orderId,
+      status: updated.status,
+      providerCode: updated.providerCode,
+      trackingCode: updated.trackingCode,
+      collectedPaisa: updated.collectedPaisa,
+      courierChargePaisa: updated.courierChargePaisa,
+    },
+  });
+
+  return updated;
 }
 
 /**

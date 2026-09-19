@@ -3,8 +3,7 @@ import { apiError, apiSuccess, requestIdFrom } from "@/lib/api/response";
 import { AppError } from "@/lib/errors";
 import { logger } from "@/lib/logging";
 import { consumeRateLimit } from "@/lib/rate-limit";
-import { getSession } from "@/lib/auth/session";
-import { can } from "@/lib/permissions";
+import { assertScope, resolveApiPrincipal } from "@/lib/api/auth";
 import { normalizeBdPhone } from "@/lib/utils";
 import { prisma } from "@/lib/db/client";
 import { findOrderForTracking } from "@/modules/orders/service";
@@ -12,21 +11,32 @@ import { findOrderForTracking } from "@/modules/orders/service";
 /**
  * Order tracking (v1).
  *
- * Staff with `order.view` can read any order. A guest can read an order only by
- * presenting the order number *and* the phone number used on it — both stored
- * server-side, and the lookup is rate limited so numbers cannot be enumerated.
- * Only a non-sensitive projection is returned either way.
+ * Staff with `order.view` — or an API key with `orders:read` — can read any order. A
+ * guest can read an order only by presenting the order number *and* the phone number
+ * used on it — both stored server-side, and the lookup is rate limited so numbers
+ * cannot be enumerated. Only a non-sensitive projection is returned either way.
  */
 
 export async function GET(request: NextRequest, context: { params: Promise<{ orderNumber: string }> }) {
   const requestId = requestIdFrom(request);
   try {
     const { orderNumber } = await context.params;
-    const session = await getSession();
 
-    if (session && can(session, "order.view")) {
+    // A presented key must be valid; only "no credentials at all" falls through to
+    // guest tracking. Otherwise a mistyped key would silently become an anonymous call.
+    const presentedKey = request.headers.get("authorization")?.startsWith("Bearer ") || request.headers.has("x-api-key");
+    let principal: Awaited<ReturnType<typeof resolveApiPrincipal>> | null = null;
+    try {
+      principal = await resolveApiPrincipal(request, "order.view");
+    } catch (error) {
+      if (presentedKey) throw error;
+      principal = null;
+    }
+
+    if (principal) {
+      if (principal.kind === "api_key") assertScope(principal, "orders:read");
       const order = await prisma.order.findFirst({
-        where: { businessId: session.businessId, orderNumber },
+        where: { businessId: principal.businessId, orderNumber },
         select: {
           orderNumber: true,
           status: true,

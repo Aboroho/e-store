@@ -13,6 +13,9 @@ import { resolveVariantPrice } from "@/modules/pricing/service";
 import { findOrCreateCustomer, recalculateCustomerStats } from "@/modules/customers/service";
 import { reconcilePayoutAfterVoid, recordResellerEarnings, voidResellerEarnings } from "@/modules/resellers/earnings";
 import type { CreateOrderInput } from "@/modules/orders/schemas";
+import { emitWebhookEvent, orderPayload } from "@/modules/api-keys/events";
+import { queueMarketingEvent } from "@/modules/marketing/service";
+import type { WebhookOrderLike } from "@/modules/api-keys/events";
 
 /**
  * Order lifecycle.
@@ -108,7 +111,7 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
 
   const settings = await getBusinessSettings(actor.businessId);
 
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     const locationId = await defaultLocationId(actor.businessId);
 
     // ------------------------------------------------------------------ customer
@@ -480,6 +483,32 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       reused: false,
     };
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "order.created",
+    dedupeKey: result.order.id,
+    payload: { ...orderPayload(result.order), reservedUnits: result.reservedUnits, preorderUnits: result.preorderUnits },
+  });
+
+  // Server-side conversion event. The dedupe key is the order id, so a replayed
+  // request can never double-count a purchase, and nothing is sent when the shopper
+  // did not consent (the integration records it as skipped instead).
+  await queueMarketingEvent(
+    { businessId: actor.businessId },
+    {
+      eventName: "Purchase",
+      dedupeKey: `order:${result.order.id}:purchase`,
+      storefrontId: input.storefrontId ?? null,
+      customerId: null,
+      orderId: result.order.id,
+      consentGranted: input.marketingConsent,
+      valuePaisa: result.order.grandTotalPaisa,
+      items: undefined,
+    },
+  ).catch(() => undefined);
+
+  return result;
 }
 
 async function resolvePriceListId(tx: Tx, businessId: string, input: CreateOrderInput): Promise<string | null> {
@@ -593,7 +622,7 @@ export async function transitionOrder(
   actor: OrderActor,
   input: { orderId: string; status: "CONFIRMED" | "PROCESSING" | "READY_TO_SHIP" | "SHIPPED" | "DELIVERED" | "COMPLETED"; note?: string },
 ) {
-  return withTransaction(async (tx) => {
+  const updated = await withTransaction(async (tx) => {
     const order = await tx.order.findFirst({ where: { id: input.orderId, businessId: actor.businessId } });
     if (!order) throw AppError.notFound("Order not found");
     if (!ALLOWED_TRANSITIONS[order.status]?.includes(input.status)) {
@@ -654,10 +683,24 @@ export async function transitionOrder(
 
     return updated;
   });
+
+  await emitOrderStatusWebhook(actor.businessId, updated, input.status);
+  return updated;
+}
+
+/**
+ * Map an order status change onto the published webhook events. Only the milestone
+ * statuses integrators subscribe to are emitted; internal steps stay in the audit log.
+ */
+async function emitOrderStatusWebhook(businessId: string, order: WebhookOrderLike, status: string) {
+  const eventType =
+    status === "CONFIRMED" ? "order.confirmed" : status === "SHIPPED" ? "order.dispatched" : status === "DELIVERED" || status === "COMPLETED" ? "order.delivered" : null;
+  if (!eventType) return;
+  await emitWebhookEvent({ businessId, eventType, dedupeKey: `${order.id}:${status}`, payload: orderPayload(order) });
 }
 
 export async function cancelOrder(actor: OrderActor, input: { orderId: string; reason: string; restock?: boolean }) {
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     const order = await tx.order.findFirst({
       where: { id: input.orderId, businessId: actor.businessId },
       include: { items: true },
@@ -803,6 +846,15 @@ export async function cancelOrder(actor: OrderActor, input: { orderId: string; r
 
     return { order: updated, releasedUnits, restockedUnits };
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "order.cancelled",
+    dedupeKey: `${result.order.id}:cancelled`,
+    payload: { ...orderPayload(result.order), releasedUnits: result.releasedUnits, restockedUnits: result.restockedUnits },
+  });
+
+  return result;
 }
 
 /**
@@ -918,7 +970,7 @@ export async function dispatchOrder(
   actor: OrderActor,
   input: { orderId: string; courierProviderId?: string | null; courierChargePaisa?: number; declaredWeightGrams?: number },
 ) {
-  return withTransaction(async (tx) => {
+  const result = await withTransaction(async (tx) => {
     const order = await tx.order.findFirst({
       where: { id: input.orderId, businessId: actor.businessId },
       include: { items: true },
@@ -1035,11 +1087,26 @@ export async function dispatchOrder(
 
     return { order: updated, shipment, dispatchedUnits: units };
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "order.dispatched",
+    dedupeKey: `${result.shipment.id}:dispatched`,
+    payload: {
+      ...orderPayload(result.order),
+      shipmentId: result.shipment.id,
+      providerCode: result.shipment.providerCode,
+      trackingCode: result.shipment.trackingCode,
+      dispatchedUnits: result.dispatchedUnits,
+    },
+  });
+
+  return result;
 }
 
 /** Mark an order delivered (own delivery or courier confirmed delivery). */
 export async function markOrderDelivered(actor: OrderActor, orderId: string, note?: string) {
-  return withTransaction(async (tx) => {
+  const updated = await withTransaction(async (tx) => {
     const order = await tx.order.findFirst({ where: { id: orderId, businessId: actor.businessId } });
     if (!order) throw AppError.notFound("Order not found");
     if (!["READY_TO_SHIP", "SHIPPED"].includes(order.status)) {
@@ -1085,6 +1152,15 @@ export async function markOrderDelivered(actor: OrderActor, orderId: string, not
 
     return updated;
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "order.delivered",
+    dedupeKey: `${updated.id}:delivered`,
+    payload: orderPayload(updated),
+  });
+
+  return updated;
 }
 
 /** Public order tracking: requires the order number *and* a matching phone/customer. */

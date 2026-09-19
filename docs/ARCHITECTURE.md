@@ -78,6 +78,11 @@ Full table list: see `docs/DATABASE_DESIGN.md` (Stage 2) — the schema itself i
   deleted; the owner role cannot be edited and no other role may hold `*`.
 - UI filtering (`can`) is a usability feature; `assertPermission` on the server is the boundary.
   Both read from the same catalogue so they cannot drift.
+- Machine clients get a **scope**, not a role: an API key holds a subset of
+  `products:read`, `orders:read`, `orders:write`, `shipments:read`, `customers:read`,
+  `reports:read`, and `authenticateApiRequest` + `assertScope` check it on every request. A
+  staff session that reaches the same route keeps its permission check (`report.view`,
+  `order.read`, …) and therefore can never be widened by an API scope.
 
 ## 5. Background work
 
@@ -105,6 +110,17 @@ Provider status comes back the other way: a signed webhook (or the polling refre
 shipment by consignment id / tracking code and calls the same `updateShipmentStatus`, which is the
 only writer of shipment state — so a webhook, a manual update and a poll cannot disagree.
 
+The same worker drains the two Stage-5 queues, in this order, every tick:
+
+| Queue | Claim | Retry | Dead |
+| --- | --- | --- | --- |
+| `WebhookDelivery` | due rows with a 5-minute lease (`nextAttemptAt`) | backoff `60s × 2^(n-1)`, cap 6 h, 64 KB payload cap | inactive subscription or unreadable secret |
+| `MarketingEvent` | `PENDING`/`FAILED` with `nextAttemptAt` null or past, claimed with `updateMany` | 5 attempts, cap 1 h | integration switched off (row discarded) |
+| `OutboxEvent` | `FOR UPDATE SKIP LOCKED` | `30s × 2^attempt`, cap 1 h | no registered handler |
+
+`/admin/jobs` shows all three with their attempt counts, next attempt and last error, which is the
+screen the runbook points an operator at when a provider misbehaves.
+
 ## 6. Runtime topology
 
 - `npm run dev` / `npm run build && npm start` — the application (port 3000).
@@ -123,7 +139,7 @@ only writer of shipment state — so a webhook, a manual update and a poll canno
 - React error boundaries (`error.tsx`) present a recoverable message with the error digest; the
   full stack stays on the server.
 
-## 7. Reseller, payout and reporting flow (Stage 4)
+## 8. Reseller, payout and reporting flow (Stage 4)
 
 Resellers are a sales channel, not a second catalogue: an order placed on behalf of a
 reseller is the same `Order` row with `channel = RESELLER`, a dedicated price list and
@@ -183,6 +199,93 @@ gross-profit total; reseller payouts are shown as a memo line because they move 
 that was never the platform's revenue. Cost and profit columns require
 `report.view_cost`, both on screen and in the export.
 
+## 9. Storefront, content, media and integration flow (Stage 5)
+
+The public site is served from `src/app/s/[host]/…`. `src/proxy.ts` (the only edge hook —
+`src/middleware.ts` must not exist in Next 16) rewrites a public path onto the host-scoped
+route so that storefronts can be resolved from the `Host` header without hard-coding a
+domain anywhere:
+
+```
+Host: shop.example.com  ──proxy──►  /s/shop.example.com/products/…
+      │
+      ├─ StorefrontDomain (status = VERIFIED)          → that storefront
+      ├─ slug match (first label / dashes)             → that storefront
+      └─ otherwise the default ACTIVE storefront       → "matchedBy: default"
+```
+
+Nothing in the render path is storefront-specific state: catalogue, customers, inventory,
+orders and pricing are the same rows the admin uses. A storefront only chooses a theme,
+navigation, pages, a default price list/location and (optionally) its own marketing
+integrations. Only `status = ACTIVE` storefronts are served, and a product reachable
+through a storefront must be published — a draft product is a 404, not a hidden listing.
+
+### Content
+
+Pages are JSON documents, never markup or code. `pageDocumentSchema` (Zod) validates the
+whole tree — `schemaVersion`, theme, sections, blocks — and `block-renderer.tsx` maps each
+block `type` to a **registered** React component, validating `props` against the block
+definition and skipping anything unknown. There is no `eval`, no `dangerouslySetInnerHTML`
+from stored content and no way for an admin to inject JavaScript; the one HTML-ish block
+renders a validated, sanitised subset.
+
+```
+createPage ─► Page + version 1 (DRAFT, draftVersionId)
+saveDraft  ─► new immutable PageVersion (previous draft archived, currentVersion + 1)
+              status stays PUBLISHED while a published version exists
+publish    ─► draft promoted to PUBLISHED (any prior published version archived)
+              draftVersionId cleared, publishedVersionId set
+restore v  ─► saveDraft copying v's document forward ("Restored from v n") — history is never rewritten
+```
+
+`MediaUsage` rows are synchronised on every save/publish so the media manager can refuse to
+delete an asset a page still references.
+
+### Media
+
+The browser never sees a storage credential. `requestUpload()` returns a short-lived signed
+target (the same HMAC scheme for the local driver and for S3-compatible stores), the file
+goes straight to storage, and `confirmUpload()` verifies the object exists (`headObject`),
+size and content type before the asset is published. Uploads are deduplicated by SHA-256
+checksum, so the same bytes re-uploaded return the existing asset with `reused: true`.
+Deletion checks `MediaUsage` first and only `force: true` detaches it. Object keys are
+namespaced per business, and `storageConfigured` settings decide whether private objects are
+served through the time-limited download route.
+
+### Reviews, API keys and webhooks
+
+Reviews are one per `(product, customer)` and gated on a `DELIVERED`/`COMPLETED` order;
+image count and combined size are enforced **server-side** from settings
+(`reviewImageLimits()`), not in the browser. Moderation sets the visible status.
+
+API keys are `esk_<prefix>.<secret>`; only `sha256(plaintext)` is stored (`keyHash`) and the
+plaintext is returned once at creation. `authenticateApiRequest` resolves the principal
+(Bearer or `X-API-Key`), checks status/expiry/IP allowlist, bumps usage and enforces the
+scope — a presented-but-invalid key is an error, never an anonymous request. Webhook
+subscriptions store an AES-256-GCM encrypted secret plus its hash; delivery signs the body
+with `sha256=<HMAC>` (`verifyPayloadSignature`), sets a delivery dedupe key, caps the payload
+at 64 KB and retries with exponential backoff before parking the delivery as `DEAD`.
+
+### Marketing
+
+`queueMarketingEvent()` runs **after** the domain transaction commits and fans out to the
+enabled integrations of that storefront (or business-wide ones). Consent is checked first:
+without consent the row is recorded as `SKIPPED_NO_CONSENT` rather than sent, and if the
+same `(integration, dedupeKey)` pair later arrives with consent the skipped row is promoted
+instead of staying blocked by its own dedupe key. Providers are declarative (endpoint
+builder + payload mapper); only `META_PIXEL`/`TIKTOK_PIXEL` configurations with a public id
+are shipped to the browser, and the server-side ones (META_CONVERSIONS, GOOGLE_ANALYTICS,
+CUSTOM) keep their token in `IntegrationSecret` — encrypted, never in a client bundle.
+
+### Plugins
+
+`src/modules/plugins/registry.ts` is a static, explicitly registered list of first-party
+extensions (courier adapters, payment providers, the analytics report pack) with a semver
+compatibility check against `CORE_VERSION` and a Zod `configSchema` per plugin. Installing
+records metadata; enabling requires a trusted registry entry, a compatible version and a
+valid configuration. Nothing is fetched or executed at runtime — the registry is a
+compile-time allowlist.
+
 ## Module map
 
 Each domain module owns its schema validation, service (the only place that writes its
@@ -202,6 +305,13 @@ src/modules/
   exchanges/   return window, inspection, replacement stock                (Stage 3)
   resellers/   resellers, negotiated pricing, earnings ledger, payouts      (Stage 4)
   reports/     report definitions, database queries, PDF/XLSX export engine (Stage 4)
+  storefront/  host resolution, catalogue/theme/nav/page reads, public actions (Stage 5)
+  page-builder/ validated page documents, versions, publish/restore, renderer   (Stage 5)
+  media/       storage drivers, signed URLs, checksum dedupe, usage tracking    (Stage 5)
+  reviews/     purchase gate, moderation, server-side image limits              (Stage 5)
+  api-keys/    hashed scoped keys, request logs, webhook subscriptions+delivery (Stage 5)
+  marketing/   pixel/conversion providers, consent, queue + retrying delivery   (Stage 5)
+  plugins/     trusted registry, install/enable, compatibility + config checks  (Stage 5)
 ```
 
 Dependency direction is one-way: `catalog → pricing/inventory`, `purchasing →

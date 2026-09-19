@@ -27,7 +27,14 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   APP_ENCRYPTION_KEY: z.string().min(32, "APP_ENCRYPTION_KEY must be at least 32 characters"),
 
-  STORAGE_DRIVER: z.enum(["s3", "disabled"]).default("disabled"),
+  /**
+   * `s3` uses an S3-compatible bucket with presigned URLs. `local` keeps objects on
+   * disk under LOCAL_STORAGE_DIR and serves them through signed, expiring URLs issued
+   * by the application itself (useful for local development and single-VPS installs).
+   * `disabled` refuses every upload with a clear message instead of failing silently.
+   */
+  STORAGE_DRIVER: z.enum(["s3", "local", "disabled"]).default("disabled"),
+  LOCAL_STORAGE_DIR: z.string().default(".cache/uploads"),
   S3_ENDPOINT: z.string().optional(),
   S3_REGION: z.string().default("us-east-1"),
   S3_BUCKET: z.string().optional(),
@@ -95,8 +102,14 @@ export function isTest(): boolean {
   return env().NODE_ENV === "test";
 }
 
-/** Whether S3-compatible object storage is configured. */
+/** Whether object storage is configured and usable. */
 export function storageEnabled(): boolean {
   const config = env();
-  return config.STORAGE_DRIVER === "s3" && Boolean(config.S3_BUCKET);
+  if (config.STORAGE_DRIVER === "s3") return Boolean(config.S3_BUCKET);
+  return config.STORAGE_DRIVER === "local";
+}
+
+/** The configured storage driver name. */
+export function storageDriver(): "s3" | "local" | "disabled" {
+  return env().STORAGE_DRIVER;
 }

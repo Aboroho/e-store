@@ -9,7 +9,17 @@ import { Alert, buttonVariants } from "@/components/ui/primitives";
 export const metadata: Metadata = { title: "Checkout" };
 export const dynamic = "force-dynamic";
 
-export default async function CheckoutPage() {
+export default async function CheckoutPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const query = await searchParams;
+  const rawItems = Array.isArray(query.items) ? query.items[0] : query.items;
+  // The storefront cart hands items over as `variantId:quantity` pairs. They are
+  // treated as a wish list only — the order service re-resolves everything.
+  const initialCart = (rawItems ?? "")
+    .split(",")
+    .map((pair) => pair.split(":"))
+    .filter(([variantId, quantity]) => Boolean(variantId) && Number(quantity) > 0)
+    .map(([variantId, quantity]) => ({ variantId: variantId!, quantity: Math.min(50, Number(quantity)) }));
+
   let storefront;
   try {
     storefront = await resolveStorefront();
@@ -65,6 +75,7 @@ export default async function CheckoutPage() {
         }))}
         districts={districts.map((district) => ({ code: district.code, name: district.name }))}
         zones={zones}
+        initialCart={initialCart}
       />
     </main>
   );

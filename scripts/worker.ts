@@ -16,6 +16,8 @@ import "dotenv/config";
 import { prisma } from "../src/lib/db/client";
 import { logger } from "../src/lib/logging";
 import { processShipmentCreateEvent } from "../src/modules/couriers/service";
+import { deliverDueWebhooks } from "../src/modules/api-keys/delivery";
+import { deliverDueMarketingEvents } from "../src/modules/marketing/delivery";
 import { refreshStaleShipments } from "../src/modules/couriers/tracking";
 
 const DEFAULT_INTERVAL_SECONDS = 5;
@@ -60,7 +62,22 @@ async function claimEvents(limit: number) {
   return prisma.outboxEvent.findMany({ where: { id: { in: ids }, status: "PROCESSING" }, orderBy: { availableAt: "asc" } });
 }
 
-export async function runOnce(): Promise<{ processed: number; failed: number }> {
+export async function runOnce(): Promise<{
+  processed: number;
+  failed: number;
+  webhooks: { delivered: number; failed: number; dead: number; skipped: number };
+  marketing: { sent: number; failed: number; discarded: number; skipped: number };
+}> {
+  const webhooks = await deliverDueWebhooks(BATCH_SIZE).catch((error) => {
+    logger.error("worker.webhook_delivery_failed", error);
+    return { delivered: 0, failed: 0, dead: 0, skipped: 0 };
+  });
+
+  const marketing = await deliverDueMarketingEvents(BATCH_SIZE).catch((error) => {
+    logger.error("worker.marketing_delivery_failed", error);
+    return { sent: 0, failed: 0, discarded: 0, skipped: 0 };
+  });
+
   const events = await claimEvents(BATCH_SIZE);
   let processed = 0;
   let failed = 0;
@@ -100,7 +117,13 @@ export async function runOnce(): Promise<{ processed: number; failed: number }> 
   }
 
   if (events.length > 0) logger.info("worker.batch", { claimed: events.length, processed, failed });
-  return { processed, failed };
+  if (webhooks.delivered > 0 || webhooks.failed > 0 || webhooks.dead > 0) {
+    logger.info("worker.webhooks", { ...webhooks });
+  }
+  if (marketing.sent > 0 || marketing.failed > 0 || marketing.discarded > 0) {
+    logger.info("worker.marketing", { ...marketing });
+  }
+  return { processed, failed, webhooks, marketing };
 }
 
 /** Refresh tracking for shipments that have been in flight for a while. */
@@ -128,8 +151,8 @@ async function main() {
 
   let trackingTick = 0;
   do {
-    const { processed, failed } = await runOnce();
-    if (processed === 0 && failed === 0) {
+    const { processed, failed, webhooks, marketing } = await runOnce();
+    if (processed === 0 && failed === 0 && webhooks.delivered === 0 && webhooks.failed === 0 && marketing.sent === 0 && marketing.failed === 0) {
       // Idle: check in-flight shipments every ~10 minutes.
       trackingTick += 1;
       if (trackingTick >= Math.max(1, Math.round(600 / options.intervalSeconds))) {

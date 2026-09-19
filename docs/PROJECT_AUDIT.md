@@ -68,16 +68,60 @@ SSLCommerz sandbox calls, S3 bucket uploads, load/performance behaviour.
 | 6 | Allocating more preorder units than were physically available threw instead of reporting the shortfall; the queue path double-counted `skipped`. | The queue action clamps to available stock (`FOR UPDATE`), returns `allocated`/`skipped` correctly, and never reserves stock that is not on the shelf. |
 | 7 | The seed created no default price list and no stock adjustment reasons, so a fresh install could not create a product or record an adjustment. | The seed now creates the default price list and 8 adjustment reasons (idempotent). |
 
+## 3b. Verification actually performed (Stage 3)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Migration applied | `node scripts/migrate.mjs deploy` | stage-3 DDL applied (order, payment, shipment, settlement, exchange tables) |
+| Types + lint | `npm run check` | 0 errors |
+| Tests | `npx vitest run` | 101 passed (45 unit, 56 integration) |
+| Production build | `npm run build` | succeeded |
+| Smoke | curl with a real session cookie | a storefront order placed through the service layer, then 22 admin routes returned `200` with real rows; `/admin/orders` without a cookie redirected to `/login` |
+
+## 3c. Verification actually performed (Stage 4)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Types + lint | `npm run check` | 0 errors |
+| Tests | `npx vitest run` | 110 passed (45 unit, 65 integration) |
+| Production build | `npm run build` | succeeded, all report/export routes present |
+| Reports + exports | service + HTTP | all eleven `/admin/reports/<key>` screens `200`; the export endpoint returned a real PDF (`%PDF-` magic) and a real XLSX (PK zip with a `Gross profit` sheet); unknown report `404`, unsupported format `422`, unauthenticated `307` to login |
+| Smoke | curl with a real session cookie | reseller, pricing, ledger, payout and report screens rendered the reconciled balances |
+
+## 3d. Verification actually performed (Stage 5)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Migration / schema | `node scripts/migrate.mjs deploy`, `node scripts/schema-tool.mjs check` | 3 migrations applied to a **freshly created** database; the database matches `prisma/schema.prisma` (111 models; 112 tables including the migration ledger) |
+| Foreign-key actions | `npm run db:check-fk` | `Foreign keys OK: 209 constraints match prisma/schema.prisma` |
+| Types + lint | `npm run check` | schema-assembly check, `tsc --noEmit` and `eslint .` all clean (0 errors, 0 warnings) |
+| Tests | `npx vitest run` | **137 passed across 16 files** (45 unit, 92 integration) — re-run after rebuilding the environment from a fresh database |
+| Production build | `npm run build` | succeeded; every Stage-5 route present (storefront, page builder, media, reviews, API keys, integrations, plugins, jobs, media storage, health) |
+| Storefront | `next dev` + curl | `/`, `/products`, `/products/<slug>`, `/cart`, `/robots.txt`, `/sitemap.xml` → `200` without a session; `/pages/<missing>` → `404`; the sitemap listed the seeded product and the newly published page |
+| Page builder | service layer + curl | drafted → published → edited → re-published → unpublished through the real service calls; a draft edit was **not** live, the promotion was, and unpublish hid the page; `/admin/pages`, `/admin/pages/new`, `/admin/pages/<id>`, `/admin/pages/<id>/builder` (palette, 13 block types, Save draft/Publish) and `/admin/pages/<id>/preview` → `200` with a session cookie; `/admin/login` → `307` without one |
+| Media | integration test against the local driver | signed upload URL → `PUT` → `confirmUpload` published the asset; identical bytes returned `reused: true`; an over-sized object was rejected; delete refused while referenced |
+
+### Defects found and fixed during Stage 5
+
+| # | Defect | Fix |
+| --- | --- | --- |
+| 1 | `saveDraft` flipped a live page to `DRAFT`, so editing a published page took the storefront page off the air. | `saveDraft` now keeps `PUBLISHED` while `publishedVersionId` is set; only a never-published page stays `DRAFT`. Asserted in `content.test.ts`. |
+| 2 | `deliverDueMarketingEvents` selected and claimed `status = "PENDING"` only, so a 503 (`FAILED` with a future `nextAttemptAt`) was never retried. | One shared `due` filter (`PENDING`/`FAILED`, `nextAttemptAt` null or past) for the candidate query **and** the `updateMany` claim. |
+| 3 | A conversion skipped for missing consent stayed blocked by its own dedupe key even after the shopper consented, so the purchase was never reported. | `queueMarketingEvent` promotes the existing `SKIPPED_NO_CONSENT` row (records consent, resets attempts) instead of dropping the event. |
+| 4 | Storefront product views and checkout starts were not measured at all. | `TrackViewContent`/`TrackInitiateCheckout`/`TrackPurchase` browser events wired into the product page, checkout form and confirmation page, keyed so the server-side `Purchase` deduplicates with them. |
+
 ## 4. Known gaps and risks
 
 | # | Gap | Impact | Plan |
 | --- | --- | --- | --- |
-| 1 | Email delivery is not wired (no SMTP credentials) | Password reset links and invitations cannot be emailed | Password reset stores a single-use token; in non-production the link is returned to the operator. SMTP integration is part of Stage 5 hardening; until then the reset flow is exercised locally. |
-| 2 | S3 storage driver is not implemented yet | Media uploads are impossible | Media manager + driver land in Stage 5; `STORAGE_DRIVER=disabled` currently reports the capability as unavailable instead of pretending to work. |
+| 1 | Email delivery is not wired (no SMTP credentials) | Password reset links and invitations cannot be emailed | Password reset stores a single-use token; in non-production the link is returned to the operator. Still open after Stage 5 — SMTP must be configured on the VPS (`docs/DEPLOYMENT.md`). |
+| 2 | ~~S3 storage driver is not implemented yet~~ **resolved in Stage 5** | — | `src/modules/media/storage.ts` implements the S3-compatible driver and a local driver behind one interface, with signed time-limited URLs; the sandbox runs the local driver (`STORAGE_DRIVER=local`), so a real bucket still has to be verified on the VPS. |
 | 3 | `prisma migrate dev` cannot run offline | New migrations must be authored as SQL | `scripts/schema-tool.mjs sql --out <dir>/migration.sql` generates DDL from the schema; reviewed manually and applied with `scripts/migrate.mjs`. |
 | 4 | ~~Covering indexes/FK actions are not compared by the drift checker~~ **resolved in Stage 2** | A hand-edited database could drift silently | `scripts/fk-check.mjs` (`npm run db:check-fk`) now compares all 209 foreign keys with the schema; covering indexes are still not compared (documented as a follow-up). |
 | 5 | Navigation advertises later-stage screens | Users could expect features that do not exist | Nav items carry a `stage` field; anything above the current stage renders disabled with an "S5"-style badge instead of a dead link. |
-| 6 | No CI pipeline | Regressions rely on the developer running `npm run check` | A GitHub Actions workflow is planned in Stage 5 (documented in DEPLOYMENT.md). |
+| 6 | No CI pipeline | Regressions rely on the developer running `npm run check` | Still open: the commands are documented as a workflow in `docs/DEPLOYMENT.md` but no `.github/workflows` file is committed, because the sandbox cannot verify a pipeline run. |
+| 7 | Provider sandboxes (bKash, SSLCommerz, Pathao, Steadfast, CarryBee) were never called | The adapters are unit-tested against recorded payload shapes, not live APIs | Documented as a go-live checklist item in `docs/DEPLOYMENT.md`; a sandbox round-trip must be run on the VPS. |
+| 8 | Browser automation is not part of the suite | Drag-and-drop, keyboard and responsive behaviour were verified by hand | The scripted smoke pass covers routing, rendering and authorization; Playwright is a post-v1 improvement. |
 
 ## 5. Repository map (Stage 1)
 
@@ -90,9 +134,11 @@ scripts/                    database + schema tooling, schema assembly
 src/generated/prisma/       generated client (not committed)
 src/lib/                    environment, db, money, crypto, auth, permissions, settings, validation
 src/components/             UI primitives, layout shell, forms
-src/modules/                auth, users, dashboard, notifications, settings, catalog, pricing,
-                            inventory, purchasing, preorders (service + actions + queries per module)
-src/app/                    admin area, auth pages, global styles
+src/modules/                auth, users, dashboard, notifications, settings, catalog, pricing, inventory,
+                            purchasing, preorders, orders, payments, couriers, settlements, exchanges,
+                            resellers, reports, storefront, page-builder, media, reviews, api-keys,
+                            marketing, plugins (service + actions + queries per module)
+src/app/                    admin area, auth pages, public storefront (`s/[host]`), checkout, health
 tests/                      unit tests, database integration tests and shared fixtures
 docs/                       audit, architecture, plan, DATABASE_DESIGN, BUSINESS_RULES, TESTING
 ```

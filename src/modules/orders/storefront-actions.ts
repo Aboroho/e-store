@@ -69,6 +69,7 @@ export async function placeStorefrontOrderAction(_prev: ActionState, formData: F
         note: note || undefined,
         items,
         idempotencyKey,
+        marketingConsent: formData.get("marketingConsent") === "on",
       },
       { actorLabel: `storefront:${ip}`, ipAddress: ip },
     );

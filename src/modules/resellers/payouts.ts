@@ -7,6 +7,7 @@ import { nextDocumentNumber } from "@/lib/numbering";
 import { getBusinessSetting, BUSINESS_SETTINGS } from "@/lib/settings";
 import type { ResellerActor } from "./service";
 import type { ResellerPayoutInput } from "./schemas";
+import { emitWebhookEvent } from "@/modules/api-keys/events";
 
 /**
  * Reseller payouts.
@@ -164,7 +165,7 @@ export async function markPayoutPaid(
   actor: ResellerActor,
   input: { payoutId: string; transactionReference: string; paidAt?: Date; note?: string | null },
 ) {
-  return withTransaction(async (tx) => {
+  const updated = await withTransaction(async (tx) => {
     const payout = await tx.resellerPayout.findFirst({ where: { id: input.payoutId, businessId: actor.businessId } });
     if (!payout) throw AppError.notFound("Payout not found");
     if (payout.status === "PAID") {
@@ -231,6 +232,21 @@ export async function markPayoutPaid(
 
     return updated;
   });
+
+  await emitWebhookEvent({
+    businessId: actor.businessId,
+    eventType: "reseller.payout_paid",
+    dedupeKey: `${updated.id}:paid`,
+    payload: {
+      payoutId: updated.id,
+      payoutNumber: updated.payoutNumber,
+      resellerId: updated.resellerId,
+      amountPaisa: updated.amountPaisa,
+      transactionReference: input.transactionReference,
+    },
+  });
+
+  return updated;
 }
 
 /** Cancel an unpaid payout and release every entry back to the eligible pool. */

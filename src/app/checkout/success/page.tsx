@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db/client";
 import { formatPaisa } from "@/lib/money";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { Alert, Card, CardContent, CardHeader, CardTitle, buttonVariants } from "@/components/ui/primitives";
+import { TrackPurchase } from "@/components/storefront/marketing-events";
 
 export const metadata: Metadata = { title: "Order placed" };
 export const dynamic = "force-dynamic";
@@ -25,7 +26,7 @@ export default async function CheckoutSuccessPage({ searchParams }: { searchPara
           grandTotalPaisa: true,
           duePaisa: true,
           customerPhoneNormalized: true,
-          items: { select: { productName: true, variantName: true, quantity: true, lineTotalPaisa: true } },
+          items: { select: { productName: true, variantName: true, quantity: true, lineTotalPaisa: true, variantId: true } },
         },
       })
     : null;
@@ -44,6 +45,11 @@ export default async function CheckoutSuccessPage({ searchParams }: { searchPara
         <Alert variant="warning">We could not find that order. Check the order number or sign in to your account.</Alert>
       ) : (
         <Card>
+          <TrackPurchase
+            orderNumber={order.orderNumber}
+            valuePaisa={order.grandTotalPaisa}
+            variantIds={order.items.map((item) => item.variantId).filter((id): id is string => Boolean(id))}
+          />
           <CardHeader>
             <CardTitle>Order {order.orderNumber}</CardTitle>
           </CardHeader>

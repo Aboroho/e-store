@@ -157,6 +157,8 @@ export interface CheckoutInput {
   note?: string;
   items: Array<{ variantId: string; quantity: number }>;
   idempotencyKey: string;
+  /** True when the shopper accepted measurement on the checkout form. */
+  marketingConsent?: boolean;
 }
 
 /**
@@ -197,6 +199,7 @@ export async function placeStorefrontOrder(input: CheckoutInput, meta: { actorLa
     internalNote: undefined,
     sourceReference: `storefront:${storefront.slug}`,
     idempotencyKey: input.idempotencyKey,
+    marketingConsent: input.marketingConsent ?? false,
     customer: {
       name: input.customerName,
       phone: input.customerPhone,

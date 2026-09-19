@@ -65,15 +65,30 @@ production build must all pass before the next stage starts. This plan is the wo
 | Tests | `tests/integration/resellers.test.ts` — 9 tests (suite now 110) covering settlement received vs merely delivered, partial settlement, eligibility, partial payout, duplicate payout prevention, ledger reversal and report reconciliation | done |
 | Docs | ARCHITECTURE (§7), BUSINESS_RULES (§11–12), TESTING (§5), API (`/api/v1/reports/{key}/export`) | done |
 
-## Stage 5 — Storefronts, page builder, media, reviews, integrations, hardening
+## Stage 5 — Storefronts, page builder, media, reviews, integrations, hardening ✅ complete
 
-- Storefront resolution by domain, per-storefront settings, theme tokens, navigation menus.
-- Page builder with versioned pages/blocks; SEO fields; sitemap/robots.
-- S3-compatible media manager: presigned uploads, variants, folders, usage tracking, orphan cleanup.
-- Reviews with verified purchase, moderation, image limits (3 images / 50 MB combined by default).
-- Scoped API keys + webhooks with HMAC signatures and replay protection; marketing pixels/consent.
-- Plugin registry with declarative hooks only (no arbitrary code execution).
-- Production hardening: security headers, rate limits, backup/restore runbook, CI workflow, E2E.
+| Area | Deliverable | Status |
+| --- | --- | --- |
+| Storefronts | multi-domain resolution (`src/proxy.ts` rewrites to `/s/{host}`, `StorefrontDomain` → slug → default), per-storefront theme/nav/settings, catalogue + detail + cart + checkout + account + order tracking, JSON-LD, canonical/OG metadata, `sitemap.xml` and `robots.txt` from the database | done |
+| Page builder | validated JSON documents (`schemaVersion`, theme, sections, 13 block types), immutable `PageVersion` history, draft → publish → unpublish → restore flow, drag-and-drop canvas with a widget palette, breakpoint preview, live preview route, media picker integration, usage tracking | done |
+| Media | S3-compatible driver + local driver behind one interface, signed time-limited upload/download URLs, checksum dedupe, `headObject` confirmation, soft delete with reference checks, folders/search/rename/move, reusable picker for products, pages and reviews | done |
+| Reviews | one review per customer per purchased product, delivered/completed gate, rating + title + body, server-enforced image limits (3 images / 50 MB), moderation queue with approve/reject/report handling, star summaries on product pages | done |
+| API keys | `esk_` keys stored as SHA-256 hashes, scopes on every request, expiry/revocation/last-used/usage count, IP allowlist, 120 req/min, request log, dual auth (session or key) on the orders and export endpoints | done |
+| Webhooks | per-event subscriptions, secret shown once and stored encrypted + hashed, HMAC body signature, 64 KB cap, dedupe per `(eventType, dedupeKey)`, exponential backoff, delivery log and dead-letter state | done |
+| Marketing | provider registry (Meta pixel + conversions, TikTok pixel, Google Analytics, custom endpoint), storefront-specific configuration, consent gate + opt-out store, per-integration dedupe with promotion on late consent, browser pixels only for public ids, retrying delivery with logs | done |
+| Plugins | static trusted registry (courier, payment, report packs) with semver compatibility and per-plugin config schema, install/configure/enable-disable UI, no execution of uploaded code | done |
+| Ops & hardening | `/api/health`, `/admin/jobs` queue screen, CSP + HSTS + security headers, stricter env validation for production, worker draining webhooks + marketing + outbox, `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `.env.example` | done |
+| Tests | `content.test.ts` (9), `api-keys.test.ts` (12), `marketing.test.ts` (6) — suite now **137 tests / 16 files**, plus the scripted smoke pass over the storefront, page builder and admin screens | done |
+| Docs | ARCHITECTURE (§9 + module map), BUSINESS_RULES (§13–16), TESTING (§6), API (keys, webhooks, media URLs, health), SECURITY, DEPLOYMENT, this plan | done |
+
+### Defects found and fixed while testing Stage 5
+
+| Defect | Fix |
+| --- | --- |
+| `saveDraft` set a live page to `DRAFT`, so editing a published page silently 404'd the storefront | `saveDraft` keeps `PUBLISHED` while a published version exists (the draft is only the next candidate) |
+| `deliverDueMarketingEvents` selected and claimed `status = PENDING` only, so a retryable failure never retried | one shared `due` filter (`PENDING`/`FAILED` with `nextAttemptAt` null or past) used by both the candidate query and the claim |
+| A conversion skipped for missing consent stayed blocked by its own dedupe key even after the shopper consented | `queueMarketingEvent` promotes the existing `SKIPPED_NO_CONSENT` row instead of dropping the event |
+| Storefront product views and checkout starts were never measured | added browser-side ViewContent/InitiateCheckout/Purchase tracking components wired into the product page, checkout form and order confirmation |
 
 ## Definition of done for every stage
 

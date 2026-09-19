@@ -57,6 +57,8 @@ export const createOrderInputSchema = z.object({
   internalNote: z.string().trim().max(1000).optional(),
   sourceReference: z.string().trim().max(120).optional(),
   idempotencyKey: z.string().trim().min(8).max(120),
+  /** Whether the shopper agreed to marketing measurement at checkout. */
+  marketingConsent: z.boolean().default(false),
 });
 
 export type OrderItemInput = z.infer<typeof orderItemInputSchema>;

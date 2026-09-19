@@ -34,7 +34,7 @@ The 111 models are grouped exactly like the business:
 | Fulfilment | `Shipment`, `ShipmentEvent`, `CourierProvider`, `CourierWebhookEvent`, `CourierSettlement`, `CourierSettlementEntry` | Provider adapters keep their own credential rows; settlement entries link courier money to orders. |
 | Exchanges | `ExchangeRequest`, `ExchangeItem`, `ExchangeReason` | Difference in paisa is positive when the customer owes money. |
 | Resellers | `Reseller`, `ResellerOrderEarning`, `ResellerLedgerEntry`, `ResellerPayout`, `ResellerPayoutEntry`, `ResellerCollectionChange` | Earnings become payable only after COD settlement reconciliation. |
-| CMS & media | `Page`, `PageBlock`, `Menu`, `MenuItem`, `MediaFolder`, `MediaAsset`, `MediaUsage`, `Banner` | Media assets are stored keyed by `objectKey` in S3-compatible storage. |
+| CMS & media | `Page`, `PageVersion`, `PageBlock`, `Menu`, `MenuItem`, `MediaFolder`, `MediaAsset`, `MediaUsage`, `Banner`, `StorefrontPage` | Pages keep immutable `PageVersion` documents (draft/published/archived); media assets are keyed by `objectKey` in S3-compatible storage with SHA-256 checksum dedupe and usage rows that block deletion. |
 | Reviews | `Review`, `ReviewReport`, `ReviewVote` | One review per `(productId, customerId)`. |
 | Integrations & ops | `ApiKey`, `Integration`, `WebhookSubscription`, `Plugin`, `BackgroundJob`, `OutboxEvent`, `Notification`, `NotificationRecipient`, `AuditLog`, `RateLimitBucket`, `IdempotencyRecord`, `MarketingIntegration`, `MarketingEvent` | Outbox + jobs drive side effects (webhooks, email) outside the request transaction. |
 

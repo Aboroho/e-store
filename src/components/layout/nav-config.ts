@@ -79,7 +79,7 @@ export const ADMIN_NAV: NavSection[] = [
   {
     title: "Storefront",
     items: [
-      { label: "Storefronts", href: "/admin/storefront", permission: "storefront.manage", icon: "Globe", stage: 5 },
+      { label: "Storefronts", href: "/admin/storefronts", permission: "storefront.manage", icon: "Globe", stage: 5 },
       { label: "Pages", href: "/admin/pages", permission: "page.manage", icon: "FileText", stage: 5 },
       { label: "Media", href: "/admin/media", permission: "media.manage", icon: "Image", stage: 5 },
       { label: "Reviews", href: "/admin/reviews", permission: "review.moderate", icon: "Star", stage: 5 },

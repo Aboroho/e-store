@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useActionState } from "react";
 import { initialActionState } from "@/modules/auth/actions";
+import { TrackInitiateCheckout } from "@/components/storefront/marketing-events";
 import { placeStorefrontOrderAction } from "@/modules/orders/storefront-actions";
 import { Alert, Badge, Card, CardContent, CardHeader, CardTitle, FormField, Input, NativeSelect, Textarea } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
@@ -42,14 +43,19 @@ export function CheckoutForm({
   variants,
   districts,
   zones,
+  initialCart = [],
 }: {
   storefront: { id: string; slug: string; name: string; codEnabled: boolean; freeDeliveryThresholdPaisa: number | null };
   variants: CheckoutVariantOption[];
   districts: Array<{ code: string; name: string }>;
   zones: DeliveryZoneOption[];
+  /** Items handed over from the storefront cart (already validated server-side). */
+  initialCart?: Array<{ variantId: string; quantity: number }>;
 }) {
   const [state, formAction] = useActionState(placeStorefrontOrderAction, initialActionState);
-  const [cart, setCart] = useState<Array<{ variantId: string; quantity: number }>>([]);
+  const [cart, setCart] = useState<Array<{ variantId: string; quantity: number }>>(() =>
+    initialCart.filter((row) => variants.some((variant) => variant.variantId === row.variantId)),
+  );
   const [districtCode, setDistrictCode] = useState("");
   const [idempotencyKey] = useState(() => `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
 
@@ -246,6 +252,7 @@ export function CheckoutForm({
         </Card>
 
         <form action={formAction} className="space-y-3">
+          {cart.length > 0 ? <TrackInitiateCheckout variantIds={cart.map((row) => row.variantId)} valuePaisa={totalPaisa} /> : null}
           <input type="hidden" name="storefrontId" value={storefront.id} />
           <input type="hidden" name="storefrontSlug" value={storefront.slug} />
           <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
@@ -255,6 +262,10 @@ export function CheckoutForm({
               <input type="hidden" name="itemQuantity" value={row.quantity} />
             </div>
           ))}
+          <label className="flex items-start gap-2 text-xs text-slate-600">
+            <input type="checkbox" name="marketingConsent" defaultChecked={false} className="mt-0.5" />
+            <span>Measure this purchase for our own advertising reports (optional). We only send a hashed customer id, never your phone number or email.</span>
+          </label>
           <SubmitButton className="w-full" disabled={cart.length === 0}>
             Place order
           </SubmitButton>
