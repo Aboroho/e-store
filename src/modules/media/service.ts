@@ -152,11 +152,11 @@ export async function toAssetView(asset: {
 export interface MediaListFilter {
   search?: string;
   folderId?: string | null;
-  mimeGroup?: "image" | "document" | "all";
+  mimeGroup?: "image" | "document" | "all" | "video" | "audio";
   visibility?: MediaVisibility;
   page?: number;
   pageSize?: number;
-  sort?: "newest" | "oldest" | "name" | "largest";
+  sort?: "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest" | "recently_modified";
 }
 
 export interface MediaListResult {
@@ -171,16 +171,23 @@ export async function listMedia(businessId: string, filter: MediaListFilter = {}
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(100, Math.max(6, filter.pageSize ?? 24));
 
+  const mimeGroupFilter =
+    filter.mimeGroup === "image"
+      ? { mimeType: { startsWith: "image/" } }
+      : filter.mimeGroup === "document"
+        ? { NOT: { mimeType: { startsWith: "image/" } } }
+        : filter.mimeGroup === "video"
+          ? { mimeType: { startsWith: "video/" } }
+          : filter.mimeGroup === "audio"
+            ? { mimeType: { startsWith: "audio/" } }
+            : {};
+
   const where: Prisma.MediaAssetWhereInput = {
     businessId,
     deletedAt: null,
     ...(filter.folderId === undefined ? {} : { folderId: filter.folderId }),
     ...(filter.visibility ? { visibility: filter.visibility } : {}),
-    ...(filter.mimeGroup === "image"
-      ? { mimeType: { startsWith: "image/" } }
-      : filter.mimeGroup === "document"
-        ? { NOT: { mimeType: { startsWith: "image/" } } }
-        : {}),
+    ...mimeGroupFilter,
     ...(filter.search
       ? {
           OR: [
@@ -197,9 +204,15 @@ export async function listMedia(businessId: string, filter: MediaListFilter = {}
       ? [{ createdAt: "asc" }]
       : filter.sort === "name"
         ? [{ originalName: "asc" }]
-        : filter.sort === "largest"
-          ? [{ sizeBytes: "desc" }]
-          : [{ createdAt: "desc" }];
+        : filter.sort === "name_desc"
+          ? [{ originalName: "desc" }]
+          : filter.sort === "largest"
+            ? [{ sizeBytes: "desc" }]
+            : filter.sort === "smallest"
+              ? [{ sizeBytes: "asc" }]
+              : filter.sort === "recently_modified"
+                ? [{ updatedAt: "desc" }]
+                : [{ createdAt: "desc" }];
 
   const [rows, total, aggregate] = await Promise.all([
     prisma.mediaAsset.findMany({
@@ -688,4 +701,93 @@ export async function signedDownloadUrl(actor: MediaActor, assetId: string, disp
   if (!asset) throw AppError.notFound("Media asset not found");
   const signed = await createDownloadUrl({ key: asset.objectKey, disposition, downloadName: downloadName(asset) });
   return { url: signed.url, expiresAt: signed.expiresAt };
+}
+
+/**
+ * Replace a media asset: upload a new file and swap the object key while
+ * preserving the asset's identity (all references/usages stay intact).
+ *
+ * The old storage object is deleted after the new one is confirmed.
+ */
+export async function replaceMediaAsset(actor: MediaActor, input: { assetId: string; fileName: string; mimeType: string; sizeBytes: number; checksum?: string }) {
+  const asset = await prisma.mediaAsset.findFirst({ where: { id: z.string().uuid().parse(input.assetId), businessId: actor.businessId, deletedAt: null } });
+  if (!asset) throw AppError.notFound("Media asset not found");
+
+  const { maxBytes, allowed } = await limits(actor.businessId);
+  if (!allowed.includes(input.mimeType)) {
+    throw AppError.validation(`${input.mimeType} is not an allowed file type`);
+  }
+  if (input.sizeBytes > maxBytes) {
+    throw AppError.validation(`Files must be ${Math.floor(maxBytes / (1024 * 1024))} MB or smaller`);
+  }
+  if (!storageIsConfigured()) {
+    throw AppError.integration("Media storage is not configured");
+  }
+
+  const oldKey = asset.objectKey;
+  const newKey = buildObjectKey(actor.businessId, input.fileName, input.mimeType);
+
+  const upload = await createUploadTarget({ key: newKey, contentType: input.mimeType });
+
+  // Update the asset row to point to the new key (we'll clean up the old one after confirm)
+  await prisma.mediaAsset.update({
+    where: { id: asset.id },
+    data: {
+      objectKey: newKey,
+      originalName: input.fileName,
+      mimeType: input.mimeType,
+      extension: extensionFor(input.fileName, input.mimeType),
+      sizeBytes: input.sizeBytes,
+      checksum: input.checksum ?? asset.checksum,
+      metadata: { replacing: true, previousKey: oldKey },
+    },
+  });
+
+  await recordAudit({
+    businessId: actor.businessId,
+    actorUserId: actor.userId,
+    actorLabel: actor.actorLabel,
+    entityType: "MediaAsset",
+    entityId: asset.id,
+    action: "media.replace_requested",
+    summary: `Replacing ${asset.originalName} with ${input.fileName}`,
+  });
+
+  return { upload, oldKey };
+}
+
+/** Confirm a media replacement after the new file has been uploaded. */
+export async function confirmReplaceMedia(actor: MediaActor, input: { assetId: string; oldKey: string; checksum?: string; width?: number; height?: number }) {
+  const asset = await prisma.mediaAsset.findFirst({ where: { id: z.string().uuid().parse(input.assetId), businessId: actor.businessId, deletedAt: null } });
+  if (!asset) throw AppError.notFound("Media asset not found");
+
+  const head = await headObject(asset.objectKey);
+  if (!head.exists) {
+    throw AppError.validation("The replacement upload did not reach storage. Please retry.");
+  }
+
+  await prisma.mediaAsset.update({
+    where: { id: asset.id },
+    data: {
+      sizeBytes: head.sizeBytes || asset.sizeBytes,
+      width: input.width ?? asset.width,
+      height: input.height ?? asset.height,
+      metadata: { replacing: false },
+    },
+  });
+
+  // Delete the old object
+  await deleteObject(input.oldKey).catch(() => undefined);
+
+  await recordAudit({
+    businessId: actor.businessId,
+    actorUserId: actor.userId,
+    actorLabel: actor.actorLabel,
+    entityType: "MediaAsset",
+    entityId: asset.id,
+    action: "media.replaced",
+    summary: `Replaced media with new file`,
+  });
+
+  return toAssetView(asset);
 }

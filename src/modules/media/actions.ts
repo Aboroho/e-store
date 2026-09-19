@@ -13,6 +13,7 @@ import type { MediaAssetView } from "./service";
 import {
   attachUsage,
   confirmUpload,
+  confirmReplaceMedia,
   copyMediaAsset,
   createFolder,
   deleteFolder,
@@ -21,6 +22,7 @@ import {
   moveMediaAssets,
   renameFolder,
   renameMediaAsset,
+  replaceMediaAsset,
   requestUpload,
   signedDownloadUrl,
   updateMediaAsset,
@@ -300,6 +302,7 @@ export async function detachUsageAction(_prev: ActionState, formData: FormData):
 export async function searchMediaAction(input: {
   search?: string;
   mimeGroup?: "image" | "document" | "all";
+  folderId?: string | null;
   excludeIds?: string[];
 }): Promise<MediaAssetView[]> {
   const session = await requireSession();
@@ -307,4 +310,55 @@ export async function searchMediaAction(input: {
     throw AppError.forbidden("You are not allowed to browse the media library");
   }
   return mediaForPicker(session.businessId, input);
+}
+
+/** Step 1 of media replacement: get upload target for the new file. */
+export async function requestReplaceAction(input: {
+  assetId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum?: string;
+}): Promise<{ ok: true; uploadUrl: string; method: string; headers: Record<string, string>; oldKey: string } | { ok: false; message: string }> {
+  try {
+    const context = await actor();
+    const result = await replaceMediaAsset(context, input);
+    return {
+      ok: true,
+      uploadUrl: result.upload.url,
+      method: result.upload.method,
+      headers: result.upload.headers,
+      oldKey: result.oldKey,
+    };
+  } catch (error) {
+    const state = toState(error, "Unable to start replacement upload");
+    return { ok: false, message: state.message ?? "Unable to start replacement upload" };
+  }
+}
+
+/** Step 3 of media replacement: confirm the new file landed. */
+export async function confirmReplaceAction(input: {
+  assetId: string;
+  oldKey: string;
+  checksum?: string;
+  width?: number;
+  height?: number;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const context = await actor();
+    await confirmReplaceMedia(context, input);
+    revalidateMedia();
+    return { ok: true };
+  } catch (error) {
+    const state = toState(error, "Unable to confirm the replacement");
+    return { ok: false, message: state.message ?? "Unable to confirm the replacement" };
+  }
+}
+
+/** List orphaned media (unused assets older than N days) for cleanup. */
+export async function listOrphanMediaAction(olderThanDays = 30) {
+  const session = await requireSession();
+  assertPermission(session, "media.manage");
+  const { listOrphanMedia } = await import("./service");
+  return listOrphanMedia(session.businessId, olderThanDays);
 }
