@@ -5,6 +5,7 @@ import { resolveStorefrontByHost, storefrontProduct, productReviews, reviewSumma
 import { AddToCartButton } from "@/components/storefront/cart";
 import { TrackViewContent } from "@/components/storefront/marketing-events";
 import { ReviewForm } from "@/components/storefront/review-form";
+import { reviewImageLimits } from "@/modules/reviews/service";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const product = await storefrontProduct(storefront, slug);
   if (!product) notFound();
 
-  const [reviews, summary] = await Promise.all([productReviews(product.id, 12), reviewSummary(product.id)]);
+  const [reviews, summary, reviewLimits] = await Promise.all([
+    productReviews(product.id, 12),
+    reviewSummary(product.id),
+    // The limit shown here is the same server-side setting the review action enforces.
+    reviewImageLimits(storefront.businessId),
+  ]);
   // The cheapest variant is what the pixel reports as the viewed item.
   const viewableVariant = [...product.variants].sort((left, right) => left.pricePaisa - right.pricePaisa)[0];
   const canReview = storefront.status === "ACTIVE" && storefront.businessId ? true : false;
@@ -252,7 +258,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           <ReviewForm
             productId={product.id}
             productName={product.name}
-            maxImages={Number((storefront as unknown as { reviewMaxImages?: number }).reviewMaxImages ?? 3)}
+            maxImages={reviewLimits.maxImages}
           />
         ) : null}
       </section>

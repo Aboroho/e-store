@@ -28,6 +28,25 @@ const CONTAINER_CLASS: Record<string, string> = { full: "w-full", boxed: "mx-aut
 const ALIGN_CLASS: Record<string, string> = { left: "text-left", center: "text-center", right: "text-right" };
 const GAP_SIZE: Record<string, string> = { none: "0", sm: "0.75rem", md: "1.5rem", lg: "2.5rem" };
 
+/**
+ * Literal (so Tailwind can see them) responsive column templates. A section is always one
+ * column on a phone unless the author explicitly turned stacking off, and widens as the
+ * viewport grows — never `repeat(n, …)` on a phone, which would squeeze the copy.
+ */
+const COLUMN_CLASS: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-1 sm:grid-cols-2",
+  3: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
+  4: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4",
+};
+const COLUMN_CLASS_NO_STACK: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-2",
+  3: "grid-cols-2 lg:grid-cols-3",
+  4: "grid-cols-2 lg:grid-cols-4",
+};
+const STACK_CLASS: Record<number, string> = { 1: "space-y-0", 2: "space-y-6", 3: "space-y-6", 4: "space-y-6" };
+
 function taka(paisa: number): string {
   return `৳${(paisa / 100).toLocaleString("en-BD", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -107,20 +126,21 @@ async function SectionBody({ section, columns, storefront }: { section: PageSect
     buckets[index]!.push(block);
   }
 
+  const columnClass = section.responsive.stackOnMobile ? COLUMN_CLASS[columns] : COLUMN_CLASS_NO_STACK[columns];
+
   return (
     <div
-      className={`grid grid-cols-1 ${GAP_CLASS[section.layout.gap] ?? "gap-6"} ${ALIGN_CLASS[section.align] ?? "text-left"} ${
-        section.responsive.stackOnMobile ? "" : "sm:grid-cols-2"
+      className={`grid ${columnClass ?? COLUMN_CLASS[1]} ${GAP_CLASS[section.layout.gap] ?? "gap-6"} ${
+        ALIGN_CLASS[section.align] ?? "text-left"
       }`}
-      style={{ gridTemplateColumns: undefined, gap: GAP_SIZE[section.layout.gap] ?? "1.5rem" }}
+      style={{ gap: GAP_SIZE[section.layout.gap] ?? "1.5rem" }}
     >
       {buckets.map((blocks, index) => (
-        <div key={`column-${index}`} className="min-w-0">
-          <div className="grid gap-6" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
-            {blocks.map((block) => (
-              <BlockView key={block.id} block={block} storefront={storefront} />
-            ))}
-          </div>
+        // Blocks inside one column stack vertically; the columns themselves are the grid.
+        <div key={`column-${index}`} className={`min-w-0 ${STACK_CLASS[columns] ?? "space-y-6"}`}>
+          {blocks.map((block) => (
+            <BlockView key={block.id} block={block} storefront={storefront} />
+          ))}
         </div>
       ))}
     </div>
