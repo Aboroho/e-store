@@ -16,10 +16,10 @@ import {
   FormField,
   Input,
   NativeSelect,
-  Textarea,
   buttonVariants,
 } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
+import { ProductDescriptionEditor } from "@/components/forms/product-description-editor";
 import { cn } from "@/lib/utils";
 
 export interface AttributeOption {
@@ -263,7 +263,7 @@ export function ProductForm({
             <Input id="shortDescription" name="shortDescription" defaultValue={product?.shortDescription ?? ""} />
           </FormField>
           <FormField label="Description" htmlFor="description">
-            <Textarea id="description" name="description" rows={5} defaultValue={product?.description ?? ""} />
+            <ProductDescriptionEditor id="description" name="description" defaultValue={product?.description} />
           </FormField>
 
           <div className="grid gap-4 sm:grid-cols-3">
