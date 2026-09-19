@@ -113,6 +113,11 @@ with inline scripts; a nonce-based policy would require an edge hook and is note
 hardening step, not a shipped control. With `NODE_ENV=production` a missing TLS
 terminator will produce "secure cookie not stored" symptoms rather than security.
 
+`'unsafe-eval'` is added to `script-src` in development only: the dev overlay and React
+Refresh reconstruct call stacks with `eval()`, and without it every page logs "eval() is
+not supported in this environment". Production builds never call `eval()`, so the
+production policy does not include it.
+
 ## 9. Auditing and monitoring
 
 - `recordAudit` writes who did what, to which entity, before/after values and a reason,
