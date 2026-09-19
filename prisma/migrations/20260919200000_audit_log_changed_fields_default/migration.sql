@@ -1,0 +1,14 @@
+-- Restore the column default for AuditLog.changedFields.
+--
+-- The initial migration creates the column as
+--   "changedFields" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]
+-- but databases that were synchronised with `prisma db push` while the
+-- Prisma schema did not declare the default lost it. Without the default,
+-- every audit write that omits the field fails with a null constraint
+-- violation and rolls back the whole business transaction (for example,
+-- creating an attribute).
+--
+-- The schema now declares `@default([])` as well, so the client always
+-- writes an empty array; this statement additionally repairs databases
+-- that drifted. `SET DEFAULT` is idempotent.
+ALTER TABLE "AuditLog" ALTER COLUMN "changedFields" SET DEFAULT ARRAY[]::TEXT[];

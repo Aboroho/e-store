@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useRef, useState, useActionState } from "react";
 import { initialActionState } from "@/modules/auth/action-state";
 import {
   addAttributeValueAction,
@@ -22,6 +22,7 @@ import {
   CardTitle,
   FormField,
   Input,
+  Label,
   NativeSelect,
   Textarea,
 } from "@/components/ui/primitives";
@@ -94,6 +95,17 @@ export function CategoryForm({
 
 export function AttributeForm() {
   const [state, formAction, pending] = useActionState(createAttributeAction, initialActionState);
+  const nextKey = useRef(1);
+  const [rows, setRows] = useState<number[]>([0]);
+
+  const addRow = () => {
+    setRows((prev) => [...prev, nextKey.current]);
+    nextKey.current += 1;
+  };
+
+  const removeRow = (key: number) => {
+    setRows((prev) => (prev.length > 1 ? prev.filter((row) => row !== key) : prev));
+  };
 
   return (
     <form action={formAction}>
@@ -126,13 +138,41 @@ export function AttributeForm() {
               </label>
             </div>
           </div>
-          <FormField
-            label="Values"
-            htmlFor="attr-values"
-            hint="One per line. For colours append the hex value after a pipe, for example: Red|#dc2626"
-          >
-            <Textarea id="attr-values" name="values" rows={5} placeholder={"S\nM\nL\nXL"} />
-          </FormField>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Values</Label>
+              <Button type="button" variant="outline" size="sm" onClick={addRow}>
+                + Add new
+              </Button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Add as many values as you need — one per box. The hex colour is optional and only used for colour attributes.
+            </p>
+            <div className="space-y-2">
+              {rows.map((key, index) => (
+                <div key={key} className="flex items-center gap-2">
+                  <Input
+                    id={`attr-value-${key}`}
+                    name="valueTexts"
+                    placeholder={`Value ${index + 1} — for example M`}
+                    className="flex-1"
+                  />
+                  <Input name="valueColors" placeholder="#dc2626" className="w-32" aria-label="Hex colour (optional)" />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeRow(key)}
+                    disabled={rows.length === 1}
+                    aria-label={`Remove value ${index + 1}`}
+                  >
+                    ✕
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
         </CardContent>
         <CardFooter>
           <Button type="submit" disabled={pending}>

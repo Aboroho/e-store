@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { zId, zMoneyPaisa, zOptionalText, zSlug } from "@/lib/validation";
+import { zId, zMoneyPaisa, zOptionalSlug, zOptionalText } from "@/lib/validation";
 
 /** Validation schemas for catalog, pricing and inventory screens. */
 
@@ -23,7 +23,7 @@ export const variantInputSchema = z.object({
 
 export const productInputSchema = z.object({
   name: z.string().trim().min(2, "Enter the product name").max(200),
-  slug: zSlug.optional(),
+  slug: zOptionalSlug,
   productType: z.enum(["SIMPLE", "VARIABLE"]),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("DRAFT"),
   shortDescription: zOptionalText(500),
@@ -56,7 +56,7 @@ export const updateProductSchema = productInputSchema.omit({ variants: true }).p
 
 export const categoryInputSchema = z.object({
   name: z.string().trim().min(1, "Enter the category name").max(120),
-  slug: zSlug.optional(),
+  slug: zOptionalSlug,
   parentId: zId.optional(),
   description: zOptionalText(500),
   position: z.coerce.number().int().min(0).max(10_000).default(0),
@@ -68,7 +68,7 @@ export const categoryInputSchema = z.object({
 
 export const attributeInputSchema = z.object({
   name: z.string().trim().min(1, "Enter the attribute name").max(80),
-  slug: zSlug.optional(),
+  slug: zOptionalSlug,
   type: z.enum(["TEXT", "SELECT", "COLOR", "NUMBER"]).default("SELECT"),
   unit: zOptionalText(24),
   isVariantDefining: z.boolean().default(true),
@@ -88,7 +88,7 @@ export const attributeInputSchema = z.object({
 
 export const priceListInputSchema = z.object({
   name: z.string().trim().min(2).max(120),
-  slug: zSlug.optional(),
+  slug: zOptionalSlug,
   channel: z.enum(["DEFAULT", "STOREFRONT", "RESELLER", "WHOLESALE", "CUSTOM"]).default("DEFAULT"),
   currency: z.string().trim().length(3).default("BDT"),
   storefrontId: zId.optional(),

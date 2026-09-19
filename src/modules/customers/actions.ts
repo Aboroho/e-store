@@ -66,22 +66,22 @@ export async function createCustomerAction(_prev: ActionState, formData: FormDat
     return toState(error, "You are not allowed to manage customers");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    customerIdentitySchema,
-    {
-      name: String(raw.name ?? ""),
-      phone: String(raw.phone ?? ""),
-      email: String(raw.email ?? "").trim() || undefined,
-      districtCode: String(raw.districtCode ?? "").trim() || undefined,
-      addressLine: String(raw.addressLine ?? "").trim() || undefined,
-      area: String(raw.area ?? "").trim() || undefined,
-      note: String(raw.note ?? "").trim() || undefined,
-    },
-    "Create customer",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      customerIdentitySchema,
+      {
+        name: String(raw.name ?? ""),
+        phone: String(raw.phone ?? ""),
+        email: String(raw.email ?? "").trim() || undefined,
+        districtCode: String(raw.districtCode ?? "").trim() || undefined,
+        addressLine: String(raw.addressLine ?? "").trim() || undefined,
+        area: String(raw.area ?? "").trim() || undefined,
+        note: String(raw.note ?? "").trim() || undefined,
+      },
+      "Create customer",
+    );
+
     const customer = await prisma.$transaction((tx) =>
       findOrCreateCustomer(tx, { ...parsed, businessId: context.businessId, createdByUserId: context.userId }),
     );
@@ -138,22 +138,20 @@ export async function customerStatusAction(_prev: ActionState, formData: FormDat
     return toState(error, "You are not allowed to update customers");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    customerStatusSchema,
-    { customerId: String(raw.customerId ?? ""), status: raw.status, reason: String(raw.reason ?? "").trim() || undefined },
-    "Update customer status",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      customerStatusSchema,
+      { customerId: String(raw.customerId ?? ""), status: raw.status, reason: String(raw.reason ?? "").trim() || undefined },
+      "Update customer status",
+    );
     await setCustomerStatus(context, parsed);
+    revalidatePath("/admin/customers");
+    revalidatePath(`/admin/customers/${parsed.customerId}`);
+    return { status: "success", message: parsed.status === "BLOCKED" ? "Customer blocked and sessions revoked" : "Customer reactivated" };
   } catch (error) {
     return toState(error, "Unable to update the customer status");
   }
-
-  revalidatePath("/admin/customers");
-  revalidatePath(`/admin/customers/${parsed.customerId}`);
-  return { status: "success", message: parsed.status === "BLOCKED" ? "Customer blocked and sessions revoked" : "Customer reactivated" };
 }
 
 export async function addCustomerNoteAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -164,25 +162,23 @@ export async function addCustomerNoteAction(_prev: ActionState, formData: FormDa
     return toState(error, "You are not allowed to annotate customers");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    customerNoteSchema,
-    {
-      customerId: String(raw.customerId ?? ""),
-      body: String(raw.body ?? ""),
-      isPinned: raw.isPinned === "on" || raw.isPinned === "true",
-    },
-    "Add customer note",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      customerNoteSchema,
+      {
+        customerId: String(raw.customerId ?? ""),
+        body: String(raw.body ?? ""),
+        isPinned: raw.isPinned === "on" || raw.isPinned === "true",
+      },
+      "Add customer note",
+    );
     await addCustomerNote(context, parsed);
+    revalidatePath(`/admin/customers/${parsed.customerId}`);
+    return { status: "success", message: "Note added" };
   } catch (error) {
     return toState(error, "Unable to add the note");
   }
-
-  revalidatePath(`/admin/customers/${parsed.customerId}`);
-  return { status: "success", message: "Note added" };
 }
 
 export async function saveCustomerAddressAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -193,31 +189,29 @@ export async function saveCustomerAddressAction(_prev: ActionState, formData: Fo
     return toState(error, "You are not allowed to update customers");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    customerAddressSchema,
-    {
-      customerId: String(raw.customerId ?? ""),
-      label: String(raw.label ?? "").trim() || undefined,
-      recipientName: String(raw.recipientName ?? ""),
-      phone: String(raw.phone ?? ""),
-      districtCode: String(raw.districtCode ?? "").trim() || undefined,
-      addressLine: String(raw.addressLine ?? ""),
-      area: String(raw.area ?? "").trim() || undefined,
-      postcode: String(raw.postcode ?? "").trim() || undefined,
-      isDefault: raw.isDefault === "on" || raw.isDefault === "true",
-    },
-    "Save address",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      customerAddressSchema,
+      {
+        customerId: String(raw.customerId ?? ""),
+        label: String(raw.label ?? "").trim() || undefined,
+        recipientName: String(raw.recipientName ?? ""),
+        phone: String(raw.phone ?? ""),
+        districtCode: String(raw.districtCode ?? "").trim() || undefined,
+        addressLine: String(raw.addressLine ?? ""),
+        area: String(raw.area ?? "").trim() || undefined,
+        postcode: String(raw.postcode ?? "").trim() || undefined,
+        isDefault: raw.isDefault === "on" || raw.isDefault === "true",
+      },
+      "Save address",
+    );
     await saveCustomerAddress(context, parsed);
+    revalidatePath(`/admin/customers/${parsed.customerId}`);
+    return { status: "success", message: "Address saved" };
   } catch (error) {
     return toState(error, "Unable to save the address");
   }
-
-  revalidatePath(`/admin/customers/${parsed.customerId}`);
-  return { status: "success", message: "Address saved" };
 }
 
 /**

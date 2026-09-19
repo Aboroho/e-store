@@ -19,6 +19,17 @@ export const zSlug = z
   .max(80)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lower case letters, numbers and dashes only");
 
+/**
+ * Optional slug for HTML forms: an empty field means "generate it from the
+ * name", so a blank submission becomes `undefined` rather than failing the
+ * `min(1)` rule on `zSlug`. Non-empty values still have to be valid slugs.
+ * The trailing `.optional()` keeps the key optional in inferred object types.
+ */
+export const zOptionalSlug = z
+  .union([z.literal(""), zSlug])
+  .transform((value) => (value === "" ? undefined : value))
+  .optional();
+
 export const zPhoneBd = z
   .string()
   .min(6)

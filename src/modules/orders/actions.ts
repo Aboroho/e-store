@@ -60,56 +60,56 @@ export async function createOrderAction(_prev: ActionState, formData: FormData):
     return toState(error, "You are not allowed to create orders");
   }
 
-  const raw = formDataToObject(formData);
-  const variantIds = formData.getAll("itemVariantId").map(String).filter(Boolean);
-  const items = variantIds.map((variantId, index) => ({
-    variantId,
-    quantity: Number(formData.getAll("itemQuantity")[index] ?? 1),
-    unitPricePaisa: formData.getAll("itemUnitPrice")[index] ? toPaisa(formData.getAll("itemUnitPrice")[index]) : undefined,
-    discountPaisa: formData.getAll("itemDiscount")[index] ? toPaisa(formData.getAll("itemDiscount")[index]) : 0,
-    note: String(formData.getAll("itemNote")[index] ?? "").trim() || undefined,
-  }));
-
-  const chargeLabels = formData.getAll("chargeLabel").map(String);
-  const extraCharges = chargeLabels
-    .map((label, index) => ({
-      label: label.trim(),
-      amountPaisa: toPaisa(formData.getAll("chargeAmount")[index]),
-      note: String(formData.getAll("chargeNote")[index] ?? "").trim() || undefined,
-    }))
-    .filter((charge) => charge.label.length >= 2 && charge.amountPaisa > 0);
-
-  const parsed = parseInput(
-    createOrderInputSchema,
-    {
-      channel: raw.channel || "ADMIN",
-      storefrontId: raw.storefrontId || undefined,
-      customerId: raw.customerId || undefined,
-      customerName: String(raw.customerName ?? "").trim() || undefined,
-      customerPhone: String(raw.customerPhone ?? "").trim() || undefined,
-      customerEmail: String(raw.customerEmail ?? "").trim() || undefined,
-      shippingDistrictCode: raw.shippingDistrictCode || undefined,
-      shippingAddressLine: String(raw.shippingAddressLine ?? "").trim() || undefined,
-      shippingArea: String(raw.shippingArea ?? "").trim() || undefined,
-      deliveryZoneId: raw.deliveryZoneId || undefined,
-      deliveryFeePaisa: raw.deliveryFeePaisa ? toPaisa(raw.deliveryFeePaisa) : undefined,
-      discountTotalPaisa: toPaisa(raw.discountTotalPaisa),
-      discountLabel: String(raw.discountLabel ?? "").trim() || undefined,
-      extraCharges: extraCharges.length > 0 ? extraCharges : undefined,
-      codSurchargePaisa: raw.codSurchargePaisa ? toPaisa(raw.codSurchargePaisa) : undefined,
-      paymentMethod: raw.paymentMethod || "COD",
-      markDelivered: raw.markDelivered === "on" || raw.markDelivered === "true",
-      expectedDeliveryAt: raw.expectedDeliveryAt || undefined,
-      customerNote: String(raw.customerNote ?? "").trim() || undefined,
-      internalNote: String(raw.internalNote ?? "").trim() || undefined,
-      idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
-      items,
-    },
-    "Create order",
-  );
-
   let orderId: string;
   try {
+    const raw = formDataToObject(formData);
+    const variantIds = formData.getAll("itemVariantId").map(String).filter(Boolean);
+    const items = variantIds.map((variantId, index) => ({
+      variantId,
+      quantity: Number(formData.getAll("itemQuantity")[index] ?? 1),
+      unitPricePaisa: formData.getAll("itemUnitPrice")[index] ? toPaisa(formData.getAll("itemUnitPrice")[index]) : undefined,
+      discountPaisa: formData.getAll("itemDiscount")[index] ? toPaisa(formData.getAll("itemDiscount")[index]) : 0,
+      note: String(formData.getAll("itemNote")[index] ?? "").trim() || undefined,
+    }));
+
+    const chargeLabels = formData.getAll("chargeLabel").map(String);
+    const extraCharges = chargeLabels
+      .map((label, index) => ({
+        label: label.trim(),
+        amountPaisa: toPaisa(formData.getAll("chargeAmount")[index]),
+        note: String(formData.getAll("chargeNote")[index] ?? "").trim() || undefined,
+      }))
+      .filter((charge) => charge.label.length >= 2 && charge.amountPaisa > 0);
+
+    const parsed = parseInput(
+      createOrderInputSchema,
+      {
+        channel: raw.channel || "ADMIN",
+        storefrontId: raw.storefrontId || undefined,
+        customerId: raw.customerId || undefined,
+        customerName: String(raw.customerName ?? "").trim() || undefined,
+        customerPhone: String(raw.customerPhone ?? "").trim() || undefined,
+        customerEmail: String(raw.customerEmail ?? "").trim() || undefined,
+        shippingDistrictCode: raw.shippingDistrictCode || undefined,
+        shippingAddressLine: String(raw.shippingAddressLine ?? "").trim() || undefined,
+        shippingArea: String(raw.shippingArea ?? "").trim() || undefined,
+        deliveryZoneId: raw.deliveryZoneId || undefined,
+        deliveryFeePaisa: raw.deliveryFeePaisa ? toPaisa(raw.deliveryFeePaisa) : undefined,
+        discountTotalPaisa: toPaisa(raw.discountTotalPaisa),
+        discountLabel: String(raw.discountLabel ?? "").trim() || undefined,
+        extraCharges: extraCharges.length > 0 ? extraCharges : undefined,
+        codSurchargePaisa: raw.codSurchargePaisa ? toPaisa(raw.codSurchargePaisa) : undefined,
+        paymentMethod: raw.paymentMethod || "COD",
+        markDelivered: raw.markDelivered === "on" || raw.markDelivered === "true",
+        expectedDeliveryAt: raw.expectedDeliveryAt || undefined,
+        customerNote: String(raw.customerNote ?? "").trim() || undefined,
+        internalNote: String(raw.internalNote ?? "").trim() || undefined,
+        idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
+        items,
+      },
+      "Create order",
+    );
+
     const result = await createOrder(context, parsed);
     orderId = result.order.id;
   } catch (error) {
@@ -130,22 +130,20 @@ export async function transitionOrderAction(_prev: ActionState, formData: FormDa
     return toState(error, "You are not allowed to update orders");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    orderTransitionSchema,
-    { orderId: String(raw.orderId ?? ""), status: String(raw.status ?? ""), note: String(raw.note ?? "").trim() || undefined },
-    "Update order status",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      orderTransitionSchema,
+      { orderId: String(raw.orderId ?? ""), status: String(raw.status ?? ""), note: String(raw.note ?? "").trim() || undefined },
+      "Update order status",
+    );
     await transitionOrder(context, parsed);
+    revalidatePath("/admin/orders");
+    revalidatePath(`/admin/orders/${parsed.orderId}`);
+    return { status: "success", message: `Order moved to ${parsed.status.replace(/_/g, " ").toLowerCase()}` };
   } catch (error) {
     return toState(error, "Unable to update the order status");
   }
-
-  revalidatePath("/admin/orders");
-  revalidatePath(`/admin/orders/${parsed.orderId}`);
-  return { status: "success", message: `Order moved to ${parsed.status.replace(/_/g, " ").toLowerCase()}` };
 }
 
 export async function cancelOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -156,14 +154,14 @@ export async function cancelOrderAction(_prev: ActionState, formData: FormData):
     return toState(error, "You are not allowed to cancel orders");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    cancelOrderSchema,
-    { orderId: raw.orderId, reason: raw.reason, restock: raw.restock !== "false" },
-    "Cancel order",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      cancelOrderSchema,
+      { orderId: raw.orderId, reason: raw.reason, restock: raw.restock !== "false" },
+      "Cancel order",
+    );
+
     const result = await cancelOrder(context, parsed);
     revalidatePath("/admin/orders");
     revalidatePath(`/admin/orders/${parsed.orderId}`);
@@ -237,21 +235,21 @@ export async function recordPaymentAction(_prev: ActionState, formData: FormData
     return toState(error, "You are not allowed to record payments");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    recordPaymentSchema,
-    {
-      orderId: raw.orderId,
-      amountPaisa: toPaisa(raw.amount),
-      method: raw.method,
-      providerReference: String(raw.providerReference ?? "").trim() || undefined,
-      note: String(raw.note ?? "").trim() || undefined,
-      idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
-    },
-    "Record payment",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      recordPaymentSchema,
+      {
+        orderId: raw.orderId,
+        amountPaisa: toPaisa(raw.amount),
+        method: raw.method,
+        providerReference: String(raw.providerReference ?? "").trim() || undefined,
+        note: String(raw.note ?? "").trim() || undefined,
+        idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
+      },
+      "Record payment",
+    );
+
     const result = await recordPayment(context, parsed);
     revalidatePath(`/admin/orders/${parsed.orderId}`);
     revalidatePath("/admin/orders");
@@ -274,22 +272,22 @@ export async function refundPaymentAction(_prev: ActionState, formData: FormData
     return toState(error, "You are not allowed to issue refunds");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    refundSchema,
-    {
-      orderId: raw.orderId,
-      paymentId: raw.paymentId || undefined,
-      amountPaisa: toPaisa(raw.amount),
-      method: raw.method || "MANUAL",
-      reason: raw.reason,
-      note: String(raw.note ?? "").trim() || undefined,
-      idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
-    },
-    "Refund payment",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      refundSchema,
+      {
+        orderId: raw.orderId,
+        paymentId: raw.paymentId || undefined,
+        amountPaisa: toPaisa(raw.amount),
+        method: raw.method || "MANUAL",
+        reason: raw.reason,
+        note: String(raw.note ?? "").trim() || undefined,
+        idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
+      },
+      "Refund payment",
+    );
+
     const request = await requestRefund(context, parsed);
     if (parsed.method === "MANUAL" || parsed.method === "CASH") {
       await settleRefund(context, { refundId: request.refund.id, providerReference: "manual" });

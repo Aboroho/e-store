@@ -22,6 +22,7 @@ import {
   updateVariant,
 } from "@/modules/catalog/service";
 import { attributeInputSchema, categoryInputSchema, productInputSchema, variantInputSchema } from "@/modules/catalog/schemas";
+import { attributeValuesFromForm } from "@/modules/catalog/attribute-form-values";
 import { setPriceListItem, setPriceListItems } from "@/modules/pricing/service";
 import type { ActionState } from "@/modules/auth/action-state";
 import { logger } from "@/lib/logging";
@@ -82,29 +83,28 @@ export async function createProductAction(_prev: ActionState, formData: FormData
     return toState(error, "You are not allowed to create products");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    productInputSchema,
-    {
-      ...raw,
-      productType: raw.productType === "VARIABLE" ? "VARIABLE" : "SIMPLE",
-      requiresShipping: raw.requiresShipping === "on",
-      isFeatured: raw.isFeatured === "on",
-      isPreorderEnabled: raw.isPreorderEnabled === "on",
-      packagingCostPaisa: bdtToPaisa(raw.packagingCostPaisa) ?? 0,
-      weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
-      taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
-      preorderExpectedAt: raw.preorderExpectedAt || undefined,
-      categoryIds: formData.getAll("categoryIds").map(String),
-      primaryCategoryId: raw.primaryCategoryId || undefined,
-      attributeIds: formData.getAll("attributeIds").map(String),
-      variants: variantsFromFormData(formData),
-    },
-    "Create product",
-  );
-
   let productId: string;
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      productInputSchema,
+      {
+        ...raw,
+        productType: raw.productType === "VARIABLE" ? "VARIABLE" : "SIMPLE",
+        requiresShipping: raw.requiresShipping === "on",
+        isFeatured: raw.isFeatured === "on",
+        isPreorderEnabled: raw.isPreorderEnabled === "on",
+        packagingCostPaisa: bdtToPaisa(raw.packagingCostPaisa) ?? 0,
+        weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
+        taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
+        preorderExpectedAt: raw.preorderExpectedAt || undefined,
+        categoryIds: formData.getAll("categoryIds").map(String),
+        primaryCategoryId: raw.primaryCategoryId || undefined,
+        attributeIds: formData.getAll("attributeIds").map(String),
+        variants: variantsFromFormData(formData),
+      },
+      "Create product",
+    );
     const product = await createProduct(context, parsed);
     productId = product.id;
   } catch (error) {
@@ -123,27 +123,26 @@ export async function updateProductAction(_prev: ActionState, formData: FormData
     return toState(error, "You are not allowed to update products");
   }
 
-  const raw = formDataToObject(formData);
-  const productId = String(raw.productId ?? "");
-  const parsed = parseInput(
-    productInputSchema.omit({ variants: true }),
-    {
-      ...raw,
-      requiresShipping: raw.requiresShipping === "on",
-      isFeatured: raw.isFeatured === "on",
-      isPreorderEnabled: raw.isPreorderEnabled === "on",
-      packagingCostPaisa: bdtToPaisa(raw.packagingCostPaisa) ?? 0,
-      weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
-      taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
-      preorderExpectedAt: raw.preorderExpectedAt || undefined,
-      categoryIds: formData.getAll("categoryIds").map(String),
-      primaryCategoryId: raw.primaryCategoryId || undefined,
-      attributeIds: formData.getAll("attributeIds").map(String),
-    },
-    "Update product",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const productId = String(raw.productId ?? "");
+    const parsed = parseInput(
+      productInputSchema.omit({ variants: true }),
+      {
+        ...raw,
+        requiresShipping: raw.requiresShipping === "on",
+        isFeatured: raw.isFeatured === "on",
+        isPreorderEnabled: raw.isPreorderEnabled === "on",
+        packagingCostPaisa: bdtToPaisa(raw.packagingCostPaisa) ?? 0,
+        weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
+        taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
+        preorderExpectedAt: raw.preorderExpectedAt || undefined,
+        categoryIds: formData.getAll("categoryIds").map(String),
+        primaryCategoryId: raw.primaryCategoryId || undefined,
+        attributeIds: formData.getAll("attributeIds").map(String),
+      },
+      "Update product",
+    );
     await updateProduct(context, productId, parsed);
     revalidatePath("/admin/catalog/products");
     revalidatePath(`/admin/catalog/products/${productId}`);
@@ -176,21 +175,20 @@ export async function updateVariantAction(_prev: ActionState, formData: FormData
     return toState(error, "You are not allowed to update products");
   }
 
-  const raw = formDataToObject(formData);
-  const variantId = String(raw.variantId ?? "");
-  const parsed = parseInput(
-    variantInputSchema.partial({ name: true, sku: true, pricePaisa: true }),
-    {
-      ...raw,
-      pricePaisa: bdtToPaisa(raw.pricePaisa),
-      compareAtPricePaisa: bdtToPaisa(raw.compareAtPricePaisa),
-      costPaisa: bdtToPaisa(raw.costPaisa),
-      isPreorderEnabled: raw.isPreorderEnabled === "on",
-    },
-    "Update variant",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const variantId = String(raw.variantId ?? "");
+    const parsed = parseInput(
+      variantInputSchema.partial({ name: true, sku: true, pricePaisa: true }),
+      {
+        ...raw,
+        pricePaisa: bdtToPaisa(raw.pricePaisa),
+        compareAtPricePaisa: bdtToPaisa(raw.compareAtPricePaisa),
+        costPaisa: bdtToPaisa(raw.costPaisa),
+        isPreorderEnabled: raw.isPreorderEnabled === "on",
+      },
+      "Update variant",
+    );
     await updateVariant(context, variantId, parsed);
     revalidatePath(String(raw.productPath ?? "/admin/catalog/products"));
     return { status: "success", message: "Variant saved." };
@@ -250,19 +248,18 @@ export async function createCategoryAction(_prev: ActionState, formData: FormDat
     return toState(error, "You are not allowed to manage categories");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    categoryInputSchema,
-    {
-      ...raw,
-      parentId: raw.parentId || undefined,
-      isActive: raw.isActive === "on",
-      isFeatured: raw.isFeatured === "on",
-    },
-    "Create category",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      categoryInputSchema,
+      {
+        ...raw,
+        parentId: raw.parentId || undefined,
+        isActive: raw.isActive === "on",
+        isFeatured: raw.isFeatured === "on",
+      },
+      "Create category",
+    );
     await createCategory(context, parsed);
     revalidatePath("/admin/catalog/categories");
     return { status: "success", message: "Category created." };
@@ -279,20 +276,19 @@ export async function updateCategoryAction(_prev: ActionState, formData: FormDat
     return toState(error, "You are not allowed to manage categories");
   }
 
-  const raw = formDataToObject(formData);
-  const categoryId = String(raw.categoryId ?? "");
-  const parsed = parseInput(
-    categoryInputSchema.partial(),
-    {
-      ...raw,
-      parentId: raw.parentId || undefined,
-      isActive: raw.isActive === "on",
-      isFeatured: raw.isFeatured === "on",
-    },
-    "Update category",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const categoryId = String(raw.categoryId ?? "");
+    const parsed = parseInput(
+      categoryInputSchema.partial(),
+      {
+        ...raw,
+        parentId: raw.parentId || undefined,
+        isActive: raw.isActive === "on",
+        isFeatured: raw.isFeatured === "on",
+      },
+      "Update category",
+    );
     await updateCategory(context, categoryId, parsed);
     revalidatePath("/admin/catalog/categories");
     return { status: "success", message: "Category saved." };
@@ -317,23 +313,20 @@ export async function createAttributeAction(_prev: ActionState, formData: FormDa
     return toState(error, "You are not allowed to manage attributes");
   }
 
-  const raw = formDataToObject(formData);
-  const values = formData
-    .getAll("values")
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((value) => {
-      const [text, color] = value.split("|");
-      return { value: text ?? "", colorHex: color || undefined };
+  try {
+    const raw = formDataToObject(formData);
+    // Values arrive as parallel arrays from the dynamic row editor: one
+    // `valueTexts` input per row plus an optional `valueColors` hex input.
+    const values = attributeValuesFromForm({
+      texts: formData.getAll("valueTexts").map(String),
+      colors: formData.getAll("valueColors").map(String),
     });
 
-  const parsed = parseInput(
-    attributeInputSchema,
-    { ...raw, isVariantDefining: raw.isVariantDefining === "on", values },
-    "Create attribute",
-  );
-
-  try {
+    const parsed = parseInput(
+      attributeInputSchema,
+      { ...raw, isVariantDefining: raw.isVariantDefining === "on", values },
+      "Create attribute",
+    );
     await createAttribute(context, parsed);
     revalidatePath("/admin/catalog/attributes");
     return { status: "success", message: "Attribute created." };

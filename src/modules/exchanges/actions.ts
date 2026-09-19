@@ -48,39 +48,39 @@ export async function createExchangeAction(_prev: ActionState, formData: FormDat
     return toState(error, "You are not allowed to create exchanges");
   }
 
-  const raw = formDataToObject(formData);
-  const returnItems = formData.getAll("returnItemId").map(String).filter(Boolean);
-  const returnQuantities = formData.getAll("returnQuantity").map((value) => Number(value ?? 0));
-  const replacementVariants = formData.getAll("replacementVariantId").map(String).filter(Boolean);
-  const replacementQuantities = formData.getAll("replacementQuantity").map((value) => Number(value ?? 0));
-
-  const parsed = parseInput(
-    createExchangeInputSchema,
-    {
-      orderId: String(raw.orderId ?? ""),
-      reasonCode: String(raw.reasonCode ?? ""),
-      reasonNote: String(raw.reasonNote ?? "").trim() || undefined,
-      channel: raw.channel === "CUSTOMER" ? "CUSTOMER" : "STAFF",
-      returnItems: returnItems.map((orderItemId, index) => ({ orderItemId, variantId: orderItemId, quantity: returnQuantities[index] ?? 0 })),
-      replacementItems: replacementVariants.map((variantId, index) => ({ variantId, quantity: replacementQuantities[index] ?? 0 })),
-      deliveryChargePaisa: raw.deliveryChargePaisa ? toPaisa(raw.deliveryChargePaisa) : undefined,
-      additionalChargePaisa: raw.additionalChargePaisa ? toPaisa(raw.additionalChargePaisa) : undefined,
-      discountPaisa: raw.discountPaisa ? toPaisa(raw.discountPaisa) : undefined,
-      internalNote: String(raw.internalNote ?? "").trim() || undefined,
-      idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
-    },
-    "Create exchange",
-  );
-
-  // The variant for a returned line is always the variant on the original order
-  // item; the service resolves it from the order, so the placeholder id is fine.
-  const input = {
-    ...parsed,
-    returnItems: parsed.returnItems.map((item) => ({ ...item, variantId: item.variantId })),
-  };
-
   let exchangeId: string;
   try {
+    const raw = formDataToObject(formData);
+    const returnItems = formData.getAll("returnItemId").map(String).filter(Boolean);
+    const returnQuantities = formData.getAll("returnQuantity").map((value) => Number(value ?? 0));
+    const replacementVariants = formData.getAll("replacementVariantId").map(String).filter(Boolean);
+    const replacementQuantities = formData.getAll("replacementQuantity").map((value) => Number(value ?? 0));
+
+    const parsed = parseInput(
+      createExchangeInputSchema,
+      {
+        orderId: String(raw.orderId ?? ""),
+        reasonCode: String(raw.reasonCode ?? ""),
+        reasonNote: String(raw.reasonNote ?? "").trim() || undefined,
+        channel: raw.channel === "CUSTOMER" ? "CUSTOMER" : "STAFF",
+        returnItems: returnItems.map((orderItemId, index) => ({ orderItemId, variantId: orderItemId, quantity: returnQuantities[index] ?? 0 })),
+        replacementItems: replacementVariants.map((variantId, index) => ({ variantId, quantity: replacementQuantities[index] ?? 0 })),
+        deliveryChargePaisa: raw.deliveryChargePaisa ? toPaisa(raw.deliveryChargePaisa) : undefined,
+        additionalChargePaisa: raw.additionalChargePaisa ? toPaisa(raw.additionalChargePaisa) : undefined,
+        discountPaisa: raw.discountPaisa ? toPaisa(raw.discountPaisa) : undefined,
+        internalNote: String(raw.internalNote ?? "").trim() || undefined,
+        idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
+      },
+      "Create exchange",
+    );
+
+    // The variant for a returned line is always the variant on the original order
+    // item; the service resolves it from the order, so the placeholder id is fine.
+    const input = {
+      ...parsed,
+      returnItems: parsed.returnItems.map((item) => ({ ...item, variantId: item.variantId })),
+    };
+
     const result = await createExchangeRequest(context, input);
     exchangeId = result.exchange.id;
   } catch (error) {
@@ -99,18 +99,16 @@ export async function approveExchangeAction(_prev: ActionState, formData: FormDa
     return toState(error, "You are not allowed to approve exchanges");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(exchangeDecisionInputSchema, { exchangeId: String(raw.exchangeId ?? ""), reason: undefined }, "Approve exchange");
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(exchangeDecisionInputSchema, { exchangeId: String(raw.exchangeId ?? ""), reason: undefined }, "Approve exchange");
     await approveExchange(context, { exchangeId: parsed.exchangeId, note: String(raw.note ?? "").trim() || null });
+    revalidatePath("/admin/exchanges");
+    revalidatePath(`/admin/exchanges/${parsed.exchangeId}`);
+    return { status: "success", message: "Exchange approved and replacement stock reserved" };
   } catch (error) {
     return toState(error, "Unable to approve the exchange");
   }
-
-  revalidatePath("/admin/exchanges");
-  revalidatePath(`/admin/exchanges/${parsed.exchangeId}`);
-  return { status: "success", message: "Exchange approved and replacement stock reserved" };
 }
 
 export async function rejectExchangeAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -165,27 +163,27 @@ export async function inspectExchangeAction(_prev: ActionState, formData: FormDa
     return toState(error, "You are not allowed to inspect exchanges");
   }
 
-  const raw = formDataToObject(formData);
-  const itemIds = formData.getAll("inspectItemId").map(String);
-  const outcomes = formData.getAll("inspectOutcome").map(String);
-  const notes = formData.getAll("inspectNote").map(String);
-  const quantities = formData.getAll("inspectQuantity").map((value) => Number(value ?? 0));
-
-  const parsed = parseInput(
-    inspectExchangeInputSchema,
-    {
-      exchangeId: String(raw.exchangeId ?? ""),
-      items: itemIds.map((itemId, index) => ({
-        itemId,
-        outcome: outcomes[index],
-        quantity: quantities[index] && quantities[index] > 0 ? quantities[index] : undefined,
-        note: notes[index]?.trim() || undefined,
-      })),
-    },
-    "Inspect exchange",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const itemIds = formData.getAll("inspectItemId").map(String);
+    const outcomes = formData.getAll("inspectOutcome").map(String);
+    const notes = formData.getAll("inspectNote").map(String);
+    const quantities = formData.getAll("inspectQuantity").map((value) => Number(value ?? 0));
+
+    const parsed = parseInput(
+      inspectExchangeInputSchema,
+      {
+        exchangeId: String(raw.exchangeId ?? ""),
+        items: itemIds.map((itemId, index) => ({
+          itemId,
+          outcome: outcomes[index],
+          quantity: quantities[index] && quantities[index] > 0 ? quantities[index] : undefined,
+          note: notes[index]?.trim() || undefined,
+        })),
+      },
+      "Inspect exchange",
+    );
+
     const result = await inspectExchange(context, parsed);
     revalidatePath(`/admin/exchanges/${parsed.exchangeId}`);
     revalidatePath("/admin/inventory");

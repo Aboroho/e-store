@@ -112,6 +112,40 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
     expect(second.slug).not.toBe(product.slug);
   });
 
+  it("creates an attribute with values even if the AuditLog.changedFields default is missing", async () => {
+    // Regression test: databases that lost the column default (for example
+    // after `prisma db push` without the schema default) used to fail every
+    // attribute write with "Null constraint violation on the (not available)"
+    // because the audit row omitted the NOT NULL array column. Audit writes
+    // must always supply `changedFields` so they never depend on the default.
+    await prisma.$executeRawUnsafe('ALTER TABLE "AuditLog" ALTER COLUMN "changedFields" DROP DEFAULT');
+    try {
+      const attribute = await createAttribute(actor(), {
+        name: `Size ${context.slug}`,
+        slug: undefined,
+        type: "SELECT",
+        unit: undefined,
+        isVariantDefining: true,
+        values: [{ value: "S" }, { value: "M" }, { value: "L" }],
+      });
+
+      const values = await prisma.attributeValue.findMany({
+        where: { attributeId: attribute.id },
+        orderBy: { position: "asc" },
+      });
+      expect(values.map((value) => value.value)).toEqual(["S", "M", "L"]);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { entityId: attribute.id, action: "attribute.created" },
+        select: { changedFields: true, summary: true },
+      });
+      expect(audit).not.toBeNull();
+      expect(audit?.changedFields).toEqual(["attribute"]);
+    } finally {
+      await prisma.$executeRawUnsafe('ALTER TABLE "AuditLog" ALTER COLUMN "changedFields" SET DEFAULT ARRAY[]::TEXT[]');
+    }
+  });
+
   it("rejects duplicate SKUs across variants instead of letting the database fail", async () => {
     const duplicateSku = `DUP-${context.slug}`;
 
