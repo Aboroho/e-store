@@ -1,0 +1,276 @@
+@reference "../../app/globals.css";
+
+@layer components {
+  /*
+    Typography and block styles shared by the editable surface (`.ProseMirror.rte-content`)
+    and the read-only renderer (`.rte-content`). Everything is scoped under `.rte-content`
+    so the rules never leak into the rest of the application, and lives in the components
+    layer so consumers can still adjust it with utility classes.
+  */
+
+  .rte-content {
+    @apply text-sm leading-6 text-slate-800;
+    overflow-wrap: anywhere;
+  }
+
+  .rte-content:focus {
+    outline: none;
+  }
+
+  .rte-content > * + * {
+    margin-top: 0.375rem;
+  }
+
+  .rte-content p {
+    @apply my-0;
+  }
+
+  .rte-content h1,
+  .rte-content h2,
+  .rte-content h3 {
+    @apply font-semibold tracking-tight text-slate-900;
+  }
+
+  .rte-content h1 {
+    @apply text-2xl leading-8;
+    margin-top: 1.5rem;
+  }
+
+  .rte-content h2 {
+    @apply text-xl leading-7;
+    margin-top: 1.25rem;
+  }
+
+  .rte-content h3 {
+    @apply text-lg leading-7;
+    margin-top: 1rem;
+  }
+
+  .rte-content > h1:first-child,
+  .rte-content > h2:first-child,
+  .rte-content > h3:first-child {
+    margin-top: 0;
+  }
+
+  .rte-content strong {
+    @apply font-semibold text-slate-900;
+  }
+
+  .rte-content a {
+    @apply text-brand-600 underline decoration-brand-300 underline-offset-2;
+  }
+
+  .rte-content a:hover {
+    @apply text-brand-700 decoration-brand-500;
+  }
+
+  .rte-content code {
+    @apply rounded border border-slate-200 bg-slate-100 px-1 py-0.5 font-mono text-[0.85em] text-slate-800;
+  }
+
+  .rte-content pre {
+    @apply my-2 overflow-x-auto rounded-lg bg-slate-900 p-4 font-mono text-xs leading-5 text-slate-100;
+  }
+
+  .rte-content pre code {
+    @apply border-0 bg-transparent p-0 text-inherit;
+  }
+
+  .rte-content blockquote {
+    @apply my-2 border-l-[3px] border-slate-300 pl-4 text-slate-600;
+  }
+
+  .rte-content hr {
+    @apply my-4 border-0 border-t border-slate-200;
+  }
+
+  .rte-content ul,
+  .rte-content ol {
+    @apply my-1 pl-6;
+  }
+
+  .rte-content ul {
+    list-style: disc;
+  }
+
+  .rte-content ol {
+    list-style: decimal;
+  }
+
+  .rte-content ul ul {
+    list-style: circle;
+  }
+
+  .rte-content li {
+    @apply my-0.5;
+  }
+
+  .rte-content li > p {
+    @apply my-0;
+  }
+
+  /* Checklist ------------------------------------------------------------- */
+  /* The editor's task item node view does not carry data-type, so target the list. */
+
+  .rte-content ul[data-type="taskList"] {
+    list-style: none;
+    padding-left: 0.125rem;
+  }
+
+  .rte-content ul[data-type="taskList"] > li {
+    @apply flex items-start gap-2;
+  }
+
+  .rte-content ul[data-type="taskList"] > li > label {
+    @apply mt-1 flex shrink-0 select-none;
+  }
+
+  .rte-content ul[data-type="taskList"] > li > label input {
+    @apply h-4 w-4 cursor-pointer rounded border-slate-300 accent-brand-600;
+  }
+
+  .rte-content ul[data-type="taskList"] > li > div {
+    @apply min-w-0 flex-1;
+  }
+
+  .rte-content ul[data-type="taskList"] > li[data-checked="true"] > div {
+    @apply text-slate-400 line-through decoration-slate-300;
+  }
+
+  .rte-content ul[data-type="taskList"] > li ul[data-type="taskList"] {
+    @apply mt-1;
+  }
+
+  /* Media ----------------------------------------------------------------- */
+
+  .rte-content figure[data-type="image"],
+  .rte-content .rte-image {
+    @apply my-2;
+  }
+
+  .rte-content img {
+    @apply h-auto max-w-full rounded-lg;
+  }
+
+  .rte-content a[data-type="fileAttachment"],
+  .rte-content .rte-file {
+    @apply my-2 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 no-underline;
+  }
+
+  .rte-content a[data-type="fileAttachment"]:hover {
+    @apply border-brand-300 bg-brand-50 text-brand-700;
+  }
+
+  .rte-content .rte-file-icon {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white text-slate-500 shadow-sm;
+  }
+
+  .rte-content .rte-file-name {
+    @apply min-w-0 flex-1 truncate font-medium;
+  }
+
+  .rte-content .rte-file-meta {
+    @apply shrink-0 text-xs text-slate-500;
+  }
+
+  /* Tables ---------------------------------------------------------------- */
+
+  .rte-content .tableWrapper {
+    @apply my-3 overflow-x-auto;
+  }
+
+  .rte-content table {
+    @apply w-full border-collapse text-sm;
+    table-layout: fixed;
+  }
+
+  .rte-content th,
+  .rte-content td {
+    @apply relative border border-slate-200 px-2.5 py-1.5 text-left align-top;
+    min-width: 4rem;
+  }
+
+  .rte-content th {
+    @apply bg-slate-50 font-semibold text-slate-700;
+  }
+
+  .rte-content th > p,
+  .rte-content td > p {
+    @apply my-0;
+  }
+
+  /* Editor-only state ----------------------------------------------------- */
+
+  .rte-content.ProseMirror {
+    min-height: var(--rte-min-height, 10rem);
+    @apply px-4 py-3;
+  }
+
+  .rte-content .is-empty::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none float-left h-0 text-slate-400;
+  }
+
+  /* React node views (image, file) draw their own selection ring on the inner element. */
+  .rte-content .ProseMirror-selectednode:not(.rte-node-host),
+  .rte-content .rte-image[data-selected="true"] img,
+  .rte-content .rte-file[data-selected="true"] {
+    @apply ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+  }
+
+  .rte-content .rte-node-host.ProseMirror-selectednode {
+    outline: none;
+  }
+
+  .rte-content .rte-image[data-selected="true"] {
+    /* Room for the floating action bar even on very small images. */
+    @apply min-h-12 min-w-40;
+  }
+
+  .rte-content .selectedCell::after {
+    content: "";
+    @apply pointer-events-none absolute inset-0 bg-brand-500/10;
+  }
+
+  .rte-content .column-resize-handle {
+    @apply pointer-events-none absolute -right-px bottom-0 top-0 w-1 bg-brand-400;
+  }
+
+  .rte-content.resize-cursor {
+    cursor: col-resize;
+  }
+
+  .rte-upload-widget {
+    @apply my-2 block;
+  }
+
+  /* Bubble menu host: positioned by the editor, content rendered by React. */
+  .rte-bubble {
+    @apply absolute left-0 top-0 z-30 w-max;
+    visibility: hidden;
+  }
+
+  /* Marks the slash-command trigger while the menu is open. */
+  .rte-content .suggestion {
+    @apply rounded bg-brand-50 text-brand-700;
+  }
+
+  .rte-content .rte-image {
+    @apply relative;
+  }
+
+  .rte-content .rte-image img {
+    @apply cursor-default;
+  }
+
+  .rte-content[contenteditable="true"] .rte-image img,
+  .rte-content[contenteditable="true"] .rte-file {
+    @apply cursor-grab;
+  }
+}
+
+/* ProseMirror injects unlayered defaults; these must stay unlayered to win. */
+.rte-content .ProseMirror-gapcursor:after {
+  border-top-color: var(--color-slate-700, #334155);
+}
+

@@ -5,6 +5,7 @@ import { resolveStorefrontByHost, storefrontProduct, productReviews, reviewSumma
 import { AddToCartButton } from "@/components/storefront/cart";
 import { TrackViewContent } from "@/components/storefront/marketing-events";
 import { ReviewForm } from "@/components/storefront/review-form";
+import { RichTextContent, parseRichText } from "@/components/rich-text-editor";
 import { reviewImageLimits } from "@/modules/reviews/service";
 
 export const dynamic = "force-dynamic";
@@ -181,13 +182,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           {product.description ? (
             <details open className="rounded-lg border p-4">
               <summary className="cursor-pointer text-sm font-medium">Description</summary>
-              <div className="mt-2 space-y-2 text-sm text-slate-600">
-                {product.description.split(/\n{2,}/).map((paragraph, index) => (
-                  <p key={index} className="whitespace-pre-line">
-                    {paragraph}
-                  </p>
-                ))}
-              </div>
+              <RichTextContent value={parseRichText(product.description)} className="mt-2 text-slate-600" />
             </details>
           ) : null}
         </div>
