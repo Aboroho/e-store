@@ -3,7 +3,7 @@ import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
 import { listAttributes } from "@/modules/catalog/queries";
 import { createStarterAttributesAction } from "@/modules/catalog/actions";
-import { AttributeForm, AttributeValueForm } from "@/components/forms/catalog-forms";
+import { AttributeForm, AttributeValueForm, AttributeValueImageForm } from "@/components/forms/catalog-forms";
 import { Badge, Card, CardContent, CardFooter, CardHeader, CardTitle, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
 
@@ -70,6 +70,7 @@ export default async function AttributesPage() {
                   ))}
                   {attribute.values.length === 0 ? <span className="text-xs text-slate-400">No values yet.</span> : null}
                 </div>
+                {canManage ? attribute.values.map((value) => <AttributeValueImageForm key={value.id} id={value.id} label={value.value} mediaId={value.mediaId} />) : null}
                 {canManage ? <AttributeValueForm attributeId={attribute.id} /> : null}
               </CardContent>
               <CardFooter className="text-xs text-slate-500">

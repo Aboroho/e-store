@@ -1,4 +1,5 @@
 import "server-only";
+import { replaceMediaReferences, lockMedia } from "@/modules/media/references";
 import { prisma } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { recordAudit } from "@/lib/audit";
@@ -21,6 +22,7 @@ export interface PageActor {
 }
 
 export const pageInputSchema = z.object({
+  ogMediaId: z.string().uuid().nullable().optional(),
   storefrontId: z.string().uuid().nullable().default(null),
   title: z.string().trim().min(1).max(200),
   slug: z
@@ -91,7 +93,10 @@ export async function workingDocument(businessId: string, pageId: string): Promi
 async function assertMediaOwnership(businessId: string, document: PageDocument) {
   const ids = documentMediaIds(document);
   if (ids.length === 0) return;
-  const found = await prisma.mediaAsset.findMany({ where: { id: { in: ids }, businessId, deletedAt: null }, select: { id: true } });
+  const found = await prisma.mediaAsset.findMany({ where: { id: { in: ids }, businessId, deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" }, select: { id: true, mimeType: true } });
+  const videos = new Set(documentMediaIds(document, "video"));
+  const images = new Set(documentMediaIds(document, "image"));
+  if (found.some((asset) => (videos.has(asset.id) && !asset.mimeType.startsWith("video/")) || (images.has(asset.id) && !asset.mimeType.startsWith("image/")))) throw AppError.validation("Choose the correct media type for each page control");
   const missing = ids.filter((id) => !found.some((asset) => asset.id === id));
   if (missing.length > 0) {
     throw AppError.validation(`One or more images in this layout no longer exist in the media library (${missing.length})`);
@@ -100,19 +105,11 @@ async function assertMediaOwnership(businessId: string, document: PageDocument) 
 
 /** Replace the page's media usages so the media manager shows accurate references. */
 async function syncPageUsages(tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0], page: { id: string; businessId: string }, document: PageDocument) {
-  const ids = documentMediaIds(document);
-  await tx.mediaUsage.deleteMany({ where: { entityType: "PAGE", entityId: page.id } });
-  for (const mediaId of ids) {
-    await tx.mediaUsage.upsert({
-      where: { mediaId_entityType_entityId_field: { mediaId, entityType: "PAGE", entityId: page.id, field: "block" } },
-      create: { mediaId, entityType: "PAGE", entityId: page.id, field: "block" },
-      update: {},
-    });
-  }
-  for (const mediaId of ids) {
-    const count = await tx.mediaUsage.count({ where: { mediaId } });
-    await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
-  }
+  await lockMedia(tx, page.businessId);
+  // Retained versions remain restorable; preserve their references as well as the live document.
+  const versions = await tx.pageVersion.findMany({ where: { pageId: page.id }, select: { document: true } });
+  const ids = [...new Set([...documentMediaIds(document), ...versions.flatMap((version) => documentMediaIds(parsePageDocument(version.document)))])];
+  await replaceMediaReferences(tx, page.businessId, "PAGE", page.id, "block", ids, { publicOnly: true });
 }
 
 export async function createPage(actor: PageActor, input: PageInput) {
@@ -126,6 +123,7 @@ export async function createPage(actor: PageActor, input: PageInput) {
   await assertMediaOwnership(actor.businessId, document);
 
   const page = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
     if (parsed.isHomepage) {
       await tx.page.updateMany({ where: { businessId: actor.businessId, storefrontId: parsed.storefrontId, isHomepage: true }, data: { isHomepage: false } });
     }
@@ -159,7 +157,8 @@ export async function createPage(actor: PageActor, input: PageInput) {
         note: "Initial draft",
       },
     });
-    const updated = await tx.page.update({ where: { id: created.id }, data: { draftVersionId: version.id } });
+    await replaceMediaReferences(tx, actor.businessId, "PAGE", created.id, "ogImage", parsed.ogMediaId ? [parsed.ogMediaId] : [], { imagesOnly: true, publicOnly: true });
+    const updated = await tx.page.update({ where: { id: created.id }, data: { draftVersionId: version.id, ogMediaId: parsed.ogMediaId ?? null } });
     await syncPageUsages(tx, created, document);
     return updated;
   });
@@ -194,12 +193,15 @@ export async function updatePageMeta(actor: PageActor, input: PageInput & { page
   if (clash) throw AppError.conflict(`A page with the slug "${parsed.slug}" already exists for this storefront`);
 
   const updated = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
     if (parsed.isHomepage) {
       await tx.page.updateMany({ where: { businessId: actor.businessId, storefrontId: parsed.storefrontId, isHomepage: true, id: { not: page.id } }, data: { isHomepage: false } });
     }
+    if (parsed.ogMediaId !== undefined) await replaceMediaReferences(tx, actor.businessId, "PAGE", page.id, "ogImage", parsed.ogMediaId ? [parsed.ogMediaId] : [], { imagesOnly: true, publicOnly: true });
     return tx.page.update({
       where: { id: page.id },
       data: {
+        ogMediaId: parsed.ogMediaId,
         storefrontId: parsed.storefrontId,
         title: parsed.title,
         slug: parsed.slug,
@@ -239,6 +241,7 @@ export async function saveDraft(actor: PageActor, input: { pageId: string; docum
   await assertMediaOwnership(actor.businessId, document);
 
   const version = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
     if (page.draftVersionId) {
       await tx.pageVersion.update({ where: { id: page.draftVersionId }, data: { status: "ARCHIVED", archivedAt: new Date() } });
     }
@@ -296,6 +299,7 @@ export async function publishPage(actor: PageActor, input: { pageId: string; ver
   await assertMediaOwnership(actor.businessId, document);
 
   const published = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
     await tx.pageVersion.updateMany({ where: { pageId: page.id, status: "PUBLISHED" }, data: { status: "ARCHIVED", archivedAt: new Date() } });
     const promoted = await tx.pageVersion.update({
       where: { id: version.id },
@@ -332,6 +336,7 @@ export async function publishPage(actor: PageActor, input: { pageId: string; ver
 export async function unpublishPage(actor: PageActor, pageId: string) {
   const page = await getPage(actor.businessId, pageId);
   const updated = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
     await tx.pageVersion.updateMany({ where: { pageId: page.id, status: "PUBLISHED" }, data: { status: "ARCHIVED", archivedAt: new Date() } });
     return tx.page.update({ where: { id: page.id }, data: { status: "DRAFT", publishedVersionId: null, updatedByUserId: actor.userId } });
   });
@@ -367,6 +372,7 @@ export async function duplicatePage(actor: PageActor, pageId: string) {
     slug,
     type: page.type as never,
     template: page.template,
+    ogMediaId: page.ogMediaId,
     seoTitle: `${page.title} (copy)`,
     seoDescription: page.seoDescription ?? undefined,
     robots: page.robots as never,
@@ -380,8 +386,11 @@ export async function deletePage(actor: PageActor, pageId: string) {
   if (page.isSystem) throw AppError.invalidState("System pages cannot be deleted");
 
   await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
     await tx.page.update({ where: { id: page.id }, data: { deletedAt: new Date(), status: "ARCHIVED", archivedAt: new Date(), isHomepage: false } });
-    await tx.mediaUsage.deleteMany({ where: { entityType: "PAGE", entityId: page.id } });
+    await replaceMediaReferences(tx, actor.businessId, "PAGE", page.id, "block", []);
+    await replaceMediaReferences(tx, actor.businessId, "PAGE", page.id, "ogImage", []);
+    await tx.page.update({ where: { id: page.id }, data: { ogMediaId: null } });
   });
 
   await recordAudit({

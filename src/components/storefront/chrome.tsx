@@ -29,6 +29,7 @@ export async function StorefrontChrome({
     }),
   ]);
 
+  const business = await prisma.business.findUnique({ where: { id: storefront.businessId }, select: { logoMediaId: true } });
   const theme = storefront.themeConfig as { primaryColor?: string; accentColor?: string };
   const primaryColor = typeof theme.primaryColor === "string" ? theme.primaryColor : "#4f46e5";
   const accentColor = typeof theme.accentColor === "string" ? theme.accentColor : "#0f172a";
@@ -46,7 +47,10 @@ export async function StorefrontChrome({
       <header className="border-b bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           <Link href="/" className="text-lg font-semibold" style={{ color: accentColor }}>
-            {storefront.name}
+            {business?.logoMediaId ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={`/api/v1/media/${business.logoMediaId}`} alt={storefront.name} className="inline-block max-h-12 max-w-40 object-contain" />
+            ) : storefront.name}
           </Link>
           <nav aria-label="Main" className="order-3 w-full sm:order-2 sm:w-auto">
             <ul className="flex flex-wrap items-center gap-4 text-sm">

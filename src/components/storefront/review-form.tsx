@@ -1,11 +1,12 @@
 "use client";
 
+import { MediaPicker } from "@/components/media/media-picker";
 import * as React from "react";
 import { useActionState } from "react";
-import { Alert, Button, Card, CardContent, CardHeader, CardTitle, FormField, Input, Label, Textarea } from "@/components/ui/primitives";
+import { Alert, Card, CardContent, CardHeader, CardTitle, FormField, Input, Label, Textarea } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
 import { initialActionState } from "@/modules/auth/action-state";
-import { confirmReviewImageUploadAction, reportReviewAction, requestReviewImageUploadAction, submitReviewAction } from "@/modules/reviews/actions";
+import { reportReviewAction, submitReviewAction } from "@/modules/reviews/actions";
 
 /**
  * Customer review form.
@@ -19,58 +20,16 @@ export function ReviewForm({ productId, productName, maxImages = 3 }: { productI
   const [state, action] = useActionState(submitReviewAction, initialActionState);
   const [rating, setRating] = React.useState(5);
   const [images, setImages] = React.useState<Array<{ assetId: string; name: string; previewUrl: string }>>([]);
-  const [uploadError, setUploadError] = React.useState<string | null>(null);
-  const [uploading, setUploading] = React.useState(false);
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
   // Reset the picker when a submission succeeds. This is the "adjust state while
   // rendering" pattern from the React docs: cheaper and more obvious than an effect that
   // watches the action result, and it cannot flash the old images.
   const [lastStatus, setLastStatus] = React.useState(state.status);
-  const [formVersion, setFormVersion] = React.useState(0);
   if (lastStatus !== state.status) {
     setLastStatus(state.status);
     if (state.status === "success") {
       setImages([]);
-      setFormVersion((version) => version + 1);
     }
   }
-
-  const upload = async (files: File[]) => {
-    setUploadError(null);
-    setUploading(true);
-    const next = [...images];
-    for (const file of files) {
-      if (next.length >= maxImages) {
-        setUploadError(`You can attach up to ${maxImages} images`);
-        break;
-      }
-      try {
-        const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-        const checksum = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-        const start = await requestReviewImageUploadAction({ fileName: file.name, mimeType: file.type, sizeBytes: file.size, checksum });
-        if (!start.ok) {
-          setUploadError(start.message);
-          continue;
-        }
-        const response = await fetch(start.uploadUrl, { method: "PUT", headers: start.headers, body: file });
-        if (!response.ok) {
-          setUploadError(`Upload failed (${response.status})`);
-          continue;
-        }
-        const confirmed = await confirmReviewImageUploadAction({ assetId: start.assetId, checksum });
-        if (!confirmed.ok) {
-          setUploadError(confirmed.message ?? "Upload failed");
-          continue;
-        }
-        next.push({ assetId: start.assetId, name: file.name, previewUrl: URL.createObjectURL(file) });
-      } catch (error) {
-        setUploadError(error instanceof Error ? error.message : "Upload failed");
-      }
-    }
-    setImages(next);
-    setUploading(false);
-  };
 
   if (state.status === "success") {
     return <Alert variant="success">{state.message}</Alert>;
@@ -115,22 +74,8 @@ export function ReviewForm({ productId, productName, maxImages = 3 }: { productI
 
           <div className="space-y-2">
             <Label>Photos ({images.length} of {maxImages})</Label>
-            <input
-              key={formVersion}
-              ref={inputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              hidden
-              onChange={(event) => {
-                void upload([...(event.target.files ?? [])]);
-                if (inputRef.current) inputRef.current.value = "";
-              }}
-            />
+            <MediaPicker audience="customer" multiple maxSelection={Math.max(0, maxImages - images.length)} excludeIds={images.map((image) => image.assetId)} onConfirm={(assets) => setImages((current) => [...current, ...assets.map((asset) => ({ assetId: asset.id, name: asset.originalName, previewUrl: asset.url ?? "" }))])} />
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" disabled={uploading || images.length >= maxImages} onClick={() => inputRef.current?.click()}>
-                {uploading ? "Uploading…" : "Add photos"}
-              </Button>
               {images.map((image) => (
                 <span key={image.assetId} className="relative">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -148,7 +93,6 @@ export function ReviewForm({ productId, productName, maxImages = 3 }: { productI
               ))}
             </div>
             <p className="text-xs text-slate-500">Only customers who bought this product can review it. Reviews are checked before publishing.</p>
-            {uploadError ? <Alert variant="warning">{uploadError}</Alert> : null}
           </div>
 
           <SubmitButton pendingLabel="Submitting…">Submit review</SubmitButton>

@@ -102,11 +102,13 @@ export async function getProductForEdit(businessId: string, productId: string) {
   const product = await prisma.product.findFirst({
     where: { id: productId, businessId },
     include: {
+      images: { orderBy: { position: "asc" } },
       categories: { select: { categoryId: true, isPrimary: true } },
       attributes: { select: { attributeId: true } },
       variants: {
         orderBy: { position: "asc" },
         include: {
+          images: { orderBy: { position: "asc" } },
           attributeValues: { select: { attributeValueId: true, attributeId: true } },
           inventory: { select: { onHand: true, reserved: true, damaged: true, inspection: true, averageCostPaisa: true } },
         },
@@ -121,7 +123,7 @@ export async function listCategoryOptions(businessId: string) {
   return prisma.category.findMany({
     where: { businessId, deletedAt: null },
     orderBy: [{ path: "asc" }, { position: "asc" }],
-    select: { id: true, name: true, slug: true, path: true, parentId: true, isActive: true, position: true, isFeatured: true, _count: { select: { products: true } } },
+    select: { imageMediaId: true, id: true, name: true, slug: true, path: true, parentId: true, isActive: true, position: true, isFeatured: true, _count: { select: { products: true } } },
   });
 }
 
@@ -130,7 +132,7 @@ export async function listAttributes(businessId: string) {
     where: { businessId },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     include: {
-      values: { orderBy: [{ position: "asc" }, { value: "asc" }], select: { id: true, value: true, slug: true, colorHex: true } },
+      values: { orderBy: [{ position: "asc" }, { value: "asc" }], select: { id: true, value: true, slug: true, colorHex: true, mediaId: true } },
       _count: { select: { productLinks: true } },
     },
   });

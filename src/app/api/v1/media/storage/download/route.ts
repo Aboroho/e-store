@@ -1,3 +1,4 @@
+import { MEDIA_EXTENSIONS } from "@/modules/media/policy";
 import { NextResponse } from "next/server";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -50,21 +51,8 @@ export async function GET(request: Request) {
   }
   if (!info.isFile()) return reject("File not found", 404);
 
-  const contentType = key.endsWith(".png")
-    ? "image/png"
-    : key.endsWith(".webp")
-      ? "image/webp"
-      : key.endsWith(".avif")
-        ? "image/avif"
-        : key.endsWith(".gif")
-          ? "image/gif"
-          : key.endsWith(".svg")
-            ? "image/svg+xml"
-            : key.endsWith(".pdf")
-              ? "application/pdf"
-              : key.endsWith(".jpg") || key.endsWith(".jpeg")
-                ? "image/jpeg"
-                : "application/octet-stream";
+  const extension = key.split(".").pop();
+  const contentType = Object.entries(MEDIA_EXTENSIONS).find(([, ext]) => ext === extension)?.[0] ?? "application/octet-stream";
 
   const stream = Readable.toWeb(createReadStream(full)) as unknown as ReadableStream;
   return new NextResponse(stream, {

@@ -19,6 +19,7 @@ export const variantInputSchema = z.object({
   weightGrams: z.coerce.number().int().min(0).max(1_000_000).optional(),
   isPreorderEnabled: z.boolean().default(false),
   attributeValueIds: z.array(zId).default([]),
+  imageMediaId: zId.nullable().optional(),
 });
 
 export const productInputSchema = z.object({
@@ -46,6 +47,8 @@ export const productInputSchema = z.object({
   categoryIds: z.array(zId).default([]),
   primaryCategoryId: zId.optional(),
   attributeIds: z.array(zId).default([]),
+  imageIds: z.array(zId).max(50).optional(),
+  variantImages: z.array(z.object({ variantId: zId, mediaId: zId.nullable() })).max(500).optional(),
   variants: z.array(variantInputSchema).min(1, "A product needs at least one variant"),
 });
 
@@ -55,6 +58,7 @@ export const updateProductSchema = productInputSchema.omit({ variants: true }).p
 });
 
 export const categoryInputSchema = z.object({
+  imageMediaId: zId.nullable().optional(),
   name: z.string().trim().min(1, "Enter the category name").max(120),
   slug: zOptionalSlug,
   parentId: zId.optional(),

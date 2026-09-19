@@ -71,6 +71,7 @@ const optionalText = (max: number) =>
   z.preprocess(emptyToUndefined, z.string().trim().max(max).optional());
 
 const businessProfileSchema = z.object({
+  logoMediaId: z.string().uuid().nullable().optional(),
   name: z.string().trim().min(2, "Enter the trading name").max(160),
   legalName: optionalText(200),
   phone: optionalText(24),
@@ -90,6 +91,7 @@ export async function updateBusinessProfileAction(_prev: ActionState, formData: 
     assertPermission(session, "settings.manage");
 
     const parsed = businessProfileSchema.safeParse({
+      logoMediaId: formData.get("logoMediaId") || null,
       name: formData.get("name"),
       legalName: formData.get("legalName") ?? undefined,
       phone: formData.get("phone") ?? undefined,
@@ -111,6 +113,7 @@ export async function updateBusinessProfileAction(_prev: ActionState, formData: 
       { userId: session.id, businessId: session.businessId, actorLabel: session.email },
       {
         name: parsed.data.name,
+        logoMediaId: parsed.data.logoMediaId,
         legalName: parsed.data.legalName ?? undefined,
         phone: parsed.data.phone ?? undefined,
         email: parsed.data.email || undefined,

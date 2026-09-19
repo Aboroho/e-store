@@ -186,7 +186,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             id: attribute.id,
             name: attribute.name,
             type: attribute.type,
-            values: attribute.values.map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex })),
+            values: attribute.values.map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex, mediaId: value.mediaId })),
           }))}
           defaultPriceListName={defaultPriceList?.name ?? "the default price list"}
           product={{
@@ -210,6 +210,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             packagingCostPaisa: product.packagingCostPaisa,
             seoTitle: product.seoTitle,
             seoDescription: product.seoDescription,
+            imageIds: product.images.map((image) => image.mediaId),
             categoryIds: product.categories.map((entry) => entry.categoryId),
             primaryCategoryId: product.categories.find((entry) => entry.isPrimary)?.categoryId ?? null,
             attributeIds: product.attributes.map((entry) => entry.attributeId),
@@ -223,6 +224,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               costPaisa: variant.costPaisa,
               weightGrams: variant.weightGrams,
               isPreorderEnabled: variant.isPreorderEnabled,
+              imageMediaId: variant.images[0]?.mediaId ?? variant.imageMediaId ?? null,
               attributeValueIds: variant.attributeValues.map((entry) => entry.attributeValueId),
             })),
           }}

@@ -1,4 +1,6 @@
 import "server-only";
+import { saveProductMedia, setVariantImage } from "./media";
+import { replaceMediaReferences } from "@/modules/media/references";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
@@ -169,6 +171,8 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
       },
     });
 
+    await saveProductMedia(tx, actor.businessId, product.id, input, input.description);
+
     for (const [index, variantInput] of input.variants.entries()) {
       const optionKey = optionKeyFor(
         variantInput.attributeValueIds.map((id) => {
@@ -220,6 +224,7 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
         },
       });
 
+      await setVariantImage(tx, actor.businessId, variant.id, variantInput.imageMediaId === undefined ? variantInput.attributeValueIds.map((id) => valueById.get(id)?.mediaId).find(Boolean) ?? null : variantInput.imageMediaId);
       await ensureBalance(tx, { locationId, variantId: variant.id });
     }
 
@@ -281,6 +286,7 @@ export async function updateProduct(actor: CatalogActor, productId: string, inpu
       data.slug = await uniqueSlug(tx, actor.businessId, input.slug, "product");
     }
 
+    await saveProductMedia(tx, actor.businessId, productId, input, input.description);
     const updated = await tx.product.update({ where: { id: productId }, data, select: { id: true, name: true, slug: true, status: true } });
 
     if (input.categoryIds) {
@@ -400,6 +406,7 @@ export async function updateVariant(actor: CatalogActor, variantId: string, inpu
     });
     if (!variant) throw AppError.notFound("Variant not found");
 
+    if (input.imageMediaId !== undefined) await setVariantImage(tx, actor.businessId, variantId, input.imageMediaId);
     if (input.sku && input.sku.toUpperCase() !== variant.sku) {
       const clash = await tx.variant.findFirst({
         where: { sku: input.sku.toUpperCase(), id: { not: variantId } },
@@ -579,6 +586,8 @@ export async function createCategory(actor: CatalogActor, input: CategoryInput) 
       select: { id: true, name: true, slug: true, parentId: true },
     });
 
+    await replaceMediaReferences(tx, actor.businessId, "CATEGORY", category.id, "image", input.imageMediaId ? [input.imageMediaId] : [], { imagesOnly: true, publicOnly: true });
+    await tx.category.update({ where: { id: category.id }, data: { imageMediaId: input.imageMediaId ?? null } });
     await recalculateCategoryPath(tx, category.id);
     await tx.auditLog.create({
       data: {
@@ -628,6 +637,10 @@ export async function updateCategory(actor: CatalogActor, categoryId: string, in
       },
     });
 
+    if (input.imageMediaId !== undefined) {
+      await replaceMediaReferences(tx, actor.businessId, "CATEGORY", categoryId, "image", input.imageMediaId ? [input.imageMediaId] : [], { imagesOnly: true, publicOnly: true });
+      await tx.category.update({ where: { id: categoryId }, data: { imageMediaId: input.imageMediaId } });
+    }
     await recalculateCategoryPath(tx, categoryId);
     await tx.auditLog.create({
       data: {
@@ -658,6 +671,7 @@ export async function deleteCategory(actor: CatalogActor, categoryId: string): P
     if (category._count.children > 0) {
       throw AppError.conflict("This category has sub-categories. Move or delete them first.");
     }
+    await replaceMediaReferences(tx, actor.businessId, "CATEGORY", categoryId, "image", []);
     await tx.category.delete({ where: { id: categoryId } });
     await tx.auditLog.create({
       data: {
@@ -810,4 +824,14 @@ export async function createStarterAttributes(actor: CatalogActor): Promise<numb
     created += 1;
   }
   return created;
+}
+
+export async function updateAttributeValueImage(actor: CatalogActor, attributeValueId: string, mediaId: string | null) {
+  return withTransaction(async (tx) => {
+    const value = await tx.attributeValue.findFirst({ where: { id: attributeValueId, attribute: { businessId: actor.businessId } } });
+    if (!value) throw AppError.notFound("Attribute value not found");
+    await replaceMediaReferences(tx, actor.businessId, "ATTRIBUTE_VALUE", value.id, "image", mediaId ? [mediaId] : [], { imagesOnly: true, publicOnly: true });
+    await tx.attributeValue.update({ where: { id: value.id }, data: { mediaId } });
+    await tx.auditLog.create({ data: { businessId: actor.businessId, actorUserId: actor.userId, action: "attribute.image_updated", entityType: "AttributeValue", entityId: value.id, after: { mediaId } } });
+  });
 }

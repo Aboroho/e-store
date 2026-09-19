@@ -98,6 +98,7 @@ export default async function CategoriesPage() {
                 <CategoryForm
                   categories={categories.map((entry) => ({ id: entry.id, name: entry.name, path: entry.path }))}
                   category={{
+                    imageMediaId: category.imageMediaId,
                     id: category.id,
                     name: category.name,
                     slug: category.slug,

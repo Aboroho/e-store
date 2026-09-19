@@ -48,8 +48,8 @@ describe.skipIf(!reachable)("stage five content surfaces (database)", () => {
    * the checksum-based reuse path is only taken when a test asks for it.
    */
   function pngBytes(): Buffer {
-    const header = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex");
-    return Buffer.concat([header, Buffer.from(randomUUID().replace(/-/g, ""), "hex")]);
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=", "base64");
+    return Buffer.concat([png, Buffer.from(randomUUID())]);
   }
 
   it("refuses a disallowed type, an oversize file and an unconfigured deployment", async () => {
@@ -76,7 +76,7 @@ describe.skipIf(!reachable)("stage five content surfaces (database)", () => {
     expect(start.upload!.url).not.toContain("S3_");
 
     // The browser PUTs to the signed URL — here that is the route handler itself.
-    const put = await uploadRoute(new Request(start.upload!.url, { method: "PUT", body: new Uint8Array(bytes), headers: { "content-type": "image/png" } }));
+    const put = await uploadRoute(new Request(new URL(start.upload!.url, "http://localhost:3000"), { method: "PUT", body: new Uint8Array(bytes), headers: { "content-type": "image/png" } }));
     expect(put.status).toBe(200);
 
     const confirmed = await confirmUpload(actor, { assetId: start.asset.id, checksum });
@@ -84,22 +84,22 @@ describe.skipIf(!reachable)("stage five content surfaces (database)", () => {
     expect(confirmed.url).toBeTruthy();
 
     const download = await signedDownloadUrl(actor, start.asset.id, "inline");
-    const fetched = await downloadRoute(new Request(download.url));
+    const fetched = await downloadRoute(new Request(new URL(download.url, "http://localhost:3000")));
     expect(fetched.status).toBe(200);
     expect((await fetched.arrayBuffer()).byteLength).toBe(bytes.byteLength);
 
     // A tampered signature is refused, and so is an expired link.
     const tampered = download.url.replace(/signature=[^&]+/, "signature=deadbeef");
-    expect((await downloadRoute(new Request(tampered))).status).toBe(403);
+    expect((await downloadRoute(new Request(new URL(tampered, "http://localhost:3000")))).status).toBe(403);
     const expired = download.url.replace(/expires=\d+/, "expires=1");
-    expect((await downloadRoute(new Request(expired))).status).toBe(410);
+    expect((await downloadRoute(new Request(new URL(expired, "http://localhost:3000")))).status).toBe(410);
   });
 
   it("reuses identical bytes instead of storing a second copy", async () => {
     const bytes = pngBytes();
     const checksum = createHash("sha256").update(bytes).digest("hex");
     const first = await requestUpload(actor, { fileName: "duplicate-source.png", mimeType: "image/png", sizeBytes: bytes.byteLength, checksum });
-    const put = await uploadRoute(new Request(first.upload!.url, { method: "PUT", body: new Uint8Array(bytes), headers: { "content-type": "image/png" } }));
+    const put = await uploadRoute(new Request(new URL(first.upload!.url, "http://localhost:3000"), { method: "PUT", body: new Uint8Array(bytes), headers: { "content-type": "image/png" } }));
     expect(put.status).toBe(200);
     await confirmUpload(actor, { assetId: first.asset.id, checksum });
 
@@ -120,7 +120,7 @@ describe.skipIf(!reachable)("stage five content surfaces (database)", () => {
     const bytes = pngBytes();
     const checksum = createHash("sha256").update(bytes).digest("hex");
     const start = await requestUpload(actor, { fileName: "used.png", mimeType: "image/png", sizeBytes: bytes.byteLength, checksum, visibility: "PRIVATE" });
-    const put = await uploadRoute(new Request(start.upload!.url, { method: "PUT", body: new Uint8Array(bytes), headers: { "content-type": "image/png" } }));
+    const put = await uploadRoute(new Request(new URL(start.upload!.url, "http://localhost:3000"), { method: "PUT", body: new Uint8Array(bytes), headers: { "content-type": "image/png" } }));
     expect(put.status).toBe(200);
     const confirmed = await confirmUpload(actor, { assetId: start.asset.id, checksum });
 
@@ -142,7 +142,10 @@ describe.skipIf(!reachable)("stage five content surfaces (database)", () => {
     expect(blocked.blocked[0]?.usages.length).toBeGreaterThan(0);
 
     const forced = await deleteMediaAssets(actor, { assetIds: [confirmed.id], force: true });
-    expect(forced.deleted).toBe(1);
+    expect(forced.deleted).toBe(0);
+    await prisma.reviewImage.deleteMany({ where: { mediaId: confirmed.id } });
+    await prisma.mediaUsage.deleteMany({ where: { mediaId: confirmed.id } });
+    expect((await deleteMediaAssets(actor, { assetIds: [confirmed.id] })).deleted).toBe(1);
     await expect(getMediaAsset(context.businessId, confirmed.id)).rejects.toThrow(AppError);
   });
 

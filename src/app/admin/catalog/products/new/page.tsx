@@ -34,7 +34,7 @@ export default async function NewProductPage() {
           id: attribute.id,
           name: attribute.name,
           type: attribute.type,
-          values: attribute.values.map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex })),
+          values: attribute.values.map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex, mediaId: value.mediaId })),
         }))}
         defaultPriceListName={defaultPriceList?.name ?? "the default price list"}
       />

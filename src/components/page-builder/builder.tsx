@@ -7,6 +7,7 @@ import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, use
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
+import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { MediaPicker } from "@/components/media/media-picker";
 import { BLOCK_DEFINITIONS, blockDefinition, blocksByCategory } from "@/modules/page-builder/blocks";
 import { SECTION_FIELDS, fieldsFor, type FieldSpec } from "@/modules/page-builder/fields";
@@ -697,7 +698,8 @@ function Field({
         <Label className="text-xs">{spec.label}</Label>
         <div className="flex items-center gap-2">
           <MediaPicker
-            trigger={<Button type="button" variant="outline" size="sm">{value ? "Change image" : "Choose image"}</Button>}
+            mimeGroup={spec.mimeGroup ?? "image"}
+            trigger={<Button type="button" variant="outline" size="sm">{value ? "Change media" : "Choose media"}</Button>}
             onSelect={(asset) => onChange(asset.id)}
           />
           {value ? (
@@ -770,7 +772,7 @@ function Field({
         <Label htmlFor={id} className="text-xs">
           {spec.label}
         </Label>
-        <Textarea id={id} rows={4} value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} />
+        {spec.name === "text" ? <RichTextEditor id={id} value={String(value ?? "")} onChange={onChange} maxLength={4000} /> : <Textarea id={id} rows={4} value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} />}
         {spec.help ? <p className="text-[11px] text-slate-500">{spec.help}</p> : null}
       </div>
     );

@@ -1,4 +1,5 @@
 import "server-only";
+import { replaceMediaReferences } from "@/modules/media/references";
 import type { CourierProviderCode, Prisma } from "@/generated/prisma/client";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
@@ -44,6 +45,7 @@ export interface ImportSettlementInput {
   settlementDate?: Date | null;
   bankReference?: string | null;
   sourceFileName?: string | null;
+  sourceMediaId?: string | null;
   note?: string | null;
   idempotencyKey?: string | null;
   rows: SettlementRowInput[];
@@ -101,6 +103,7 @@ export async function importCourierSettlement(actor: SettlementActor, input: Imp
         netReceivedPaisa: totals.net,
         note: input.note ?? null,
         sourceFileName: input.sourceFileName ?? null,
+        sourceMediaId: input.sourceMediaId ?? null,
         importedByUserId: actor.userId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
       },
@@ -110,6 +113,8 @@ export async function importCourierSettlement(actor: SettlementActor, input: Imp
     let unmatched = 0;
     let matchedGrossPaisa = 0;
     let unmatchedGrossPaisa = 0;
+
+    if (input.sourceMediaId) await replaceMediaReferences(tx, actor.businessId, "SETTLEMENT", settlement.id, "source", [input.sourceMediaId]);
 
     for (const row of input.rows) {
       const courierFee = row.courierFeePaisa ?? 0;

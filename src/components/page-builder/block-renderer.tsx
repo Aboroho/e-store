@@ -1,3 +1,4 @@
+import { RichText } from "@/components/editor/rich-text";
 import Link from "next/link";
 import { prisma } from "@/lib/db/client";
 import { mediaUrlFor } from "@/modules/media/service";
@@ -54,7 +55,7 @@ function taka(paisa: number): string {
 async function mediaUrl(mediaId: string | null, businessId: string): Promise<{ url: string | null; alt: string }> {
   if (!mediaId) return { url: null, alt: "" };
   const asset = await prisma.mediaAsset.findFirst({
-    where: { id: mediaId, businessId, deletedAt: null },
+    where: { id: mediaId, businessId, deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" },
     select: { objectKey: true, visibility: true, originalName: true, extension: true, altText: true },
   });
   if (!asset) return { url: null, alt: "" };
@@ -176,17 +177,10 @@ async function renderBlock(type: string, props: Record<string, unknown>, storefr
     }
 
     case "text": {
-      const paragraphs = String(props.text ?? "")
-        .split(/\n{2,}/)
-        .filter((paragraph) => paragraph.trim().length > 0);
       const sizeClass = { sm: "text-sm", md: "text-base", lg: "text-lg" }[String(props.size ?? "md")] ?? "text-base";
       return (
         <div className={`space-y-3 ${sizeClass} ${ALIGN_CLASS[String(props.align ?? "left")]}`} style={props.color ? { color: String(props.color) } : undefined}>
-          {paragraphs.map((paragraph, index) => (
-            <p key={index} className="whitespace-pre-line">
-              {paragraph}
-            </p>
-          ))}
+          <RichText value={String(props.text ?? "")} />
         </div>
       );
     }
@@ -416,6 +410,10 @@ async function renderBlock(type: string, props: Record<string, unknown>, storefr
     }
 
     case "embed": {
+      if (props.videoMediaId) {
+        const video = await mediaUrl(String(props.videoMediaId), storefront.businessId);
+        return video.url ? <video controls src={video.url} aria-label={String(props.title ?? "Video")} className="w-full rounded-lg" /> : <Placeholder label="Video unavailable" />;
+      }
       // Only the provider and a validated id are stored; the URL is rebuilt here.
       const provider = String(props.provider ?? "youtube");
       const videoId = String(props.videoId ?? "");

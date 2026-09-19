@@ -61,6 +61,7 @@ export default async function PageDetail({ params }: { params: Promise<{ id: str
             <CardContent>
               <PageSettingsForm
                 page={{
+                  ogMediaId: page.ogMediaId,
                   id: page.id,
                   title: page.title,
                   slug: page.slug,

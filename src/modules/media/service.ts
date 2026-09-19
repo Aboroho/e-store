@@ -1,12 +1,15 @@
 import "server-only";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { fileTypeFromBuffer } from "file-type";
+import { MEDIA_EXTENSIONS } from "./policy";
+import { lockMedia } from "./references";
 import { prisma } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { getBusinessSettings } from "@/lib/settings";
 import { recordAudit } from "@/lib/audit";
-import { deleteObject, headObject, putObject, createDownloadUrl, createUploadTarget, storageDriverName, storageIsConfigured } from "@/modules/media/storage";
-import { ALLOWED_MEDIA_TYPES, copyMediaSchema, deleteMediaSchema, folderInputSchema, mediaUsageSchema, moveAssetSchema, renameMediaSchema, updateAssetSchema, uploadRequestSchema, confirmUploadSchema } from "@/modules/media/schemas";
+import { deleteObject, headObject, getObject, putObject, createDownloadUrl, createUploadTarget, storageDriverName, storageIsConfigured } from "@/modules/media/storage";
+import { ALLOWED_MEDIA_TYPES, copyMediaSchema, deleteMediaSchema, folderInputSchema, moveAssetSchema, renameMediaSchema, updateAssetSchema, uploadRequestSchema, confirmUploadSchema } from "@/modules/media/schemas";
 import type { MediaVisibility } from "@/generated/prisma/client";
 import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
@@ -14,10 +17,10 @@ import type { Prisma } from "@/generated/prisma/client";
 /**
  * Media manager service.
  *
- * The lifecycle is intentionally two-step so that a large file never travels through
- * an application request:
+ * The browser uploads directly to storage. Confirmation reads the bounded object
+ * server-side to validate file signatures and compute an authoritative hash:
  *
- *   1. `requestUpload()` validates the declaration (type, size, quota) and hands back a
+ *   1. `requestUpload()` validates the declaration (type and size) and hands back a
  *      short-lived, purpose-built upload URL plus an asset row in `PENDING` state.
  *   2. `confirmUpload()` verifies what actually landed in storage (existence, real size)
  *      and only then marks the asset `READY`.
@@ -28,6 +31,7 @@ import type { Prisma } from "@/generated/prisma/client";
 export interface MediaActor {
   businessId: string;
   userId: string;
+  customerId?: string;
   actorLabel: string;
 }
 
@@ -54,10 +58,8 @@ export interface MediaAssetView {
 const uuidSchema = z.string().uuid();
 
 function extensionFor(fileName: string, mimeType: string): string {
-  const fromName = path.extname(fileName).replace(".", "").toLowerCase();
-  if (fromName && fromName.length <= 8) return fromName;
-  const fromMime = mimeType.split("/")[1]?.split("+")[0]?.toLowerCase();
-  return fromMime && fromMime.length <= 8 ? fromMime : "bin";
+  void fileName;
+  return MEDIA_EXTENSIONS[mimeType] ?? "bin";
 }
 
 function slugify(value: string): string {
@@ -91,7 +93,7 @@ async function limits(businessId: string): Promise<{ maxBytes: number; allowed: 
   return { maxBytes: Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : 15 * 1024 * 1024, allowed };
 }
 
-/** Public URL for a public asset; private assets always get a signed, expiring URL. */
+/** Private buckets only: all binaries are served using short-lived signed GETs. */
 export async function mediaUrlFor(asset: {
   objectKey: string;
   visibility: MediaVisibility;
@@ -100,12 +102,7 @@ export async function mediaUrlFor(asset: {
 }): Promise<string | null> {
   if (!storageIsConfigured()) return null;
 
-  if (asset.visibility === "PUBLIC") {
-    const target = await createUploadTarget({ key: asset.objectKey, contentType: "application/octet-stream", expiresInSeconds: 60 });
-    if (target.publicUrl) return target.publicUrl;
-  }
-
-  const signed = await createDownloadUrl({ key: asset.objectKey, downloadName: downloadName(asset) });
+  const signed = await createDownloadUrl({ key: asset.objectKey, downloadName: downloadName(asset), disposition: "inline" });
   return signed.url;
 }
 
@@ -127,6 +124,7 @@ export async function toAssetView(asset: {
   folderId: string | null;
   folder?: { path: string } | null;
   createdAt: Date;
+  uploadStatus?: string;
 }): Promise<MediaAssetView> {
   return {
     id: asset.id,
@@ -145,14 +143,17 @@ export async function toAssetView(asset: {
     folderId: asset.folderId,
     folderPath: asset.folder?.path ?? null,
     createdAt: asset.createdAt,
-    url: await mediaUrlFor(asset),
+    url: asset.uploadStatus && asset.uploadStatus !== "READY" ? null : await mediaUrlFor(asset),
   };
 }
 
 export interface MediaListFilter {
   search?: string;
   folderId?: string | null;
-  mimeGroup?: "image" | "document" | "all";
+  mimeGroup?: "image" | "video" | "document" | "all";
+  excludeIds?: string[];
+  allowedTypes?: string[];
+  customerId?: string;
   visibility?: MediaVisibility;
   page?: number;
   pageSize?: number;
@@ -174,12 +175,17 @@ export async function listMedia(businessId: string, filter: MediaListFilter = {}
   const where: Prisma.MediaAssetWhereInput = {
     businessId,
     deletedAt: null,
+    uploadStatus: "READY",
+    ...(filter.customerId ? { uploadedByCustomerId: filter.customerId } : {}),
+    ...(filter.excludeIds?.length ? { id: { notIn: filter.excludeIds } } : {}),
     ...(filter.folderId === undefined ? {} : { folderId: filter.folderId }),
     ...(filter.visibility ? { visibility: filter.visibility } : {}),
+    ...(filter.allowedTypes?.length ? { AND: [{ OR: filter.allowedTypes.map((type) => ({ mimeType: type.endsWith("/*") ? { startsWith: type.slice(0, -1) } : type })) }] } : {}),
+    ...(filter.mimeGroup === "video" ? { mimeType: { startsWith: "video/" } } : {}),
     ...(filter.mimeGroup === "image"
       ? { mimeType: { startsWith: "image/" } }
       : filter.mimeGroup === "document"
-        ? { NOT: { mimeType: { startsWith: "image/" } } }
+        ? { mimeType: { in: ["application/pdf", "text/csv"] } }
         : {}),
     ...(filter.search
       ? {
@@ -224,7 +230,7 @@ export async function listMedia(businessId: string, filter: MediaListFilter = {}
 
 export async function getMediaAsset(businessId: string, assetId: string): Promise<MediaAssetView> {
   const asset = await prisma.mediaAsset.findFirst({
-    where: { id: uuidSchema.parse(assetId), businessId, deletedAt: null },
+    where: { id: uuidSchema.parse(assetId), businessId, deletedAt: null, uploadStatus: "READY" },
     include: { folder: { select: { path: true } } },
   });
   if (!asset) throw AppError.notFound("Media asset not found");
@@ -235,15 +241,15 @@ export async function listMediaFolders(businessId: string) {
   const folders = await prisma.mediaFolder.findMany({
     where: { businessId },
     orderBy: { path: "asc" },
-    include: { _count: { select: { assets: { where: { deletedAt: null } } } } },
+    include: { _count: { select: { assets: { where: { deletedAt: null, uploadStatus: "READY" } } } } },
   });
   return folders.map((folder) => ({ id: folder.id, name: folder.name, path: folder.path, parentId: folder.parentId, assetCount: folder._count.assets }));
 }
 
 export async function storageSummary(businessId: string) {
   const [aggregate, byType, driver] = await Promise.all([
-    prisma.mediaAsset.aggregate({ where: { businessId, deletedAt: null }, _sum: { sizeBytes: true }, _count: true }),
-    prisma.mediaAsset.groupBy({ by: ["mimeType"], where: { businessId, deletedAt: null }, _count: { _all: true }, _sum: { sizeBytes: true } }),
+    prisma.mediaAsset.aggregate({ where: { businessId, deletedAt: null, uploadStatus: "READY" }, _sum: { sizeBytes: true }, _count: true }),
+    prisma.mediaAsset.groupBy({ by: ["mimeType"], where: { businessId, deletedAt: null, uploadStatus: "READY" }, _count: { _all: true }, _sum: { sizeBytes: true } }),
     Promise.resolve(storageDriverName()),
   ]);
   return {
@@ -265,7 +271,7 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
   const parsed = uploadRequestSchema.parse(input);
   const { maxBytes, allowed } = await limits(actor.businessId);
 
-  if (!allowed.includes(parsed.mimeType)) {
+  if (!allowed.includes(parsed.mimeType) || !MEDIA_EXTENSIONS[parsed.mimeType]) {
     throw AppError.validation(`${parsed.mimeType} is not an allowed file type. Allowed: ${allowed.map((type) => type.split("/")[1]).join(", ")}`);
   }
   if (parsed.sizeBytes > maxBytes) {
@@ -279,7 +285,7 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
   // storing a second copy — the reference count tells us whether it is still used.
   if (parsed.checksum) {
     const existing = await prisma.mediaAsset.findFirst({
-      where: { businessId: actor.businessId, checksum: parsed.checksum, deletedAt: null },
+      where: { businessId: actor.businessId, checksum: parsed.checksum, deletedAt: null, uploadStatus: "READY", visibility: parsed.visibility, mimeType: parsed.mimeType, sizeBytes: parsed.sizeBytes, uploadedByCustomerId: actor.customerId ?? null },
       include: { folder: { select: { path: true } } },
     });
     if (existing) {
@@ -287,6 +293,7 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
     }
   }
 
+  if (parsed.folderId) await assertFolder(actor.businessId, parsed.folderId);
   const objectKey = buildObjectKey(actor.businessId, parsed.fileName, parsed.mimeType);
   const asset = await prisma.mediaAsset.create({
     data: {
@@ -301,16 +308,19 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
       title: parsed.title ?? parsed.fileName,
       altText: parsed.altText ?? null,
       checksum: parsed.checksum ?? null,
-      uploadedByUserId: actor.userId,
+      uploadedByUserId: actor.customerId ? null : actor.userId,
+      uploadedByCustomerId: actor.customerId ?? null,
+      uploadStatus: "PENDING",
       metadata: { pendingUpload: true },
     },
   });
 
-  const upload = await createUploadTarget({ key: objectKey, contentType: parsed.mimeType });
+  const upload = await createUploadTarget({ key: objectKey, contentType: parsed.mimeType, sizeBytes: parsed.sizeBytes });
 
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaAsset",
     entityId: asset.id,
@@ -329,6 +339,9 @@ export async function confirmUpload(actor: MediaActor, input: unknown) {
   });
   if (!asset) throw AppError.notFound("Media asset not found");
 
+  if (asset.uploadedByCustomerId !== (actor.customerId ?? null) || (!actor.customerId && asset.uploadedByUserId !== actor.userId)) throw AppError.forbidden("Only the uploader can confirm this upload");
+  if (asset.uploadStatus === "READY") return toAssetView(asset);
+  if (asset.uploadStatus !== "PENDING") throw AppError.validation("Upload was rejected; choose the file again");
   const head = await headObject(asset.objectKey);
   if (!head.exists) {
     // The browser never uploaded, or uploaded to the wrong key: drop the reservation.
@@ -336,11 +349,24 @@ export async function confirmUpload(actor: MediaActor, input: unknown) {
     throw AppError.validation("The upload did not reach storage. Please retry.");
   }
 
-  const { maxBytes } = await limits(actor.businessId);
-  if (head.sizeBytes > maxBytes) {
+  const { maxBytes, allowed } = await limits(actor.businessId);
+  let checksum: string;
+  try {
+    if (head.sizeBytes !== asset.sizeBytes || head.sizeBytes > maxBytes || head.sizeBytes < 1) throw AppError.validation("Uploaded file size does not match the allowed declaration");
+    if (head.contentType && head.contentType !== asset.mimeType) throw AppError.validation("Uploaded content type does not match");
+    const bytes = await getObject(asset.objectKey, Math.min(maxBytes, 64 * 1024 * 1024));
+    const detected = asset.mimeType === "text/csv" ? { mime: "text/csv" } : await fileTypeFromBuffer(bytes);
+    if (asset.mimeType === "text/csv") {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (bytes.length > 4 * 1024 * 1024 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text) || !text.includes(",") || /^\s*</.test(text)) throw AppError.validation("Choose a UTF-8 CSV document under 4 MB");
+    }
+    if (!detected || detected.mime !== asset.mimeType || !allowed.includes(detected.mime) || !MEDIA_EXTENSIONS[detected.mime]) throw AppError.validation("File contents do not match an allowed media type");
+    checksum = createHash("sha256").update(bytes).digest("hex");
+    if ((asset.checksum && asset.checksum !== checksum) || (parsed.checksum && parsed.checksum !== checksum)) throw AppError.validation("Upload checksum does not match");
+  } catch (error) {
+    await prisma.mediaAsset.update({ where: { id: asset.id }, data: { uploadStatus: "REJECTED", deletedAt: new Date() } });
     await deleteObject(asset.objectKey).catch(() => undefined);
-    await prisma.mediaAsset.update({ where: { id: asset.id }, data: { deletedAt: new Date(), metadata: { rejectedOversize: true } } });
-    throw AppError.validation(`Uploaded file is larger than the ${Math.floor(maxBytes / (1024 * 1024))} MB limit`);
+    throw error;
   }
 
   const updated = await prisma.mediaAsset.update({
@@ -349,14 +375,16 @@ export async function confirmUpload(actor: MediaActor, input: unknown) {
       sizeBytes: head.sizeBytes || asset.sizeBytes,
       width: parsed.width ?? asset.width,
       height: parsed.height ?? asset.height,
-      checksum: parsed.checksum ?? asset.checksum,
+      checksum,
+      uploadStatus: "READY",
       metadata: { pendingUpload: false },
     },
   });
 
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaAsset",
     entityId: asset.id,
@@ -375,15 +403,21 @@ export async function updateMediaAsset(actor: MediaActor, input: unknown) {
     await assertFolder(actor.businessId, parsed.folderId);
   }
 
-  const updated = await prisma.mediaAsset.update({
-    where: { id: asset.id },
-    data: {
-      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
-      ...(parsed.altText !== undefined ? { altText: parsed.altText } : {}),
-      ...(parsed.caption !== undefined ? { caption: parsed.caption } : {}),
-      ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
-      ...(parsed.folderId !== undefined ? { folderId: parsed.folderId } : {}),
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
+    const current = await tx.mediaAsset.findFirst({ where: { id: asset.id, businessId: actor.businessId, deletedAt: null } });
+    if (!current) throw AppError.notFound("Media asset not found");
+    if (parsed.visibility === "PRIVATE" && current.visibility === "PUBLIC" && (await findUsages(actor.businessId, [asset.id], tx)).length) throw AppError.conflict("Remove all media associations before making this asset private");
+    return tx.mediaAsset.update({
+      where: { id: asset.id },
+      data: {
+        ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+        ...(parsed.altText !== undefined ? { altText: parsed.altText } : {}),
+        ...(parsed.caption !== undefined ? { caption: parsed.caption } : {}),
+        ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
+        ...(parsed.folderId !== undefined ? { folderId: parsed.folderId } : {}),
+      },
+    });
   });
 
   // Product images mirror the asset's alt text so the storefront stays accessible.
@@ -393,7 +427,8 @@ export async function updateMediaAsset(actor: MediaActor, input: unknown) {
 
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaAsset",
     entityId: asset.id,
@@ -424,7 +459,8 @@ export async function createFolder(actor: MediaActor, input: unknown) {
 
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaFolder",
     entityId: folder.id,
@@ -450,7 +486,8 @@ export async function renameFolder(actor: MediaActor, folderId: string, name: st
     const updated = await tx.mediaFolder.update({ where: { id: folder.id }, data: { name, path: newPath } });
     await recordAudit({
       businessId: actor.businessId,
-      actorUserId: actor.userId,
+      actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
       actorLabel: actor.actorLabel,
       entityType: "MediaFolder",
       entityId: folder.id,
@@ -473,7 +510,8 @@ export async function deleteFolder(actor: MediaActor, folderId: string) {
   await prisma.mediaFolder.delete({ where: { id: folder.id } });
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaFolder",
     entityId: folder.id,
@@ -496,7 +534,8 @@ export async function moveMediaAssets(actor: MediaActor, input: unknown) {
 
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaAsset",
     entityId: parsed.assetIds[0],
@@ -515,7 +554,8 @@ export async function renameMediaAsset(actor: MediaActor, input: unknown) {
   const updated = await prisma.mediaAsset.update({ where: { id: asset.id }, data: { title: parsed.title } });
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaAsset",
     entityId: asset.id,
@@ -528,19 +568,18 @@ export async function renameMediaAsset(actor: MediaActor, input: unknown) {
 /** Copy an asset: new row, new object, same bytes. Usages are never copied. */
 export async function copyMediaAsset(actor: MediaActor, input: unknown) {
   const parsed = copyMediaSchema.parse(input);
-  const source = await prisma.mediaAsset.findFirst({ where: { id: parsed.assetId, businessId: actor.businessId, deletedAt: null } });
+  const source = await prisma.mediaAsset.findFirst({ where: { id: parsed.assetId, businessId: actor.businessId, deletedAt: null, uploadStatus: "READY" } });
   if (!source) throw AppError.notFound("Media asset not found");
   if (parsed.folderId) await assertFolder(actor.businessId, parsed.folderId);
 
-  const body = await import("@/modules/media/storage").then((module) => module.getObject(source.objectKey));
+  const body = await import("@/modules/media/storage").then((module) => module.getObject(source.objectKey, 64 * 1024 * 1024));
   const key = buildObjectKey(actor.businessId, source.originalName, source.mimeType);
-  await putObject({ key, body, contentType: source.mimeType });
-
   const copy = await prisma.mediaAsset.create({
     data: {
       businessId: actor.businessId,
       folderId: parsed.folderId === undefined ? source.folderId : parsed.folderId,
       objectKey: key,
+      uploadStatus: "PENDING",
       originalName: source.originalName,
       mimeType: source.mimeType,
       extension: source.extension,
@@ -556,9 +595,19 @@ export async function copyMediaAsset(actor: MediaActor, input: unknown) {
     },
   });
 
+  try {
+    await putObject({ key, body, contentType: source.mimeType });
+    await prisma.mediaAsset.update({ where: { id: copy.id }, data: { uploadStatus: "READY" } });
+  } catch (error) {
+    await prisma.mediaAsset.update({ where: { id: copy.id }, data: { uploadStatus: "REJECTED", deletedAt: new Date() } });
+    await deleteObject(key).catch(() => undefined);
+    throw error;
+  }
+
   await recordAudit({
     businessId: actor.businessId,
-    actorUserId: actor.userId,
+    actorUserId: actor.customerId ? null : actor.userId,
+    actorCustomerId: actor.customerId,
     actorLabel: actor.actorLabel,
     entityType: "MediaAsset",
     entityId: copy.id,
@@ -566,7 +615,7 @@ export async function copyMediaAsset(actor: MediaActor, input: unknown) {
     summary: `Copied ${source.originalName}`,
   });
 
-  return toAssetView(copy);
+  return toAssetView({ ...copy, uploadStatus: "READY" });
 }
 
 export interface MediaUsageConflict {
@@ -576,92 +625,58 @@ export interface MediaUsageConflict {
 }
 
 /** Assets that are referenced somewhere (used to block deletion). */
-export async function findUsages(businessId: string, assetIds: string[]) {
-  return prisma.mediaUsage.findMany({
-    where: { mediaId: { in: assetIds }, media: { businessId } },
-    select: { mediaId: true, entityType: true, entityId: true, field: true },
-  });
+export async function findUsages(businessId: string, assetIds: string[], tx: Prisma.TransactionClient = prisma) {
+  const ids = { in: assetIds };
+  const [usages, products, variants, reviews, pages, categories, values, businesses, settlements, primaryVariants, users] = await Promise.all([
+    tx.mediaUsage.findMany({ where: { mediaId: ids, media: { businessId } }, select: { mediaId: true, entityType: true, entityId: true, field: true } }),
+    tx.productImage.findMany({ where: { mediaId: ids, media: { businessId } } }),
+    tx.variantImage.findMany({ where: { mediaId: ids, media: { businessId } } }),
+    tx.reviewImage.findMany({ where: { mediaId: ids, media: { businessId } } }),
+    tx.page.findMany({ where: { ogMediaId: ids, businessId } }),
+    tx.category.findMany({ where: { imageMediaId: ids, businessId } }),
+    tx.attributeValue.findMany({ where: { mediaId: ids, attribute: { businessId } } }),
+    tx.business.findMany({ where: { id: businessId, logoMediaId: ids } }),
+    tx.courierSettlement.findMany({ where: { businessId, sourceMediaId: ids } }),
+    tx.variant.findMany({ where: { imageMediaId: ids, product: { businessId } } }),
+    tx.user.findMany({ where: { avatarMediaId: ids, businessId } }),
+  ]);
+  const versions = await tx.pageVersion.findMany({ where: { page: { businessId, deletedAt: null } }, select: { pageId: true, document: true } });
+  for (const version of versions) for (const mediaId of assetIds) {
+    if (JSON.stringify(version.document).includes(mediaId)) usages.push({ mediaId, entityType: "PAGE", entityId: version.pageId, field: "version" });
+  }
+  return [...usages,
+    ...products.map((r) => ({ mediaId: r.mediaId, entityType: "PRODUCT", entityId: r.productId, field: "image" })),
+    ...variants.map((r) => ({ mediaId: r.mediaId, entityType: "VARIANT", entityId: r.variantId, field: "image" })),
+    ...reviews.map((r) => ({ mediaId: r.mediaId, entityType: "REVIEW", entityId: r.reviewId, field: "image" })),
+    ...pages.map((r) => ({ mediaId: r.ogMediaId!, entityType: "PAGE", entityId: r.id, field: "ogImage" })),
+    ...categories.map((r) => ({ mediaId: r.imageMediaId!, entityType: "CATEGORY", entityId: r.id, field: "image" })),
+    ...values.map((r) => ({ mediaId: r.mediaId!, entityType: "ATTRIBUTE_VALUE", entityId: r.id, field: "image" })),
+    ...primaryVariants.map((r) => ({ mediaId: r.imageMediaId!, entityType: "VARIANT", entityId: r.id, field: "primary" })),
+    ...users.map((r) => ({ mediaId: r.avatarMediaId!, entityType: "USER", entityId: r.id, field: "avatar" })),
+    ...settlements.map((r) => ({ mediaId: r.sourceMediaId!, entityType: "SETTLEMENT", entityId: r.id, field: "source" })),
+    ...businesses.map((r) => ({ mediaId: r.logoMediaId!, entityType: "BUSINESS", entityId: r.id, field: "logo" })),
+  ];
 }
 
 export async function deleteMediaAssets(actor: MediaActor, input: unknown) {
   const parsed = deleteMediaSchema.parse(input);
-  const assets = await prisma.mediaAsset.findMany({ where: { id: { in: parsed.assetIds }, businessId: actor.businessId, deletedAt: null } });
-  if (assets.length === 0) throw AppError.notFound("Media assets not found");
-
-  const usages = await findUsages(actor.businessId, assets.map((asset) => asset.id));
-  if (usages.length > 0 && !parsed.force) {
-    const conflicts: MediaUsageConflict[] = assets
-      .map((asset) => ({ assetId: asset.id, originalName: asset.originalName, usages: usages.filter((usage) => usage.mediaId === asset.id) }))
-      .filter((conflict) => conflict.usages.length > 0);
-    return { deleted: 0, blocked: conflicts };
-  }
-
-  await prisma.$transaction(async (tx) => {
-    if (usages.length > 0) {
-      await tx.mediaUsage.deleteMany({ where: { mediaId: { in: assets.map((asset) => asset.id) } } });
-      await tx.productImage.deleteMany({ where: { mediaId: { in: assets.map((asset) => asset.id) } } });
-      await tx.variantImage.deleteMany({ where: { mediaId: { in: assets.map((asset) => asset.id) } } });
-    }
+  const result = await prisma.$transaction(async (tx) => {
+    await lockMedia(tx, actor.businessId);
+    const assets = await tx.mediaAsset.findMany({ where: { id: { in: parsed.assetIds }, businessId: actor.businessId, deletedAt: null } });
+    if (!assets.length) throw AppError.notFound("Media assets not found");
+    const usages = await findUsages(actor.businessId, assets.map((asset) => asset.id), tx);
+    const blocked: MediaUsageConflict[] = assets.map((asset) => ({ assetId: asset.id, originalName: asset.originalName, usages: usages.filter((usage) => usage.mediaId === asset.id) })).filter((row) => row.usages.length);
+    if (blocked.length) return { assets: [], blocked };
     await tx.mediaAsset.updateMany({ where: { id: { in: assets.map((asset) => asset.id) } }, data: { deletedAt: new Date(), usageCount: 0 } });
+    return { assets, blocked };
   });
-
-  // Storage failures must not block the soft delete: the row is already hidden.
-  await Promise.all(assets.map((asset) => deleteObject(asset.objectKey).catch(() => undefined)));
-
-  await recordAudit({
-    businessId: actor.businessId,
-    actorUserId: actor.userId,
-    actorLabel: actor.actorLabel,
-    entityType: "MediaAsset",
-    entityId: assets[0]!.id,
-    action: "media.deleted",
-    summary: `Deleted ${assets.length} asset(s)${parsed.force ? " (forced, usages removed)" : ""}`,
-  });
-
-  return { deleted: assets.length, blocked: [] as MediaUsageConflict[] };
+  // Failed physical deletes remain as tombstones and are retried by the cleanup command.
+  await Promise.all(result.assets.map((asset) => deleteObject(asset.objectKey).catch(() => undefined)));
+  if (result.assets.length) await recordAudit({ businessId: actor.businessId, actorUserId: actor.userId, entityType: "MediaAsset", action: "media.deleted", summary: `Deleted ${result.assets.length} unused asset(s)` });
+  return { deleted: result.assets.length, blocked: result.blocked };
 }
 
 // ------------------------------------------------------------------- usages
-
-/** Record that an asset is used by a product / page / review / storefront. */
-export async function attachUsage(actor: MediaActor, input: unknown) {
-  const parsed = mediaUsageSchema.parse(input);
-  const asset = await prisma.mediaAsset.findFirst({ where: { id: parsed.mediaId, businessId: actor.businessId, deletedAt: null } });
-  if (!asset) throw AppError.notFound("Media asset not found");
-
-  return prisma.$transaction(async (tx) => {
-    const usage = await tx.mediaUsage.upsert({
-      where: { mediaId_entityType_entityId_field: { mediaId: parsed.mediaId, entityType: parsed.entityType, entityId: parsed.entityId, field: parsed.field } },
-      create: {
-        mediaId: parsed.mediaId,
-        entityType: parsed.entityType,
-        entityId: parsed.entityId,
-        field: parsed.field,
-        productId: parsed.productId ?? null,
-        variantId: parsed.variantId ?? null,
-      },
-      update: { productId: parsed.productId ?? null, variantId: parsed.variantId ?? null },
-    });
-    await syncUsageCount(tx, parsed.mediaId);
-    return usage;
-  });
-}
-
-export async function detachUsage(actor: MediaActor, input: unknown) {
-  const parsed = mediaUsageSchema.parse(input);
-  return prisma.$transaction(async (tx) => {
-    await tx.mediaUsage.deleteMany({
-      where: { mediaId: parsed.mediaId, entityType: parsed.entityType, entityId: parsed.entityId, field: parsed.field, media: { businessId: actor.businessId } },
-    });
-    await syncUsageCount(tx, parsed.mediaId);
-  });
-}
-
-/** Keep the denormalised counter honest — it is what the media grid displays. */
-async function syncUsageCount(tx: Prisma.TransactionClient, mediaId: string) {
-  const count = await tx.mediaUsage.count({ where: { mediaId } });
-  await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
-}
 
 export async function listUsageTargets(businessId: string, assetId: string) {
   return prisma.mediaUsage.findMany({
@@ -684,8 +699,16 @@ export async function listOrphanMedia(businessId: string, olderThanDays = 30) {
 
 /** Issue a fresh download URL for a private asset (audited). */
 export async function signedDownloadUrl(actor: MediaActor, assetId: string, disposition: "inline" | "attachment" = "inline") {
-  const asset = await prisma.mediaAsset.findFirst({ where: { id: uuidSchema.parse(assetId), businessId: actor.businessId, deletedAt: null } });
+  const asset = await prisma.mediaAsset.findFirst({ where: { id: uuidSchema.parse(assetId), businessId: actor.businessId, deletedAt: null, uploadStatus: "READY" } });
   if (!asset) throw AppError.notFound("Media asset not found");
   const signed = await createDownloadUrl({ key: asset.objectKey, disposition, downloadName: downloadName(asset) });
   return { url: signed.url, expiresAt: signed.expiresAt };
+}
+
+/** Authorized domain actions may read a validated document through the media service. */
+export async function readMediaText(businessId: string, assetId: string) {
+  const asset = await prisma.mediaAsset.findFirst({ where: { id: uuidSchema.parse(assetId), businessId, deletedAt: null, uploadStatus: "READY", mimeType: "text/csv" } });
+  if (!asset) throw AppError.notFound("CSV media asset not found");
+  const body = await getObject(asset.objectKey, 4 * 1024 * 1024);
+  return { text: new TextDecoder("utf-8", { fatal: true }).decode(body), name: asset.originalName };
 }

@@ -1,3 +1,4 @@
+import { RichText } from "@/components/editor/rich-text";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -141,6 +142,10 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 return (
                   <div key={variant.id} className="flex flex-wrap items-center justify-between gap-3 border-b pb-3 last:border-0 last:pb-0">
                     <div>
+                      {variant.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={variant.imageUrl} alt={variant.name} className="h-14 w-14 rounded object-contain" />
+                      ) : null}
                       <p className="text-sm font-medium">{variant.name}</p>
                       <p className="text-xs text-slate-500">
                         {variant.sku}
@@ -182,11 +187,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <details open className="rounded-lg border p-4">
               <summary className="cursor-pointer text-sm font-medium">Description</summary>
               <div className="mt-2 space-y-2 text-sm text-slate-600">
-                {product.description.split(/\n{2,}/).map((paragraph, index) => (
-                  <p key={index} className="whitespace-pre-line">
-                    {paragraph}
-                  </p>
-                ))}
+                <RichText value={product.description} />
               </div>
             </details>
           ) : null}

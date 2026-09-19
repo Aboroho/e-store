@@ -16,17 +16,18 @@ import {
   FormField,
   Input,
   NativeSelect,
-  Textarea,
   buttonVariants,
 } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
+import { MediaPicker, MediaField } from "@/components/media/media-picker";
+import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { cn } from "@/lib/utils";
 
 export interface AttributeOption {
   id: string;
   name: string;
   type: string;
-  values: Array<{ id: string; value: string; colorHex: string | null }>;
+  values: Array<{ id: string; value: string; colorHex: string | null; mediaId?: string | null }>;
 }
 
 export interface CategoryOption {
@@ -46,6 +47,7 @@ interface VariantRow {
   weight: string;
   isPreorder: boolean;
   attributeValueIds: string[];
+  imageMediaId: string | null;
 }
 
 function newRow(index: number): VariantRow {
@@ -60,6 +62,7 @@ function newRow(index: number): VariantRow {
     weight: "",
     isPreorder: false,
     attributeValueIds: [],
+    imageMediaId: null,
   };
 }
 
@@ -111,6 +114,7 @@ export function ProductForm({
     packagingCostPaisa: number;
     seoTitle: string | null;
     seoDescription: string | null;
+    imageIds?: string[];
     categoryIds: string[];
     primaryCategoryId: string | null;
     attributeIds: string[];
@@ -125,6 +129,7 @@ export function ProductForm({
       weightGrams: number | null;
       isPreorderEnabled: boolean | null;
       attributeValueIds: string[];
+      imageMediaId?: string | null;
     }>;
   };
 }) {
@@ -147,9 +152,14 @@ export function ProductForm({
           weight: variant.weightGrams != null ? String(variant.weightGrams) : "",
           isPreorder: Boolean(variant.isPreorderEnabled),
           attributeValueIds: variant.attributeValueIds,
+          imageMediaId: variant.imageMediaId ?? null,
         }))
       : [newRow(0)],
   );
+  const [imageIds, setImageIds] = useState<string[]>(product?.imageIds ?? []);
+  const [bulkValue, setBulkValue] = useState("");
+  const [bulkImage, setBulkImage] = useState<string | null>(null);
+  const affectedRows = rows.filter((row) => !bulkValue || row.attributeValueIds.includes(bulkValue));
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(product?.categoryIds ?? []);
   const [selectedAttributeIds, setSelectedAttributeIds] = useState<string[]>(product?.attributeIds ?? []);
   const [selectedValueIds, setSelectedValueIds] = useState<string[]>(
@@ -192,6 +202,7 @@ export function ProductForm({
         const base = product?.variants[0];
         return {
           ...newRow(index),
+          imageMediaId: combination.map((id) => relevantAttributes.flatMap((attribute) => attribute.values).find((value) => value.id === id)?.mediaId).find(Boolean) ?? null,
           name: label || `Variant ${index + 1}`,
           sku: `${productSlug || "SKU"}-${index + 1}`,
           price: base?.priceOverridePaisa != null ? (base.priceOverridePaisa / 100).toFixed(2) : "",
@@ -263,7 +274,7 @@ export function ProductForm({
             <Input id="shortDescription" name="shortDescription" defaultValue={product?.shortDescription ?? ""} />
           </FormField>
           <FormField label="Description" htmlFor="description">
-            <Textarea id="description" name="description" rows={5} defaultValue={product?.description ?? ""} />
+            <RichTextEditor id="description" name="description" defaultValue={product?.description ?? ""} />
           </FormField>
 
           <div className="grid gap-4 sm:grid-cols-3">
@@ -404,6 +415,20 @@ export function ProductForm({
         </CardContent>
       </Card>
 
+      <Card><CardHeader><CardTitle>Product images</CardTitle></CardHeader><CardContent className="space-y-3">
+        <p className="text-sm text-slate-500">The first image is the primary image. Other images form the gallery. Removing an association never deletes the file.</p>
+        <MediaField label="Primary image" value={imageIds[0] ?? null} onChange={(id) => setImageIds((current) => id ? [id, ...current.slice(1).filter((entry) => entry !== id)] : current.slice(1))} />
+        <MediaPicker multiple maxSelection={50 - imageIds.length} excludeIds={imageIds} trigger={<Button type="button" variant="outline" size="sm">Add gallery images</Button>} onConfirm={(assets) => setImageIds((current) => [...new Set([...current, ...assets.map((asset) => asset.id)])])} />
+        <div className="flex flex-wrap gap-3">{imageIds.map((id, index) => <div key={id} className="space-y-1 rounded border p-2">
+          <input type="hidden" name="imageIds" value={id} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={`/api/v1/media/${id}`} alt={`Product image ${index + 1}`} className="h-20 w-20 object-contain" />
+          <p className="text-xs">{index === 0 ? "Primary" : `Gallery ${index}`}</p>
+          {index > 0 ? <Button type="button" size="sm" variant="ghost" onClick={() => setImageIds([id, ...imageIds.filter((entry) => entry !== id)])}>Make primary</Button> : null}
+          <Button type="button" size="sm" variant="ghost" onClick={() => setImageIds(imageIds.filter((entry) => entry !== id))}>Remove</Button>
+        </div>)}</div>
+      </CardContent></Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Variants</CardTitle>
@@ -412,6 +437,16 @@ export function ProductForm({
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="space-y-2 rounded border p-3">
+            <p className="text-sm font-medium">Bulk variant image</p>
+            <NativeSelect aria-label="Target attribute value" value={bulkValue} onChange={(event) => setBulkValue(event.target.value)}>
+              <option value="">All variants</option>{attributes.flatMap((attribute) => attribute.values.map((value) => <option key={value.id} value={value.id}>{attribute.name}: {value.value}</option>))}
+            </NativeSelect>
+            <MediaField label="Image to apply" value={bulkImage} onChange={setBulkImage} />
+            <p className="text-xs">Affected variants ({affectedRows.length}): {affectedRows.map((row) => `${row.name} (${row.sku})`).join(", ") || "None"}</p>
+            <Button type="button" variant="outline" size="sm" disabled={!bulkImage || !affectedRows.length} onClick={() => setRows((current) => current.map((row) => !bulkValue || row.attributeValueIds.includes(bulkValue) ? { ...row, imageMediaId: bulkImage } : row))}>Apply to these variants</Button>
+            <p className="text-xs text-slate-500">Review the images below, then save the product.</p>
+          </div>
           {!isEdit ? (
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" size="sm" onClick={generateCombinations} disabled={relevantAttributes.length === 0}>
@@ -426,6 +461,7 @@ export function ProductForm({
           <div className="space-y-3">
             {rows.map((row, index) => (
               <div key={row.key} className="rounded-lg border border-slate-200 p-3">
+                <MediaField name="variantImageMediaId" value={row.imageMediaId} onChange={(id) => updateRow(row.key, { imageMediaId: id })} label={`${row.name} image`} />
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <FormField label="Variant name" htmlFor={`variantName-${index}`}>
                     <Input
@@ -507,7 +543,7 @@ export function ProductForm({
                       />
                       Preorder OK
                     </label>
-                    {rows.length > 1 ? (
+                    {rows.length > 1 && !isEdit ? (
                       <Button
                         type="button"
                         variant="ghost"
@@ -525,7 +561,7 @@ export function ProductForm({
                       <input key={valueId} type="hidden" name={`variantAttributes_${index}`} value={valueId} data-index={valueIndex} />
                     ))
                   : null}
-                <input type="hidden" name="variantId" value={product?.variants[index]?.id ?? ""} />
+                <input type="hidden" name="variantId" value={isEdit ? row.key : ""} />
               </div>
             ))}
           </div>

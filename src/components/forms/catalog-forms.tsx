@@ -1,9 +1,11 @@
 "use client";
 
+import { MediaField } from "@/components/media/media-picker";
 import { useRef, useState, useActionState } from "react";
 import { initialActionState } from "@/modules/auth/action-state";
 import {
   addAttributeValueAction,
+  updateAttributeValueImageAction,
   createCategoryAction,
   createAttributeAction,
   setPriceAction,
@@ -32,8 +34,9 @@ export function CategoryForm({
   category,
 }: {
   categories: Array<{ id: string; name: string; path: string | null }>;
-  category?: { id: string; name: string; slug: string; parentId: string | null; description: string | null; position: number; isActive: boolean; isFeatured: boolean };
+  category?: { imageMediaId?: string | null; id: string; name: string; slug: string; parentId: string | null; description: string | null; position: number; isActive: boolean; isFeatured: boolean };
 }) {
+  const [image, setImage] = useState<string | null>(category?.imageMediaId ?? null);
   const [state, formAction, pending] = useActionState(category ? updateCategoryAction : createCategoryAction, initialActionState);
 
   return (
@@ -64,6 +67,7 @@ export function CategoryForm({
                 ))}
             </NativeSelect>
           </FormField>
+          <MediaField name="imageMediaId" value={image} onChange={setImage} label="Category image" />
           <FormField label="Description" htmlFor={`cat-desc-${category?.id ?? "new"}`}>
             <Textarea id={`cat-desc-${category?.id ?? "new"}`} name="description" rows={2} defaultValue={category?.description ?? ""} />
           </FormField>
@@ -485,4 +489,15 @@ export function PreorderAllocationForm({
       </Card>
     </form>
   );
+}
+
+export function AttributeValueImageForm({ id, label, mediaId }: { id: string; label: string; mediaId: string | null }) {
+  const [value, setValue] = useState(mediaId);
+  const [state, action, pending] = useActionState(updateAttributeValueImageAction, initialActionState);
+  return <form action={action} className="space-y-2 rounded border p-3">
+    <input type="hidden" name="attributeValueId" value={id} />
+    <MediaField label={`${label} default image`} name="mediaId" value={value} onChange={setValue} />
+    <Button type="submit" size="sm" variant="outline" disabled={pending}>Save default image</Button>
+    {state.message ? <p role="status" className="text-xs">{state.message}</p> : null}
+  </form>;
 }

@@ -328,3 +328,11 @@ server action ──► permission check ──► service (transaction) ──�
                                            └─ domain tables         → product/PO/commitment
 page (server component) ──► queries module ──► prisma client (read-only, business-scoped)
 ```
+
+## Global media platform
+
+All content file controls use the shared Media Manager. See [MEDIA_MANAGER.md](./MEDIA_MANAGER.md)
+for its component/service contracts, module integration matrix, server-side validation,
+S3 deployment, reference locking and cleanup policy. New modules must use those contracts,
+not implement independent upload systems. Settlement CSV attachments also use this service;
+pasted import data remains ordinary form input, not a separate binary-upload path.

@@ -8,16 +8,20 @@ import { assertPermission } from "@/lib/permissions";
 import { formDataToObject } from "@/lib/validation";
 import type { ActionState } from "@/modules/auth/action-state";
 import { can } from "@/lib/permissions";
-import { mediaForPicker } from "./queries";
+import { getCustomerSession } from "@/lib/auth/customer-session";
+import { enforceRateLimit, RateLimits } from "@/lib/rate-limit";
+import { reviewImageLimits } from "@/modules/reviews/service";
+import { z } from "zod";
+import { listMedia, listMediaFolders } from "./service";
+import type { MediaActor } from "./service";
+import type { MediaGroup } from "./policy";
 import type { MediaAssetView } from "./service";
 import {
-  attachUsage,
   confirmUpload,
   copyMediaAsset,
   createFolder,
   deleteFolder,
   deleteMediaAssets,
-  detachUsage,
   moveMediaAssets,
   renameFolder,
   renameMediaAsset,
@@ -40,7 +44,23 @@ async function actor() {
   return { businessId: session.businessId, userId: session.id, actorLabel: session.email };
 }
 
+const BROWSE_PERMISSIONS = ["media.manage", "page.manage", "product.create", "product.update", "category.manage", "attribute.manage", "storefront.manage", "settings.manage", "review.moderate", "courier.reconcile"];
+async function pickerActor(audience: "staff" | "customer" = "staff"): Promise<MediaActor> {
+  if (audience === "customer") {
+    const session = await getCustomerSession();
+    if (!session) throw AppError.forbidden("Sign in to browse your media");
+    return { businessId: session.businessId, userId: session.id, customerId: session.id, actorLabel: `customer:${session.id}` };
+  }
+  const session = await requireSession();
+  if (!BROWSE_PERMISSIONS.some((permission) => can(session, permission))) throw AppError.forbidden("You cannot browse media");
+  return { businessId: session.businessId, userId: session.id, actorLabel: session.email };
+}
+async function uploadActor(audience: "staff" | "customer" = "staff"): Promise<MediaActor> {
+  return audience === "customer" ? pickerActor(audience) : actor();
+}
+
 function toState(error: unknown, fallback: string): ActionState {
+  if (error instanceof z.ZodError) return { status: "error", message: error.issues.map((issue) => issue.message).join("; ") };
   if (error instanceof AppError) {
     const fieldErrors = Array.isArray(error.details)
       ? Object.fromEntries(
@@ -59,11 +79,16 @@ function revalidateMedia() {
 
 /** Step 1 of the upload handshake: ask for a signed target. */
 export async function requestUploadAction(
-  input: { fileName: string; mimeType: string; sizeBytes: number; folderId?: string | null; visibility?: "PUBLIC" | "PRIVATE"; checksum?: string },
+  input: { fileName: string; mimeType: string; sizeBytes: number; folderId?: string | null; visibility?: "PUBLIC" | "PRIVATE"; checksum?: string; audience?: "staff" | "customer" },
 ): Promise<{ ok: true; assetId: string; uploadUrl: string | null; method: string; headers: Record<string, string>; reused: boolean } | { ok: false; message: string }> {
   try {
-    const context = await actor();
-    const result = await requestUpload(context, input);
+    const context = await uploadActor(input.audience);
+    if (context.customerId) {
+      await enforceRateLimit({ scope: "media-upload", key: context.customerId, ...RateLimits.reviewSubmit });
+      const limits = await reviewImageLimits(context.businessId);
+      if (!input.mimeType.startsWith("image/") || input.sizeBytes > limits.maxBytes) throw AppError.validation("Review uploads must be images within the configured size limit");
+    }
+    const result = await requestUpload(context, context.customerId ? { ...input, folderId: null, visibility: "PUBLIC" } : input);
     revalidateMedia();
     return {
       ok: true,
@@ -82,12 +107,13 @@ export async function requestUploadAction(
 /** Step 3 of the upload handshake: verify the object and publish it. */
 export async function confirmUploadAction(input: {
   assetId: string;
+  audience?: "staff" | "customer";
   checksum?: string;
   width?: number;
   height?: number;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
-    const context = await actor();
+    const context = await uploadActor(input.audience);
     await confirmUpload(context, input);
     revalidateMedia();
     return { ok: true };
@@ -247,9 +273,15 @@ export async function attachToProductAction(_prev: ActionState, formData: FormDa
     const product = await prisma.product.findFirst({ where: { id: productId, businessId: context.businessId }, select: { id: true } });
     if (!product) return { status: "error", message: "Product not found" };
 
-    const position = await prisma.productImage.count({ where: { productId } });
-    await prisma.productImage.create({ data: { productId, mediaId, position } });
-    await attachUsage(context, { mediaId, entityType: "PRODUCT", entityId: productId, field: `image-${position}`, productId });
+    const session = await requireSession();
+    assertPermission(session, "product.update");
+    const { setProductImages } = await import("@/modules/catalog/media");
+    await prisma.$transaction(async (tx) => {
+      const { lockMedia } = await import("./references");
+      await lockMedia(tx, context.businessId);
+      const images = await tx.productImage.findMany({ where: { productId }, orderBy: { position: "asc" } });
+      await setProductImages(tx, context.businessId, productId, [...images.map((image) => image.mediaId), mediaId]);
+    });
 
     revalidateMedia();
     revalidatePath(`/admin/catalog/products/${productId}`);
@@ -259,52 +291,23 @@ export async function attachToProductAction(_prev: ActionState, formData: FormDa
   }
 }
 
-/** Attach an asset to a page (page builder image widget, OG image). */
-export async function attachToPageAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  try {
-    const context = await actor();
-    const raw = formDataToObject(formData);
-    const pageId = String(raw.pageId ?? "");
-    const mediaId = String(raw.mediaId ?? "");
-    if (!pageId || !mediaId) return { status: "error", message: "Choose a page and a media file" };
-    await attachUsage(context, { mediaId, entityType: "PAGE", entityId: pageId, field: "image" });
-    revalidateMedia();
-    revalidatePath(`/admin/pages/${pageId}`);
-    return { status: "success", message: "Image attached to the page" };
-  } catch (error) {
-    return toState(error, "Unable to attach the image");
-  }
+const pickerSearchSchema = z.object({
+  search: z.string().max(200).optional(), mimeGroup: z.enum(["image", "video", "document", "all"]).default("image"),
+  excludeIds: z.array(z.string().uuid()).max(200).default([]), allowedTypes: z.array(z.string().max(100)).max(20).optional(),
+  folderId: z.string().uuid().nullable().optional(), page: z.number().int().min(1).max(100000).default(1), audience: z.enum(["staff", "customer"]).default("staff"),
+});
+export async function browseMediaAction(input: { search?: string; mimeGroup?: MediaGroup; excludeIds?: string[]; allowedTypes?: string[]; folderId?: string | null; page?: number; audience?: "staff" | "customer" }) {
+  const parsed = pickerSearchSchema.parse(input);
+  const context = await pickerActor(parsed.audience);
+  const session = context.customerId ? null : await requireSession();
+  const privateCsv = session && can(session, "courier.reconcile") && parsed.mimeGroup === "document" && parsed.allowedTypes?.length === 1 && parsed.allowedTypes[0] === "text/csv";
+  return listMedia(context.businessId, { ...parsed, ...(session && !can(session, "media.manage") && !privateCsv ? { visibility: "PUBLIC" as const } : {}), ...(context.customerId ? { customerId: context.customerId, mimeGroup: "image" } : {}), pageSize: 24 });
 }
-
-export async function detachUsageAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  try {
-    const context = await actor();
-    const raw = formDataToObject(formData);
-    await detachUsage(context, {
-      mediaId: String(raw.mediaId ?? ""),
-      entityType: String(raw.entityType ?? "PRODUCT") as "PRODUCT",
-      entityId: String(raw.entityId ?? ""),
-      field: String(raw.field ?? "image"),
-    });
-    revalidateMedia();
-    return { status: "success", message: "Reference removed" };
-  } catch (error) {
-    return toState(error, "Unable to remove the reference");
-  }
+export async function searchMediaAction(input: { search?: string; mimeGroup?: MediaGroup; excludeIds?: string[] }): Promise<MediaAssetView[]> {
+  return (await browseMediaAction(input)).rows;
 }
-
-/**
- * Media search for pickers (page builder, product form). Read-only, so either the
- * media permission or the page-builder permission is enough.
- */
-export async function searchMediaAction(input: {
-  search?: string;
-  mimeGroup?: "image" | "document" | "all";
-  excludeIds?: string[];
-}): Promise<MediaAssetView[]> {
-  const session = await requireSession();
-  if (!can(session, "media.manage") && !can(session, "page.manage")) {
-    throw AppError.forbidden("You are not allowed to browse the media library");
-  }
-  return mediaForPicker(session.businessId, input);
+export async function mediaPickerContextAction(audience: "staff" | "customer" = "staff") {
+  const context = await pickerActor(audience);
+  const session = context.customerId ? null : await requireSession();
+  return { folders: context.customerId ? [] : await listMediaFolders(context.businessId), canUpload: Boolean(context.customerId || (session && can(session, "media.manage"))) };
 }

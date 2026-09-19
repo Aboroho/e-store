@@ -1,4 +1,5 @@
 import "server-only";
+import { replaceMediaReferences } from "@/modules/media/references";
 import { prisma } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import {
@@ -210,7 +211,7 @@ export async function updateStorefrontSettings(
 
 export async function updateBusinessProfile(
   actor: { userId: string; businessId: string; actorLabel: string },
-  input: { name: string; legalName?: string; phone?: string; email?: string; address?: string; currency?: string },
+  input: { logoMediaId?: string | null; name: string; legalName?: string; phone?: string; email?: string; address?: string; currency?: string },
 ) {
   const before = await prisma.business.findUnique({
     where: { id: actor.businessId },
@@ -219,10 +220,12 @@ export async function updateBusinessProfile(
   if (!before) throw AppError.notFound("Business not found");
 
   const updated = await prisma.$transaction(async (tx) => {
+    if (input.logoMediaId !== undefined) await replaceMediaReferences(tx, actor.businessId, "BUSINESS", actor.businessId, "logo", input.logoMediaId ? [input.logoMediaId] : [], { imagesOnly: true, publicOnly: true });
     const result = await tx.business.update({
       where: { id: actor.businessId },
       data: {
         name: input.name,
+        logoMediaId: input.logoMediaId,
         legalName: input.legalName || null,
         phone: input.phone || null,
         email: input.email || null,

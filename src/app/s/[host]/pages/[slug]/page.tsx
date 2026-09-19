@@ -17,7 +17,7 @@ export async function generateMetadata({ params }: { params: Promise<{ host: str
     description: page.seoDescription ?? undefined,
     alternates: page.canonicalUrl ? { canonical: page.canonicalUrl } : { canonical: `/pages/${page.slug}` },
     robots: page.robots ?? undefined,
-    openGraph: { title: page.seoTitle ?? page.title, description: page.seoDescription ?? undefined, type: "website" },
+    openGraph: { images: page.ogMediaId ? [`/api/v1/media/${page.ogMediaId}`] : undefined, title: page.seoTitle ?? page.title, description: page.seoDescription ?? undefined, type: "website" },
   };
 }
 

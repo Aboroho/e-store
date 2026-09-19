@@ -43,7 +43,7 @@ export default async function MediaPage({
     listMedia(session.businessId, {
       search: filters.search || undefined,
       folderId: filters.folderId ? filters.folderId : undefined,
-      mimeGroup: filters.mimeGroup as "image" | "document" | "all",
+      mimeGroup: filters.mimeGroup as "image" | "video" | "document" | "all",
       sort: filters.sort as "newest" | "oldest" | "name" | "largest",
       page,
       pageSize: 24,

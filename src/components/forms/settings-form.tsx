@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { MediaField } from "@/components/media/media-picker";
+import { useActionState, useState } from "react";
 import type { SettingGroup } from "@/modules/settings/service";
 import { initialActionState } from "@/modules/auth/action-state";
 import { updateBusinessProfileAction, updateBusinessSettingsAction, updateStorefrontSettingsAction } from "@/modules/settings/actions";
@@ -151,8 +152,9 @@ export function StorefrontSettingsForm({
 export function BusinessProfileForm({
   business,
 }: {
-  business: { name: string; legalName: string | null; phone: string | null; email: string | null; address: string | null; currency: string };
+  business: { logoMediaId?: string | null; name: string; legalName: string | null; phone: string | null; email: string | null; address: string | null; currency: string };
 }) {
+  const [logo, setLogo] = useState<string | null>(business.logoMediaId ?? null);
   const [state, formAction, pending] = useActionState(updateBusinessProfileAction, initialActionState);
 
   return (
@@ -165,6 +167,7 @@ export function BusinessProfileForm({
           {state.status === "error" && state.message ? <Alert variant="danger">{state.message}</Alert> : null}
           {state.status === "success" ? <Alert variant="success">{state.message}</Alert> : null}
           <div className="grid gap-4 sm:grid-cols-2">
+            <MediaField name="logoMediaId" value={logo} onChange={setLogo} label="Brand logo" />
             <FormField label="Trading name" htmlFor="business-name" required>
               <Input id="business-name" name="name" defaultValue={business.name} required />
             </FormField>

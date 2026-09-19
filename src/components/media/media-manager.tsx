@@ -1,5 +1,7 @@
 "use client";
 
+import { MediaPreview } from "./media-picker";
+import { MediaUpload } from "./media-upload";
 import * as React from "react";
 import { useActionState } from "react";
 import { useRouter } from "next/navigation";
@@ -8,7 +10,6 @@ import { Dialog, DialogContent, SubmitButton } from "@/components/ui/interactive
 import { CopyButton } from "@/components/ui/interactive";
 import {
   attachToProductAction,
-  confirmUploadAction,
   copyAssetAction,
   createFolderAction,
   deleteAssetsAction,
@@ -16,7 +17,6 @@ import {
   downloadUrlAction,
   moveAssetsAction,
   renameAssetAction,
-  requestUploadAction,
   updateAssetAction,
 } from "@/modules/media/actions";
 import type { ActionState } from "@/modules/auth/action-state";
@@ -62,90 +62,12 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-async function fileChecksum(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/** Read intrinsic dimensions in the browser so the server does not have to. */
-async function imageSize(file: File): Promise<{ width?: number; height?: number }> {
-  if (!file.type.startsWith("image/")) return {};
-  try {
-    const bitmap = await createImageBitmap(file);
-    const size = { width: bitmap.width, height: bitmap.height };
-    bitmap.close();
-    return size;
-  } catch {
-    return {};
-  }
-}
-
 export function MediaManager(props: MediaManagerProps) {
   const router = useRouter();
-  const [uploading, setUploading] = React.useState(false);
-  const [progress, setProgress] = React.useState<string[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [selected, setSelected] = React.useState<string[]>([]);
-  // Uploads land in the folder currently being browsed.
-  const targetFolder = props.filters.folderId || null;
-  const [dragging, setDragging] = React.useState(false);
+  const [view, setView] = React.useState("grid");
   const [detail, setDetail] = React.useState<MediaAssetView | null>(null);
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  const upload = React.useCallback(
-    async (files: File[]) => {
-      if (files.length === 0) return;
-      setError(null);
-      setUploading(true);
-      const log: string[] = [];
-      for (const file of files) {
-        const label = file.name;
-        try {
-          const checksum = await fileChecksum(file);
-          const start = await requestUploadAction({
-            fileName: file.name,
-            mimeType: file.type || "application/octet-stream",
-            sizeBytes: file.size,
-            folderId: targetFolder,
-            visibility: "PUBLIC",
-            checksum,
-          });
-          if (!start.ok) {
-            log.push(`✗ ${label}: ${start.message}`);
-            continue;
-          }
-          if (start.reused || !start.uploadUrl) {
-            log.push(`↺ ${label}: identical file already in the library`);
-            continue;
-          }
-
-          const response = await fetch(start.uploadUrl, { method: start.method as "PUT", headers: start.headers, body: file });
-          if (!response.ok) {
-            log.push(`✗ ${label}: storage rejected the upload (${response.status})`);
-            continue;
-          }
-
-          const size = await imageSize(file);
-          const confirmed = await confirmUploadAction({ assetId: start.assetId, checksum, ...size });
-          log.push(confirmed.ok ? `✓ ${label}` : `✗ ${label}: ${confirmed.message}`);
-        } catch (uploadError) {
-          log.push(`✗ ${label}: ${uploadError instanceof Error ? uploadError.message : "upload failed"}`);
-        }
-      }
-      setProgress((previous) => [...log, ...previous].slice(0, 8));
-      setUploading(false);
-      router.refresh();
-    },
-    [router, targetFolder],
-  );
-
-  const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setDragging(false);
-    void upload([...event.dataTransfer.files]);
-  };
-
   const toggle = (id: string) =>
     setSelected((previous) => (previous.includes(id) ? previous.filter((entry) => entry !== id) : [...previous, id]));
 
@@ -159,14 +81,8 @@ export function MediaManager(props: MediaManagerProps) {
 
   const deleteSelected = async () => {
     if (selected.length === 0) return;
-    let result = await deleteAssetsAction({ assetIds: selected });
-    if (!result.ok && result.blocked.length > 0) {
-      const confirmed = window.confirm(
-        `These files are still in use:\n${result.blocked.map((entry) => `• ${entry.originalName} (${entry.usages.length} reference(s))`).join("\n")}\n\nDelete anyway? Product and page references will be removed.`,
-      );
-      if (!confirmed) return;
-      result = await deleteAssetsAction({ assetIds: selected, force: true });
-    }
+    if (!window.confirm(`Delete ${selected.length} unused file(s)? This cannot be undone.`)) return;
+    const result = await deleteAssetsAction({ assetIds: selected });
     if (!result.ok) setError(result.message ?? "Unable to delete the selected files");
     setSelected([]);
     router.refresh();
@@ -181,7 +97,7 @@ export function MediaManager(props: MediaManagerProps) {
   const pages = Math.max(1, Math.ceil(props.total / props.pageSize));
   const query = (overrides: Record<string, string | null>) => {
     const params = new URLSearchParams();
-    const base: Record<string, string> = { ...props.filters };
+    const base: Record<string, string> = { q: props.filters.search, folder: props.filters.folderId, type: props.filters.mimeGroup, sort: props.filters.sort };
     for (const [key, value] of Object.entries({ ...base, ...overrides })) {
       if (value && value !== "all") params.set(key, value);
     }
@@ -250,41 +166,8 @@ export function MediaManager(props: MediaManagerProps) {
         <div className="space-y-4">
           <Card>
             <CardContent className="space-y-4 pt-6">
-              <div
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setDragging(true);
-                }}
-                onDragLeave={() => setDragging(false)}
-                onDrop={onDrop}
-                className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center transition ${dragging ? "border-indigo-400 bg-indigo-50" : "border-slate-300"}`}
-              >
-                <p className="text-sm font-medium">Drop files here to upload</p>
-                <p className="text-xs text-slate-500">
-                  Up to {formatBytes(props.maxUploadBytes)} per file · {props.allowedTypes.map((type) => type.split("/")[1]).join(", ")}
-                </p>
-                <input
-                  ref={inputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  accept={props.allowedTypes.join(",")}
-                  onChange={(event) => {
-                    void upload([...(event.target.files ?? [])]);
-                    if (inputRef.current) inputRef.current.value = "";
-                  }}
-                />
-                <Button type="button" variant="outline" size="sm" disabled={uploading || !props.storage.configured} onClick={() => inputRef.current?.click()}>
-                  {uploading ? "Uploading…" : "Choose files"}
-                </Button>
-                {progress.length > 0 ? (
-                  <ul className="mt-2 w-full space-y-1 text-left text-xs text-slate-600">
-                    {progress.map((entry, index) => (
-                      <li key={`${entry}-${index}`}>{entry}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
+              {props.storage.configured ? <MediaUpload folderId={props.filters.folderId || null} allowedTypes={props.allowedTypes} onUploaded={() => router.refresh()} /> : null}
+              <Button type="button" variant="outline" size="sm" onClick={() => setView(view === "grid" ? "list" : "grid")}>{view === "grid" ? "List view" : "Grid view"}</Button>
 
               <div className="flex flex-wrap items-center gap-2">
                 <form action="/admin/media" className="flex flex-1 items-center gap-2">
@@ -301,7 +184,7 @@ export function MediaManager(props: MediaManagerProps) {
                 >
                   <option value="all">All types</option>
                   <option value="image">Images</option>
-                  <option value="document">Documents</option>
+                  <option value="document">Documents</option><option value="video">Videos</option>
                 </NativeSelect>
                 <NativeSelect value={props.filters.sort} onChange={(event) => router.push(query({ sort: event.target.value }))} className="w-40">
                   <option value="newest">Newest first</option>
@@ -343,14 +226,14 @@ export function MediaManager(props: MediaManagerProps) {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <div className={view === "grid" ? "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4" : "space-y-2"}>
               {props.assets.map((asset) => (
-                <div key={asset.id} className={`overflow-hidden rounded-lg border bg-white ${selected.includes(asset.id) ? "ring-2 ring-indigo-500" : ""}`}>
+                <div key={asset.id} className={`${view === "list" ? "flex items-center gap-4" : ""} overflow-hidden rounded-lg border bg-white ${selected.includes(asset.id) ? "ring-2 ring-indigo-500" : ""}`}>
                   <button
                     type="button"
                     onClick={() => toggle(asset.id)}
                     onDoubleClick={() => setDetail(asset)}
-                    className="block h-32 w-full bg-slate-100"
+                    className={view === "list" ? "block h-32 w-32 shrink-0 bg-slate-100" : "block h-32 w-full bg-slate-100"}
                     title="Click to select, double click for details"
                   >
                     {asset.mimeType.startsWith("image/") && asset.url ? (
@@ -454,12 +337,9 @@ function AssetDetail(props: {
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent title={`Media #${props.asset.id.slice(0, 8)}`} description={props.asset.originalName}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto" title={`Media #${props.asset.id.slice(0, 8)}`} description={props.asset.originalName}>
         <div className="space-y-4 text-sm">
-          {props.asset.mimeType.startsWith("image/") && props.asset.url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={props.asset.url} alt={props.asset.altText ?? props.asset.originalName} className="max-h-64 w-full rounded-md object-contain" />
-          ) : null}
+          <MediaPreview asset={props.asset} />
 
           <dl className="grid grid-cols-2 gap-2 text-xs text-slate-600">
             <div>

@@ -1,4 +1,5 @@
 import "server-only";
+import { assertUsableMedia } from "@/modules/media/references";
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
@@ -80,7 +81,7 @@ export async function submitReview(actor: ReviewActor, input: unknown) {
 
   if (parsed.imageAssetIds.length > 0) {
     const assets = await prisma.mediaAsset.findMany({
-      where: { id: { in: parsed.imageAssetIds }, businessId: actor.businessId, deletedAt: null },
+      where: { id: { in: parsed.imageAssetIds }, businessId: actor.businessId, deletedAt: null, uploadStatus: "READY", uploadedByCustomerId: actor.customerId, visibility: "PUBLIC" },
       select: { id: true, sizeBytes: true, mimeType: true, uploadedByUserId: true },
     });
     if (assets.length !== parsed.imageAssetIds.length) throw AppError.validation("One of the images could not be found");
@@ -100,6 +101,7 @@ export async function submitReview(actor: ReviewActor, input: unknown) {
   const status: ReviewStatus = autoPublish ? "APPROVED" : "PENDING";
 
   const review = await prisma.$transaction(async (tx) => {
+    await assertUsableMedia(tx, actor.businessId, parsed.imageAssetIds, { imagesOnly: true, customerId: actor.customerId, publicOnly: true });
     const created = await tx.review.create({
       data: {
         businessId: actor.businessId,

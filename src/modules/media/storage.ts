@@ -16,7 +16,7 @@ import { AppError } from "@/lib/errors";
  *               Browsers receive presigned PUT/GET URLs, never credentials.
  *  - `local`  — objects on the server's disk behind signed, expiring URLs served by
  *               `/api/v1/media/storage/upload|download`. Same guarantees (no credentials
- *               in the browser, time-limited access), useful on a single VPS.
+ *               in the browser, time-limited access), test/development only.
  *  - `disabled` — every operation fails with an actionable error instead of silently
  *               pretending the upload worked.
  *
@@ -69,6 +69,7 @@ export function localStorageUrl(input: {
   key: string;
   expiresAt: Date;
   contentType?: string;
+  sizeBytes?: number;
   downloadName?: string;
   disposition?: "inline" | "attachment";
 }): string {
@@ -77,11 +78,13 @@ export function localStorageUrl(input: {
   url.searchParams.set("key", input.key);
   url.searchParams.set("expires", String(Math.floor(input.expiresAt.getTime() / 1000)));
   if (input.contentType) url.searchParams.set("contentType", input.contentType);
+  if (input.sizeBytes !== undefined) url.searchParams.set("size", String(input.sizeBytes));
   if (input.downloadName) url.searchParams.set("name", input.downloadName);
   if (input.disposition) url.searchParams.set("disposition", input.disposition);
   const payload = url.searchParams.toString();
   url.searchParams.set("signature", signedToken(payload));
-  return url.toString();
+  // Relative URLs work behind reverse proxies and never point a remote browser at localhost.
+  return `${url.pathname}${url.search}`;
 }
 
 export function localStoragePath(key: string): string {
@@ -106,6 +109,8 @@ function s3(): S3Client {
   if (!s3Client) {
     s3Client = new S3Client({
       region: config.S3_REGION,
+      // Do not presign the SDK default CRC32 of an empty, not-yet-supplied body.
+      requestChecksumCalculation: "WHEN_REQUIRED",
       ...(config.S3_ENDPOINT ? { endpoint: config.S3_ENDPOINT } : {}),
       forcePathStyle: config.S3_FORCE_PATH_STYLE ?? false,
       ...(config.S3_ACCESS_KEY_ID && config.S3_SECRET_ACCESS_KEY
@@ -147,21 +152,20 @@ export async function createUploadTarget(input: {
   }
 
   if (driver === "s3") {
-    // The size limit cannot be expressed in a presigned PUT; the application verifies
-    // the stored object size on confirm (see `headObject`).
+    // Bind the declared length and prevent overwrites; confirmation also checks actual bytes.
     const url = await getSignedUrl(
       s3(),
-      new PutObjectCommand({ Bucket: env().S3_BUCKET!, Key: input.key, ContentType: input.contentType }),
+      new PutObjectCommand({ Bucket: env().S3_BUCKET!, Key: input.key, ContentType: input.contentType, ContentLength: input.sizeBytes, IfNoneMatch: "*" }),
       { expiresIn },
     );
-    return { url, method: "PUT", headers: { "content-type": input.contentType }, publicUrl: publicUrlFor(input.key), expiresAt };
+    return { url, method: "PUT", headers: { "content-type": input.contentType, "if-none-match": "*" }, publicUrl: publicUrlFor(input.key), expiresAt };
   }
 
   return {
-    url: localStorageUrl({ operation: "upload", key: input.key, expiresAt, contentType: input.contentType }),
+    url: localStorageUrl({ operation: "upload", key: input.key, expiresAt, contentType: input.contentType, sizeBytes: input.sizeBytes }),
     method: "PUT",
-    headers: { "content-type": input.contentType },
-    publicUrl: localStorageUrl({ operation: "download", key: input.key, expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000) }),
+    headers: { "content-type": input.contentType, "if-none-match": "*" },
+    publicUrl: null,
     expiresAt,
   };
 }
@@ -213,7 +217,8 @@ export async function headObject(key: string): Promise<ObjectHead> {
     try {
       const result = await s3().send(new HeadObjectCommand({ Bucket: env().S3_BUCKET!, Key: key }));
       return { exists: true, sizeBytes: Number(result.ContentLength ?? 0), contentType: result.ContentType ?? null };
-    } catch {
+    } catch (error) {
+      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode !== 404) throw error;
       return { exists: false, sizeBytes: 0, contentType: null };
     }
   }
@@ -259,7 +264,7 @@ export async function putObject(input: { key: string; body: Buffer | Uint8Array;
 
 export async function deleteObject(key: string): Promise<void> {
   const driver = storageDriver();
-  if (driver === "disabled") return;
+  if (driver === "disabled") throw AppError.integration("Media storage is not configured on this deployment");
 
   if (driver === "s3") {
     await s3().send(new DeleteObjectCommand({ Bucket: env().S3_BUCKET!, Key: key }));

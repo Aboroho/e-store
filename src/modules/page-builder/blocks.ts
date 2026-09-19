@@ -128,6 +128,7 @@ const reviewsProps = z.object({
 
 const embedProps = z.object({
   /** Only YouTube and Vimeo are accepted; the src is rebuilt server-side. */
+  videoMediaId: z.string().uuid().nullable().default(null),
   provider: z.enum(["youtube", "vimeo"]).default("youtube"),
   videoId: z
     .string()
@@ -170,7 +171,7 @@ export const BLOCK_DEFINITIONS: BlockDefinition[] = [
     type: "text",
     label: "Text",
     category: "Basic",
-    description: "Paragraphs of plain text (no HTML is stored or rendered).",
+    description: "Rich text with shared media references; raw HTML is never rendered.",
     preview: "text",
     propsSchema: textProps,
     defaultProps: { text: "Write something your customers should read.", align: "left", size: "md" },

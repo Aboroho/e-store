@@ -15,8 +15,10 @@ export const ALLOWED_MEDIA_TYPES = [
   "image/webp",
   "image/avif",
   "image/gif",
-  "image/svg+xml",
+  "video/mp4",
+  "video/webm",
   "application/pdf",
+  "text/csv",
 ] as const;
 
 export const mediaVisibilitySchema = z.enum(["PUBLIC", "PRIVATE"]);
@@ -24,20 +26,20 @@ export const mediaVisibilitySchema = z.enum(["PUBLIC", "PRIVATE"]);
 export const uploadRequestSchema = z.object({
   fileName: z.string().trim().min(1).max(255),
   mimeType: z.string().trim().min(3).max(120),
-  sizeBytes: z.coerce.number().int().min(1),
+  sizeBytes: z.coerce.number().int().min(1).max(64 * 1024 * 1024),
   folderId: z.string().uuid().nullable().optional(),
   visibility: mediaVisibilitySchema.default("PUBLIC"),
   title: z.string().trim().max(200).optional(),
   altText: z.string().trim().max(300).optional(),
   /** Reuse an identical upload instead of storing the same bytes twice. */
-  checksum: z.string().trim().length(64).optional(),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 export type UploadRequestInput = z.infer<typeof uploadRequestSchema>;
 
 export const confirmUploadSchema = z.object({
   assetId: z.string().uuid(),
-  checksum: z.string().trim().length(64).optional(),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   width: z.coerce.number().int().min(1).max(50_000).optional(),
   height: z.coerce.number().int().min(1).max(50_000).optional(),
 });
@@ -70,7 +72,7 @@ export const copyMediaSchema = z.object({
 
 export const deleteMediaSchema = z.object({
   assetIds: z.array(z.string().uuid()).min(1).max(100),
-  /** Force-delete removes usages too; refused by default so nothing breaks silently. */
+  /** Kept for API compatibility; referenced assets are never force-deleted. */
   force: z.coerce.boolean().default(false),
 });
 
@@ -86,7 +88,7 @@ export const folderInputSchema = z.object({
 
 export const mediaUsageSchema = z.object({
   mediaId: z.string().uuid(),
-  entityType: z.enum(["PRODUCT", "VARIANT", "PAGE", "REVIEW", "STOREFRONT", "NAVIGATION", "PLUGIN"]),
+  entityType: z.enum(["PRODUCT", "VARIANT", "PAGE", "REVIEW", "STOREFRONT", "NAVIGATION", "PLUGIN", "CATEGORY", "ATTRIBUTE_VALUE", "BUSINESS", "SETTLEMENT"]),
   entityId: z.string().uuid(),
   field: z.string().trim().min(1).max(40).default("image"),
   productId: z.string().uuid().optional(),

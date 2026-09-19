@@ -30,7 +30,7 @@ const schema = z.object({
   /**
    * `s3` uses an S3-compatible bucket with presigned URLs. `local` keeps objects on
    * disk under LOCAL_STORAGE_DIR and serves them through signed, expiring URLs issued
-   * by the application itself (useful for local development and single-VPS installs).
+   * by the application itself (test/development only; production requires S3).
    * `disabled` refuses every upload with a clear message instead of failing silently.
    */
   STORAGE_DRIVER: z.enum(["s3", "local", "disabled"]).default("disabled"),
@@ -78,6 +78,7 @@ function loadEnv(): Env {
     if (parsed.data.SESSION_SECRET.startsWith("dev-only")) problems.push("SESSION_SECRET must be set in production");
     if (parsed.data.APP_ENCRYPTION_KEY.startsWith("dev-only"))
       problems.push("APP_ENCRYPTION_KEY must be set in production");
+    if (parsed.data.STORAGE_DRIVER === "local") problems.push("Production media requires S3-compatible storage; local is test/development only");
     if (parsed.data.STORAGE_DRIVER === "s3" && !parsed.data.S3_BUCKET) problems.push("S3_BUCKET is required when STORAGE_DRIVER=s3");
     if (problems.length > 0) throw new Error(`Invalid production environment:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   }

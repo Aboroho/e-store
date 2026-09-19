@@ -10,8 +10,6 @@ import { assertPermission } from "@/lib/permissions";
 import { getCustomerSession } from "@/lib/auth/customer-session";
 import { enforceRateLimit, RateLimits } from "@/lib/rate-limit";
 import { formDataToObject } from "@/lib/validation";
-import { storageIsConfigured } from "@/modules/media/storage";
-import { confirmUpload, requestUpload } from "@/modules/media/service";
 import { moderateReview, reportReview, reviewImageLimits, submitReview } from "./service";
 import type { ActionState } from "@/modules/auth/action-state";
 
@@ -83,74 +81,6 @@ export async function submitReviewAction(_prev: ActionState, formData: FormData)
     };
   } catch (error) {
     return toState(error, "We could not save your review");
-  }
-}
-
-/**
- * Step 1 of a review image upload. Any signed-in customer may request one, within the
- * configured image count/size limits and the public rate limit.
- */
-export async function requestReviewImageUploadAction(input: {
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  checksum?: string;
-}): Promise<{ ok: true; assetId: string; uploadUrl: string; headers: Record<string, string> } | { ok: false; message: string }> {
-  const session = await getCustomerSession();
-  if (!session) return { ok: false, message: "Please sign in again" };
-  if (!storageIsConfigured()) return { ok: false, message: "Image uploads are not configured on this store" };
-
-  const ip = await clientIp();
-  try {
-    await enforceRateLimit({ scope: "review-upload", key: ip, ...RateLimits.reviewSubmit }, "Too many uploads from this connection");
-  } catch (error) {
-    const state = toState(error, "Too many uploads");
-    return { ok: false, message: state.message ?? "Too many uploads" };
-  }
-
-  try {
-    const limits = await reviewImageLimits(session.businessId);
-    if (!input.mimeType.startsWith("image/")) return { ok: false, message: "Only images can be attached to a review" };
-
-    // Per-image cap: the whole review may total `maxBytes`, so a single image above it
-    // can never be valid either.
-    if (input.sizeBytes > limits.maxBytes) {
-      return { ok: false, message: `Each image must be under ${Math.round(limits.maxBytes / (1024 * 1024))} MB` };
-    }
-
-    const asset = await requestUpload(
-      { businessId: session.businessId, userId: session.id, actorLabel: `customer:${session.phoneNormalized}` },
-      {
-        fileName: input.fileName,
-        mimeType: input.mimeType,
-        sizeBytes: input.sizeBytes,
-        visibility: "PUBLIC",
-        checksum: input.checksum,
-        title: "Review image",
-      },
-    );
-
-    if (!asset.upload) {
-      // Identical bytes already stored: reuse the asset without a second upload.
-      return { ok: false, message: "This image has already been uploaded for this review" };
-    }
-
-    return { ok: true, assetId: asset.asset.id, uploadUrl: asset.upload.url, headers: asset.upload.headers };
-  } catch (error) {
-    const state = toState(error, "Unable to start the upload");
-    return { ok: false, message: state.message ?? "Unable to start the upload" };
-  }
-}
-
-export async function confirmReviewImageUploadAction(input: { assetId: string; checksum?: string; width?: number; height?: number }) {
-  const session = await getCustomerSession();
-  if (!session) return { ok: false as const, message: "Please sign in again" };
-  try {
-    await confirmUpload({ businessId: session.businessId, userId: session.id, actorLabel: `customer:${session.phoneNormalized}` }, input);
-    return { ok: true as const };
-  } catch (error) {
-    const state = toState(error, "Unable to confirm the upload");
-    return { ok: false as const, message: state.message ?? "Unable to confirm the upload" };
   }
 }
 

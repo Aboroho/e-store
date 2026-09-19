@@ -35,7 +35,8 @@
     "db:migration:sql": "node scripts/schema-tool.mjs sql --out",
     "db:check": "node scripts/schema-tool.mjs check && node scripts/assemble-schema.mjs --check",
     "check": "npm run db:assemble:check && npm run typecheck && npm run lint",
-    "db:check-fk": "node scripts/fk-check.mjs"
+    "db:check-fk": "node scripts/fk-check.mjs",
+    "media:cleanup": "NODE_OPTIONS=--conditions=react-server tsx scripts/media-cleanup.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1135.0",
@@ -69,6 +70,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "exceljs": "^4.4.0",
+    "file-type": "^22.1.1",
     "lucide-react": "^0.545.0",
     "next": "^16.3.5",
     "pdfkit": "^0.20.2",

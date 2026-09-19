@@ -1,5 +1,6 @@
 "use client";
 
+import { MediaPicker } from "@/components/media/media-picker";
 import { useState } from "react";
 import { useActionState } from "react";
 import { initialActionState } from "@/modules/auth/action-state";
@@ -13,12 +14,13 @@ EST-000001,ORD-000001,1250.00,60.00,12.50,0.00`;
 /**
  * Courier statement import.
  *
- * The CSV is pasted or chosen from disk and posted as text — the server parses it
+ * CSV data is pasted, or an existing private CSV is selected from the shared media library — the server parses it
  * and matches every row against real shipments, so nothing here is trusted.
  */
 export function SettlementImportForm({ providers }: { providers: Array<{ code: string; name: string }> }) {
   const [state, formAction] = useActionState(importSettlementAction, initialActionState);
   const [csv, setCsv] = useState("");
+  const [source, setSource] = useState<{ id: string; name: string } | null>(null);
 
   return (
     <form action={formAction} className="space-y-4">
@@ -57,7 +59,7 @@ export function SettlementImportForm({ providers }: { providers: Array<{ code: s
           id="settlement-csv"
           name="csv"
           rows={8}
-          required
+          required={!source}
           value={csv}
           onChange={(event) => setCsv(event.target.value)}
           placeholder={SAMPLE}
@@ -66,17 +68,10 @@ export function SettlementImportForm({ providers }: { providers: Array<{ code: s
       </FormField>
 
       <div className="flex flex-wrap items-center gap-4">
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          className="text-xs"
-          onChange={async (event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-            setCsv(await file.text());
-          }}
-        />
-        <input type="hidden" name="sourceFileName" value="uploaded.csv" />
+        <MediaPicker mimeGroup="document" allowedTypes={["text/csv"]} uploadVisibility="PRIVATE" onSelect={(asset) => { setSource({ id: asset.id, name: asset.originalName }); setCsv(""); }} />
+        <input type="hidden" name="sourceMediaId" value={source?.id ?? ""} />
+        {source ? <p className="text-xs">Using {source.name}. <button type="button" className="underline" onClick={() => setSource(null)}>Remove association</button></p> : null}
+
       </div>
 
       <SubmitButton>Import statement</SubmitButton>

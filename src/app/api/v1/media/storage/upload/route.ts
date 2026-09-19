@@ -45,11 +45,27 @@ export async function PUT(request: Request) {
     return reject("Invalid storage key", 400);
   }
 
-  const body = Buffer.from(await request.arrayBuffer());
-  if (body.byteLength > MAX_BYTES) return reject("File is too large", 413);
+  const expectedSize = Number(url.searchParams.get("size") ?? 0);
+  const limit = expectedSize > 0 ? Math.min(expectedSize, MAX_BYTES) : MAX_BYTES;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = request.body?.getReader();
+  if (!reader) return reject("Empty upload");
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > limit) { await reader.cancel(); return reject("File is too large", 413); }
+    chunks.push(value);
+  }
+  if (expectedSize && total !== expectedSize) return reject("File size does not match", 400);
+  const body = Buffer.concat(chunks);
 
   await mkdir(path.dirname(full), { recursive: true });
-  await writeFile(full, body);
+  try { await writeFile(full, body, { flag: "wx" }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return reject("Object already uploaded", 412);
+    throw error;
+  }
 
   return new NextResponse(null, { status: 200, headers: { "x-stored-bytes": String(body.byteLength) } });
 }

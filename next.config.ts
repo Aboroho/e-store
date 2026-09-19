@@ -2,6 +2,16 @@ import type { NextConfig } from "next";
 
 const isProduction = process.env.NODE_ENV === "production";
 
+// Presigned browser uploads must be permitted by CSP, without opening arbitrary connections.
+const storageOrigins = new Set<string>();
+for (const candidate of [process.env.S3_ENDPOINT, process.env.S3_PUBLIC_BASE_URL]) {
+  if (candidate) { const url = new URL(candidate); if (["https:", "http:"].includes(url.protocol)) storageOrigins.add(url.origin); }
+}
+if (process.env.S3_BUCKET && /^[a-z0-9.-]+$/.test(process.env.S3_BUCKET)) {
+  storageOrigins.add(`https://${process.env.S3_BUCKET}.s3.${process.env.S3_REGION ?? "us-east-1"}.amazonaws.com`);
+  storageOrigins.add(`https://${process.env.S3_BUCKET}.s3.amazonaws.com`);
+}
+
 /**
  * Content Security Policy.
  *
@@ -21,17 +31,18 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https://connect.facebook.net https://analytics.tiktok.com",
+  `connect-src 'self' https://connect.facebook.net https://analytics.tiktok.com ${[...storageOrigins].join(" ")}`,
+  `media-src 'self' blob: https: ${[...storageOrigins].join(" ")}`,
   "frame-src https://www.facebook.com https://td.doubleclick.net https://www.youtube.com https://player.vimeo.com",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
-  "frame-ancestors 'self'",
+  isProduction ? "frame-ancestors 'self'" : "frame-ancestors 'self' https://arena.ai https://*.arena.ai",
 ].join("; ");
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  ...(isProduction ? [{ key: "X-Frame-Options", value: "SAMEORIGIN" }] : []),
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-DNS-Prefetch-Control", value: "on" },
   { key: "Content-Security-Policy", value: contentSecurityPolicy },
@@ -46,12 +57,14 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: ["*.e2b.app"],
   poweredByHeader: false,
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg", "bcryptjs", "pdfkit", "exceljs"],
   experimental: {
     // The generated Prisma client is TypeScript; it must run on the server only.
     serverActions: {
       bodySizeLimit: "4mb",
+      ...(!isProduction ? { allowedOrigins: ["*.e2b.app"] } : {}),
     },
   },
   images: {

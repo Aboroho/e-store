@@ -2399,6 +2399,7 @@ model CourierSettlement {
   reconciledAt        DateTime?
   idempotencyKey      String?           @unique
   sourceFileName      String?
+  sourceMediaId       String?
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
 
@@ -2993,6 +2994,9 @@ model MediaAsset {
   caption       String?
   visibility    MediaVisibility @default(PUBLIC)
   uploadedByUserId String?
+  uploadedByCustomerId String?
+  /// PENDING assets are never selectable or served. Legacy assets are READY.
+  uploadStatus String @default("READY")
   usageCount    Int             @default(0)
   metadata      Json?
   createdAt     DateTime        @default(now())
@@ -3009,6 +3013,9 @@ model MediaAsset {
 
   @@index([businessId, createdAt])
   @@index([businessId, folderId])
+  @@index([businessId, uploadStatus, createdAt])
+  @@index([businessId, uploadedByCustomerId, uploadStatus])
+  @@index([businessId, checksum])
   @@index([mimeType])
   @@index([businessId, deletedAt])
 }

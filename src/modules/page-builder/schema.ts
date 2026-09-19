@@ -1,3 +1,4 @@
+import { richTextMediaIds } from "@/modules/media/rich-text";
 import { z } from "zod";
 import { BLOCK_TYPES, MAX_BLOCKS_PER_SECTION, MAX_SECTIONS, SPACING, ALIGNMENTS, blockDefinition, responsiveSchema } from "./blocks";
 
@@ -107,12 +108,14 @@ export function safePageDocument(input: unknown): PageDocument {
 }
 
 /** Every media id referenced anywhere in a document (used for validation + usage rows). */
-export function documentMediaIds(document: PageDocument): string[] {
+export function documentMediaIds(document: PageDocument, kind?: "image" | "video"): string[] {
   const ids = new Set<string>();
   for (const section of document.sections) {
-    if (section.background.mediaId) ids.add(section.background.mediaId);
+    if (kind !== "video" && section.background.mediaId) ids.add(section.background.mediaId);
     for (const block of section.blocks) {
+      if (kind !== "video" && block.type === "text") for (const id of richTextMediaIds(String(block.props.text ?? ""))) ids.add(id);
       for (const [key, value] of Object.entries(block.props)) {
+        if (kind && (key === "videoMediaId" ? kind !== "video" : kind !== "image")) continue;
         if (typeof value === "string" && /mediaid$/i.test(key) && /^[0-9a-f-]{36}$/i.test(value)) ids.add(value);
       }
     }

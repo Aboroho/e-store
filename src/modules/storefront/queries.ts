@@ -215,7 +215,7 @@ export async function productCards(storefront: StorefrontContext, productIds: st
     where: { id: { in: productIds }, businessId: storefront.businessId, status: "ACTIVE", deletedAt: null },
     include: {
       variants: { where: { status: "ACTIVE" }, orderBy: { position: "asc" }, select: { id: true, priceOverridePaisa: true, compareAtPricePaisa: true } },
-      images: { orderBy: { position: "asc" }, take: 1, include: { media: true } },
+      images: { where: { media: { deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" } }, orderBy: { position: "asc" }, take: 1, include: { media: true } },
     },
   });
 
@@ -364,6 +364,7 @@ async function priceFilteredProductIds(storefront: StorefrontContext, query: Cat
 }
 
 export interface StorefrontVariant {
+  imageUrl: string | null;
   id: string;
   sku: string;
   name: string;
@@ -399,11 +400,11 @@ export async function storefrontProduct(storefront: StorefrontContext, slug: str
     where: { businessId: storefront.businessId, slug, status: "ACTIVE", deletedAt: null },
     include: {
       categories: { include: { category: true } },
-      images: { orderBy: { position: "asc" }, include: { media: true } },
+      images: { where: { media: { deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" } }, orderBy: { position: "asc" }, include: { media: true } },
       variants: {
         where: { status: "ACTIVE" },
         orderBy: { position: "asc" },
-        include: { attributeValues: { include: { attribute: true, attributeValue: true } } },
+        include: { images: { where: { media: { deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" } }, orderBy: { position: "asc" }, take: 1 }, attributeValues: { include: { attribute: true, attributeValue: true } } },
       },
     },
   });
@@ -463,6 +464,7 @@ export async function storefrontProduct(storefront: StorefrontContext, slug: str
         id: variant.id,
         sku: variant.sku,
         name: variant.name,
+        imageUrl: variant.images[0] ? `/api/v1/media/${variant.images[0].mediaId}` : null,
         pricePaisa: price?.pricePaisa ?? variant.priceOverridePaisa ?? 0,
         compareAtPricePaisa: price?.compareAtPricePaisa ?? variant.compareAtPricePaisa,
         available: availability.get(variant.id) ?? 0,
@@ -483,7 +485,7 @@ export async function productReviews(productId: string, limit = 20) {
     orderBy: [{ helpfulCount: "desc" }, { createdAt: "desc" }],
     take: limit,
     include: {
-      images: { orderBy: { position: "asc" }, include: { media: true } },
+      images: { where: { media: { deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" } }, orderBy: { position: "asc" }, include: { media: true } },
       customer: { select: { name: true } },
     },
   });
@@ -562,7 +564,7 @@ export async function storefrontHome(storefront: StorefrontContext) {
   const categoryTiles = await Promise.all(
     categories.map(async (category) => {
       const media = category.imageMediaId
-        ? await prisma.mediaAsset.findFirst({ where: { id: category.imageMediaId }, select: { objectKey: true, visibility: true, originalName: true, extension: true } })
+        ? await prisma.mediaAsset.findFirst({ where: { id: category.imageMediaId, businessId: storefront.businessId, deletedAt: null, uploadStatus: "READY", visibility: "PUBLIC" }, select: { objectKey: true, visibility: true, originalName: true, extension: true } })
         : null;
       return {
         id: category.id,
@@ -645,6 +647,7 @@ export async function publishedPage(storefront: StorefrontContext, slug: string)
     seoDescription: page.seoDescription,
     canonicalUrl: page.canonicalUrl,
     robots: page.robots,
+    ogMediaId: page.ogMediaId,
     document: version.document as unknown,
   };
 }

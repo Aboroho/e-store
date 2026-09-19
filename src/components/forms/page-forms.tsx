@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { MediaField } from "@/components/media/media-picker";
+import { useActionState, useState } from "react";
 import { initialActionState } from "@/modules/auth/action-state";
 import { Alert, FormField, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
@@ -33,6 +34,7 @@ export interface StorefrontOption {
 }
 
 export interface PageValues {
+  ogMediaId?: string | null;
   id: string;
   title: string;
   slug: string;
@@ -98,6 +100,7 @@ export function PageForm({ storefronts }: { storefronts: StorefrontOption[] }) {
 }
 
 export function PageSettingsForm({ page, storefronts }: { page: PageValues; storefronts: StorefrontOption[] }) {
+  const [ogImage, setOgImage] = useState<string | null>(page.ogMediaId ?? null);
   const [state, action] = useActionState(updatePageAction, initialActionState);
   return (
     <form action={action} className="space-y-3">
@@ -138,6 +141,7 @@ export function PageSettingsForm({ page, storefronts }: { page: PageValues; stor
 
       <fieldset className="space-y-3 rounded-md border p-3">
         <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Search engines</legend>
+        <MediaField label="Social sharing image" name="ogMediaId" value={ogImage} onChange={setOgImage} />
         <FormField label="SEO title" htmlFor="settings-seo-title" hint="Around 60 characters works best in search results.">
           <Input id="settings-seo-title" name="seoTitle" defaultValue={page.seoTitle ?? ""} />
         </FormField>

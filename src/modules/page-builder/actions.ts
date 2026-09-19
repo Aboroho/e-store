@@ -55,6 +55,7 @@ function readMeta(raw: Record<string, string | string[]>) {
     return Array.isArray(entry) ? entry[0] : entry;
   };
   return {
+    ogMediaId: value("ogMediaId") ? String(value("ogMediaId")) : null,
     storefrontId: (value("storefrontId") ?? "") === "" || value("storefrontId") === "all" ? null : String(value("storefrontId")),
     title: String(value("title") ?? "").trim(),
     slug: String(value("slug") ?? "").trim(),

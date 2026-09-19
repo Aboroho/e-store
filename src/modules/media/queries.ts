@@ -2,33 +2,12 @@ import "server-only";
 import { prisma } from "@/lib/db/client";
 import { getBusinessSettings } from "@/lib/settings";
 import { storageIsConfigured, storageDriverName } from "@/modules/media/storage";
-import { listMedia, toAssetView } from "@/modules/media/service";
-import type { MediaAssetView } from "@/modules/media/service";
+import { toAssetView } from "@/modules/media/service";
 
 /**
  * Media read queries used by pickers and admin screens. Storefront-specific queries live
  * in `modules/storefront/queries.ts`.
  */
-
-export interface MediaPickerOptions {
-  search?: string;
-  mimeGroup?: "image" | "document" | "all";
-  limit?: number;
-  excludeIds?: string[];
-}
-
-/** Small, picker-shaped media query used by form components. */
-export async function mediaForPicker(businessId: string, options: MediaPickerOptions = {}): Promise<MediaAssetView[]> {
-  const result = await listMedia(businessId, {
-    search: options.search,
-    mimeGroup: options.mimeGroup ?? "image",
-    pageSize: Math.min(60, options.limit ?? 24),
-    page: 1,
-    sort: "newest",
-  });
-  const excluded = new Set(options.excludeIds ?? []);
-  return result.rows.filter((asset) => !excluded.has(asset.id));
-}
 
 export async function pickerContext(businessId: string) {
   const [settings, driver] = await Promise.all([getBusinessSettings(businessId), Promise.resolve(storageDriverName())]);

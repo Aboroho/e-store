@@ -11,6 +11,7 @@ import { BLOCK_DEFINITIONS } from "./blocks";
 export type FieldKind = "text" | "textarea" | "number" | "select" | "checkbox" | "color" | "media" | "product" | "category" | "link";
 
 export interface FieldSpec {
+  mimeGroup?: "image" | "video";
   name: string;
   label: string;
   kind: FieldKind;
@@ -207,6 +208,7 @@ export const BLOCK_FIELDS: Record<string, FieldSpec[]> = {
     { name: "hours", label: "Opening hours", kind: "text" },
   ],
   embed: [
+    { name: "videoMediaId", label: "Library video (overrides external embed)", kind: "media", mimeGroup: "video" },
     {
       name: "provider",
       label: "Provider",

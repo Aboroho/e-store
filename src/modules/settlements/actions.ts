@@ -9,6 +9,7 @@ import { formDataToObject } from "@/lib/validation";
 import { formatPaisa } from "@/lib/money";
 import type { ActionState } from "@/modules/auth/action-state";
 import { importCourierSettlement, promoteResellerEarnings, reconcileSettlement, resolveSettlementEntry } from "@/modules/settlements/service";
+import { readMediaText } from "@/modules/media/service";
 import { parseStatementCsv } from "@/modules/settlements/csv";
 
 /**
@@ -47,7 +48,9 @@ export async function importSettlementAction(_prev: ActionState, formData: FormD
   if (!reference) return { status: "error", message: "Enter the courier's statement reference" };
 
   try {
-    const rows = parseStatementCsv(csv);
+    const sourceMediaId = String(raw.sourceMediaId ?? "") || null;
+    const source = sourceMediaId ? await readMediaText(context.businessId, sourceMediaId) : null;
+    const rows = parseStatementCsv(source?.text ?? csv);
     const result = await importCourierSettlement(context, {
       providerCode,
       reference,
@@ -55,7 +58,8 @@ export async function importSettlementAction(_prev: ActionState, formData: FormD
       periodEnd: raw.periodEnd ? new Date(String(raw.periodEnd)) : null,
       settlementDate: raw.settlementDate ? new Date(String(raw.settlementDate)) : null,
       bankReference: String(raw.bankReference ?? "").trim() || null,
-      sourceFileName: String(raw.sourceFileName ?? "").trim() || null,
+      sourceFileName: source?.name ?? null,
+      sourceMediaId,
       idempotencyKey: String(raw.idempotencyKey ?? "").trim() || null,
       rows,
     });

@@ -70,6 +70,7 @@ function variantsFromFormData(formData: FormData) {
     costPaisa: bdtToPaisa(formData.getAll("variantCost")[index]),
     weightGrams: formData.getAll("variantWeight")[index] ? Number(formData.getAll("variantWeight")[index]) : undefined,
     isPreorderEnabled: formData.getAll("variantPreorder")[index] === "on",
+    imageMediaId: String(formData.getAll("variantImageMediaId")[index] ?? "") || null,
     attributeValueIds: formData.getAll(`variantAttributes_${index}`).map(String).filter(Boolean),
   }));
   return rows;
@@ -98,6 +99,7 @@ export async function createProductAction(_prev: ActionState, formData: FormData
         weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
         taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
         preorderExpectedAt: raw.preorderExpectedAt || undefined,
+        imageIds: formData.getAll("imageIds").map(String),
         categoryIds: formData.getAll("categoryIds").map(String),
         primaryCategoryId: raw.primaryCategoryId || undefined,
         attributeIds: formData.getAll("attributeIds").map(String),
@@ -130,6 +132,7 @@ export async function updateProductAction(_prev: ActionState, formData: FormData
       productInputSchema.omit({ variants: true }),
       {
         ...raw,
+        variantImages: formData.getAll("variantId").map((id, index) => ({ variantId: String(id), mediaId: String(formData.getAll("variantImageMediaId")[index] ?? "") || null })),
         requiresShipping: raw.requiresShipping === "on",
         isFeatured: raw.isFeatured === "on",
         isPreorderEnabled: raw.isPreorderEnabled === "on",
@@ -137,6 +140,7 @@ export async function updateProductAction(_prev: ActionState, formData: FormData
         weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
         taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
         preorderExpectedAt: raw.preorderExpectedAt || undefined,
+        imageIds: formData.getAll("imageIds").map(String),
         categoryIds: formData.getAll("categoryIds").map(String),
         primaryCategoryId: raw.primaryCategoryId || undefined,
         attributeIds: formData.getAll("attributeIds").map(String),
@@ -255,6 +259,7 @@ export async function createCategoryAction(_prev: ActionState, formData: FormDat
       {
         ...raw,
         parentId: raw.parentId || undefined,
+        imageMediaId: raw.imageMediaId || null,
         isActive: raw.isActive === "on",
         isFeatured: raw.isFeatured === "on",
       },
@@ -284,6 +289,7 @@ export async function updateCategoryAction(_prev: ActionState, formData: FormDat
       {
         ...raw,
         parentId: raw.parentId || undefined,
+        imageMediaId: raw.imageMediaId || null,
         isActive: raw.isActive === "on",
         isFeatured: raw.isFeatured === "on",
       },
@@ -397,4 +403,14 @@ export async function setSinglePriceAction(variantId: string, priceListId: strin
   await setPriceListItem(context, { priceListId, variantId, pricePaisa });
   revalidatePath("/admin/catalog/products");
   revalidatePath(`/admin/catalog/price-lists`);
+}
+
+export async function updateAttributeValueImageAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  try {
+    const context = await actor("attribute.manage");
+    const { updateAttributeValueImage } = await import("./service");
+    await updateAttributeValueImage(context, String(formData.get("attributeValueId") ?? ""), String(formData.get("mediaId") ?? "") || null);
+    revalidatePath("/admin/catalog/attributes");
+    return { status: "success", message: "Default image saved" };
+  } catch (error) { return toState(error, "Unable to save default image"); }
 }

@@ -198,3 +198,18 @@ without a cookie returned `307` to the login page.
 - Load/soak testing and multi-node worker scheduling.
 - The FK/constraint drift checker runs as `npm run db:check-fk` and requires a migrated
   database; it is not part of `npm run check` because it needs PostgreSQL.
+
+### Global Media Manager regression coverage
+
+See `tests/integration/media-manager.test.ts` and `tests/lib/media-*.test.ts`.
+They cover shared-media lifecycle/concurrency, pending exclusion, content/hash/size
+validation, owner/tenant isolation, S3 signatures, progress/retries, CSV attachments,
+page history and safe cleanup. The policy test also scans application source for
+module-local file inputs or independent S3 clients.
+
+Browser smoke scenario (development storage, seeded staff account): open a new product,
+open **Add gallery images**, upload a PNG, select it and cancel; assert no gallery hidden
+input was added. Reopen, select the existing PNG and confirm; assert one media ID. Save
+the product and verify that the same ID reloads. Open `/admin/media` and switch to list
+view. Check the browser console for runtime errors. Production readiness additionally
+requires exercising this flow against the actual S3-compatible bucket and its CORS.
