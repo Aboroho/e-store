@@ -58,18 +58,18 @@ export async function createUserAction(_prev: ActionState, formData: FormData): 
     return toState(error, "You are not allowed to manage users");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(
-    createUserSchema,
-    {
-      ...raw,
-      roleIds: formData.getAll("roleIds").map(String),
-      sendInvite: raw.sendInvite === "on" || raw.sendInvite === "true",
-    },
-    "Create user",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(
+      createUserSchema,
+      {
+        ...raw,
+        roleIds: formData.getAll("roleIds").map(String),
+        sendInvite: raw.sendInvite === "on" || raw.sendInvite === "true",
+      },
+      "Create user",
+    );
+
     const result = await createStaffUser(actor, parsed);
     revalidatePath("/admin/users");
     return {
@@ -90,15 +90,14 @@ export async function updateUserAction(_prev: ActionState, formData: FormData): 
     return toState(error, "You are not allowed to manage users");
   }
 
-  const raw = formDataToObject(formData);
-  const userId = String(raw.userId ?? "");
-  const parsed = parseInput(
-    updateUserSchema,
-    { ...raw, roleIds: formData.getAll("roleIds").map(String) },
-    "Update user",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const userId = String(raw.userId ?? "");
+    const parsed = parseInput(
+      updateUserSchema,
+      { ...raw, roleIds: formData.getAll("roleIds").map(String) },
+      "Update user",
+    );
     await updateStaffUser(actor, userId, parsed);
     revalidatePath(`/admin/users/${userId}`);
     revalidatePath("/admin/users");
@@ -123,16 +122,16 @@ export async function resetUserPasswordAction(_prev: ActionState, formData: Form
     return toState(error, "You are not allowed to manage users");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(resetUserPasswordSchema, {
-    ...raw,
-    forceChange: raw.forceChange === "on" || raw.forceChange === "true",
-  });
-  if (parsed.newPassword !== parsed.confirmPassword) {
-    return { status: "error", message: "The password and confirmation do not match" };
-  }
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(resetUserPasswordSchema, {
+      ...raw,
+      forceChange: raw.forceChange === "on" || raw.forceChange === "true",
+    });
+    if (parsed.newPassword !== parsed.confirmPassword) {
+      return { status: "error", message: "The password and confirmation do not match" };
+    }
+
     await resetUserPassword(actor, {
       userId: parsed.userId,
       newPassword: parsed.newPassword,
@@ -153,13 +152,13 @@ export async function createRoleAction(_prev: ActionState, formData: FormData): 
     return toState(error, "You are not allowed to manage roles");
   }
 
-  const raw = formDataToObject(formData);
-  const parsed = parseInput(createRoleSchema, {
-    ...raw,
-    permissions: formData.getAll("permissions").map(String),
-  });
-
   try {
+    const raw = formDataToObject(formData);
+    const parsed = parseInput(createRoleSchema, {
+      ...raw,
+      permissions: formData.getAll("permissions").map(String),
+    });
+
     const role = await createRole(actor, parsed);
     revalidatePath("/admin/roles");
     redirect(`/admin/roles/${role.id}`);

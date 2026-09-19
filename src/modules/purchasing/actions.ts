@@ -49,28 +49,28 @@ export async function createPurchaseOrderAction(_prev: ActionState, formData: Fo
     return toState(error, "You are not allowed to create purchase orders");
   }
 
-  const raw = formDataToObject(formData);
-  const variantIds = formData.getAll("itemVariantId").map(String);
-  const items = variantIds.map((variantId, index) => ({
-    variantId,
-    orderedQuantity: Number(formData.getAll("itemQuantity")[index] ?? 0),
-    unitCostPaisa: Math.round(Number(formData.getAll("itemUnitCost")[index] ?? 0) * 100),
-    note: String(formData.getAll("itemNote")[index] ?? "").trim() || undefined,
-  }));
-
-  const parsed = parseInput(
-    purchaseOrderInputSchema,
-    {
-      ...raw,
-      expectedAt: raw.expectedAt || undefined,
-      extraCostPaisa: Math.round(Number(raw.extraCostPaisa ?? 0) * 100),
-      items,
-    },
-    "Create purchase order",
-  );
-
   let purchaseOrderId: string;
   try {
+    const raw = formDataToObject(formData);
+    const variantIds = formData.getAll("itemVariantId").map(String);
+    const items = variantIds.map((variantId, index) => ({
+      variantId,
+      orderedQuantity: Number(formData.getAll("itemQuantity")[index] ?? 0),
+      unitCostPaisa: Math.round(Number(formData.getAll("itemUnitCost")[index] ?? 0) * 100),
+      note: String(formData.getAll("itemNote")[index] ?? "").trim() || undefined,
+    }));
+
+    const parsed = parseInput(
+      purchaseOrderInputSchema,
+      {
+        ...raw,
+        expectedAt: raw.expectedAt || undefined,
+        extraCostPaisa: Math.round(Number(raw.extraCostPaisa ?? 0) * 100),
+        items,
+      },
+      "Create purchase order",
+    );
+
     const po = await createPurchaseOrder(context, parsed);
     purchaseOrderId = po.id;
   } catch (error) {
@@ -110,40 +110,40 @@ export async function receivePurchaseOrderAction(_prev: ActionState, formData: F
     return toState(error, "You are not allowed to receive stock");
   }
 
-  const raw = formDataToObject(formData);
-  const purchaseOrderItemIds = formData.getAll("receiptItemId").map(String);
-  const items = purchaseOrderItemIds
-    .map((purchaseOrderItemId, index) => ({
-      purchaseOrderItemId,
-      quantity: Number(formData.getAll("receiptQuantity")[index] ?? 0),
-      unitCostPaisa: Math.round(Number(formData.getAll("receiptUnitCost")[index] ?? 0) * 100),
-    }))
-    .filter((item) => item.quantity > 0);
-
-  const expenses = formData
-    .getAll("expenseLabel")
-    .map((label, index) => ({
-      label: String(label).trim(),
-      amountPaisa: Math.round(Number(formData.getAll("expenseAmount")[index] ?? 0) * 100),
-      allocationMethod: (String(formData.getAll("expenseMethod")[index] ?? "VALUE") as "QUANTITY" | "VALUE" | "NONE"),
-    }))
-    .filter((expense) => expense.label.length > 0 && expense.amountPaisa > 0);
-
-  const parsed = parseInput(
-    goodsReceiptInputSchema,
-    {
-      purchaseOrderId: String(raw.purchaseOrderId ?? ""),
-      locationId: raw.locationId || undefined,
-      note: raw.note || undefined,
-      externalReference: raw.externalReference || undefined,
-      idempotencyKey: raw.idempotencyKey || undefined,
-      items,
-      expenses,
-    },
-    "Record goods receipt",
-  );
-
   try {
+    const raw = formDataToObject(formData);
+    const purchaseOrderItemIds = formData.getAll("receiptItemId").map(String);
+    const items = purchaseOrderItemIds
+      .map((purchaseOrderItemId, index) => ({
+        purchaseOrderItemId,
+        quantity: Number(formData.getAll("receiptQuantity")[index] ?? 0),
+        unitCostPaisa: Math.round(Number(formData.getAll("receiptUnitCost")[index] ?? 0) * 100),
+      }))
+      .filter((item) => item.quantity > 0);
+
+    const expenses = formData
+      .getAll("expenseLabel")
+      .map((label, index) => ({
+        label: String(label).trim(),
+        amountPaisa: Math.round(Number(formData.getAll("expenseAmount")[index] ?? 0) * 100),
+        allocationMethod: (String(formData.getAll("expenseMethod")[index] ?? "VALUE") as "QUANTITY" | "VALUE" | "NONE"),
+      }))
+      .filter((expense) => expense.label.length > 0 && expense.amountPaisa > 0);
+
+    const parsed = parseInput(
+      goodsReceiptInputSchema,
+      {
+        purchaseOrderId: String(raw.purchaseOrderId ?? ""),
+        locationId: raw.locationId || undefined,
+        note: raw.note || undefined,
+        externalReference: raw.externalReference || undefined,
+        idempotencyKey: raw.idempotencyKey || undefined,
+        items,
+        expenses,
+      },
+      "Record goods receipt",
+    );
+
     const result = await receivePurchaseOrder(context, { ...parsed, items });
     revalidatePath("/admin/purchasing");
     revalidatePath(`/admin/purchasing/${parsed.purchaseOrderId}`);
