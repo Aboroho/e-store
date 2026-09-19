@@ -229,6 +229,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
   const pendingReplaceRef = React.useRef<string | null>(null);
   const fetchSeq = React.useRef(0);
 
+  // Preview URLs for upload cards shown inline in the content area.
+  // Built from the raw File objects before they enter the upload queue.
+  const uploadPreviewMapRef = React.useRef(new Map<string, { url: string; file: File }>());
+
   const searching = search.trim().length > 0;
 
   // Identity of the browsed view (folder or library-wide search). Rows belong
@@ -354,6 +358,46 @@ export function MediaExplorer(props: MediaExplorerProps) {
       [refreshAll],
     ),
   });
+
+  // Wrap addFiles to capture File objects for inline preview cards.
+  const addFilesWithPreview = React.useCallback(
+    (files: File[], targetFolderId?: string | null) => {
+      for (const file of files) {
+        if (file.type.startsWith("image/")) {
+          const key = `${file.name}::${file.size}`;
+          if (!uploadPreviewMapRef.current.has(key)) {
+            uploadPreviewMapRef.current.set(key, { url: URL.createObjectURL(file), file });
+          }
+        }
+      }
+      uploads.addFiles(files, targetFolderId);
+    },
+    [uploads.addFiles],
+  );
+
+  // Clean up preview URLs when upload items complete or are removed.
+  React.useEffect(() => {
+    const activeKeys = new Set(
+      uploads.items
+        .filter((item) => item.status === "waiting" || item.status === "uploading" || item.status === "processing")
+        .map((item) => `${item.fileName}::${item.size}`),
+    );
+    for (const [key, { url }] of uploadPreviewMapRef.current) {
+      if (!activeKeys.has(key)) {
+        URL.revokeObjectURL(url);
+        uploadPreviewMapRef.current.delete(key);
+      }
+    }
+  }, [uploads.items]);
+
+  // Revoke all preview URLs on unmount.
+  React.useEffect(() => {
+    return () => {
+      for (const { url } of uploadPreviewMapRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
 
   /* --------------------------------- derived -------------------------------- */
 
@@ -643,8 +687,18 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
   const downloadAsset = async (asset: MediaAssetView) => {
     const result = await downloadUrlAction(asset.id, "attachment");
-    if (result.ok) window.location.assign(result.url);
-    else toast.error(result.message);
+    if (result.ok) {
+      // Use a temporary anchor with the `download` attribute to trigger an
+      // actual browser download instead of merely navigating to the URL.
+      const a = document.createElement("a");
+      a.href = result.url;
+      a.download = asset.originalName;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      // Cleanup after a short delay so the browser has time to start the download.
+      setTimeout(() => a.remove(), 1000);
+    } else toast.error(result.message);
   };
 
   const openAssetExternal = async (asset: MediaAssetView) => {
@@ -949,10 +1003,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
     setDragging(false);
     if (!uploadsAllowed) return;
     if (dropFolderId) {
-      uploads.addFiles([...event.dataTransfer.files], dropFolderId);
+      addFilesWithPreview([...event.dataTransfer.files], dropFolderId);
       setDropFolderId(null);
     } else {
-      uploads.addFiles([...event.dataTransfer.files]);
+      addFilesWithPreview([...event.dataTransfer.files]);
     }
   };
 
@@ -1355,6 +1409,17 @@ export function MediaExplorer(props: MediaExplorerProps) {
               />
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                {/* Upload preview cards — shown inline while uploading */}
+                {uploads.items
+                  .filter((item) => item.status === "waiting" || item.status === "uploading" || item.status === "processing")
+                  .map((item) => (
+                    <UploadPreviewCard key={item.id} item={item} previewUrl={uploadPreviewMapRef.current.get(`${item.fileName}::${item.size}`)?.url} />
+                  ))}
+                {uploads.items
+                  .filter((item) => item.status === "failed")
+                  .map((item) => (
+                    <UploadPreviewCard key={item.id} item={item} previewUrl={uploadPreviewMapRef.current.get(`${item.fileName}::${item.size}`)?.url} onRetry={() => uploads.retry(item.id)} />
+                  ))}
                 {visibleFolders.map((folder, folderIndex) => (
                   <FolderCard
                     key={folder.id}
@@ -1387,7 +1452,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                       dragCounter.current = 0;
                       setDragging(false);
                       setDropFolderId(null);
-                      if (uploadsAllowed) uploads.addFiles([...event.dataTransfer.files], folder.id);
+                      if (uploadsAllowed) addFilesWithPreview([...event.dataTransfer.files], folder.id);
                     }}
                   />
                 ))}
@@ -1441,6 +1506,12 @@ export function MediaExplorer(props: MediaExplorerProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
+                    {/* Upload preview rows */}
+                    {uploads.items
+                      .filter((item) => item.status === "waiting" || item.status === "uploading" || item.status === "processing" || item.status === "failed")
+                      .map((item) => (
+                        <UploadPreviewRow key={item.id} item={item} previewUrl={uploadPreviewMapRef.current.get(`${item.fileName}::${item.size}`)?.url} onRetry={item.status === "failed" ? () => uploads.retry(item.id) : undefined} />
+                      ))}
                     {visibleFolders.map((folder, folderIndex) => (
                       <FolderRow
                         key={folder.id}
@@ -1619,7 +1690,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
       ) : null}
 
       {/* Context menu */}
-      {menu ? <ContextMenuHost menu={menu} viewCache={viewCache} folders={folders} buildAssetMenu={buildAssetMenu} buildFolderMenu={buildFolderMenu} buildEmptyMenu={buildEmptyMenu} onClose={() => setMenu(null)} /> : null}
+      {menu ? <ContextMenuHost menu={menu} viewCache={viewCache} folders={folders} visibleAssets={visibleAssets} buildAssetMenu={buildAssetMenu} buildFolderMenu={buildFolderMenu} buildEmptyMenu={buildEmptyMenu} onClose={() => setMenu(null)} /> : null}
 
       {/* Dialogs */}
       {createFolder.open ? (
@@ -1709,7 +1780,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
         tabIndex={-1}
         accept={props.allowedTypes.length > 0 ? props.allowedTypes.join(",") : undefined}
         onChange={(event) => {
-          uploads.addFiles([...(event.target.files ?? [])]);
+          addFilesWithPreview([...(event.target.files ?? [])]);
           if (uploadInputRef.current) uploadInputRef.current.value = "";
         }}
       />
@@ -1736,6 +1807,7 @@ function ContextMenuHost({
   menu,
   viewCache,
   folders,
+  visibleAssets,
   buildAssetMenu,
   buildFolderMenu,
   buildEmptyMenu,
@@ -1744,13 +1816,28 @@ function ContextMenuHost({
   menu: MenuState;
   viewCache: Map<string, MediaAssetView>;
   folders: ExplorerFolder[];
+  visibleAssets: MediaAssetView[];
   buildAssetMenu: (asset: MediaAssetView) => ContextMenuItemDef[][];
   buildFolderMenu: (folder: ExplorerFolder) => ContextMenuItemDef[][];
   buildEmptyMenu: () => ContextMenuItemDef[][];
   onClose: () => void;
 }) {
-  const targetAsset = menu.kind === "asset" && menu.assetId ? viewCache.get(menu.assetId) : undefined;
+  const targetAsset = menu.kind === "asset" && menu.assetId
+    ? (viewCache.get(menu.assetId) ?? visibleAssets.find((a) => a.id === menu.assetId))
+    : undefined;
   const targetFolder = menu.kind === "folder" && menu.folderId ? folders.find((folder) => folder.id === menu.folderId) : undefined;
+
+  // If the menu was opened for a specific target that no longer exists, close
+  // gracefully instead of showing a misleading empty-space menu.
+  const targetMissing =
+    (menu.kind === "asset" && !!menu.assetId && !targetAsset) ||
+    (menu.kind === "folder" && !!menu.folderId && !targetFolder);
+  React.useEffect(() => {
+    if (targetMissing) onClose();
+  }, [targetMissing, onClose]);
+
+  if (targetMissing) return null;
+
   return (
     <ExplorerContextMenu
       x={menu.x}
@@ -1819,6 +1906,72 @@ function moveDialogHiddenIds(folders: ExplorerFolder[], folderIds: string[]): Se
     }
   }
   return hidden;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Upload preview row (inline in list view)                                     */
+/* -------------------------------------------------------------------------- */
+
+function UploadPreviewRow({
+  item,
+  previewUrl,
+  onRetry,
+}: {
+  item: UploadItem;
+  previewUrl?: string;
+  onRetry?: () => void;
+}) {
+  const isImage = item.mimeType.startsWith("image/");
+  return (
+    <tr className="bg-brand-50/30">
+      <td className="px-3 py-2">
+        <span className="flex h-4 w-4 items-center justify-center">
+          {item.status === "uploading" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-500" /> : null}
+          {item.status === "waiting" ? <span className="h-2 w-2 rounded-full bg-slate-300" /> : null}
+          {item.status === "processing" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-600" /> : null}
+          {item.status === "failed" ? <span className="h-2 w-2 rounded-full bg-red-400" /> : null}
+        </span>
+      </td>
+      <td className="px-2 py-2">
+        <span className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
+            {isImage && previewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={previewUrl} alt="" className="h-full w-full object-cover opacity-60" />
+            ) : (
+              <MediaKindIcon mimeType={item.mimeType} className="h-4 w-4 text-slate-400" />
+            )}
+          </span>
+          <span className="min-w-0">
+            <span className="block max-w-56 truncate font-medium text-slate-800">{item.fileName}</span>
+            <span className="block truncate text-[11px] text-slate-400">
+              {item.status === "uploading" ? (item.progress > 0 ? `Uploading — ${item.progress}%` : "Uploading…") : null}
+              {item.status === "waiting" ? "Waiting…" : null}
+              {item.status === "processing" ? "Processing…" : null}
+              {item.status === "failed" ? (
+                <span className="text-red-500">
+                  {item.error ?? "Failed"}
+                  {onRetry ? (
+                    <button type="button" onClick={onRetry} className="ml-1.5 font-medium text-brand-600 hover:underline">Retry</button>
+                  ) : null}
+                </span>
+              ) : null}
+            </span>
+          </span>
+        </span>
+      </td>
+      <td className="hidden px-2 py-2 text-slate-500 md:table-cell">Uploading</td>
+      <td className="hidden px-2 py-2 tabular-nums text-slate-500 lg:table-cell">{formatBytes(item.size)}</td>
+      <td className="hidden px-2 py-2 text-slate-400 xl:table-cell">—</td>
+      <td className="hidden px-2 py-2 text-slate-500 sm:table-cell">—</td>
+      <td className="hidden px-2 py-2 md:table-cell">—</td>
+      <td className="px-2 py-2 text-right">
+        {item.status === "uploading" && item.progress > 0 ? (
+          <span className="text-[11px] tabular-nums text-slate-500">{item.progress}%</span>
+        ) : null}
+      </td>
+    </tr>
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1984,6 +2137,85 @@ function LoadErrorState({ message, onRetry }: { message: string; onRetry: () => 
 }
 
 /* -------------------------------------------------------------------------- */
+/* Upload preview cards (inline in content area)                               */
+/* -------------------------------------------------------------------------- */
+
+function UploadPreviewCard({
+  item,
+  previewUrl,
+  onRetry,
+}: {
+  item: UploadItem;
+  previewUrl?: string;
+  onRetry?: () => void;
+}) {
+  const isImage = item.mimeType.startsWith("image/");
+  return (
+    <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white">
+      {/* Thumbnail or file icon */}
+      <div className="relative aspect-square w-full bg-slate-100">
+        {isImage && previewUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={previewUrl} alt="" className="h-full w-full object-cover opacity-60" />
+        ) : (
+          <span className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-slate-400">
+            <MediaKindIcon mimeType={item.mimeType} className="h-9 w-9" />
+            <span className="max-w-[80%] truncate text-[10px]">{item.fileName.split(".").pop()?.toUpperCase() ?? "FILE"}</span>
+          </span>
+        )}
+        {/* Progress overlay */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/30">
+          {item.status === "uploading" ? (
+            <>
+              <span className="text-sm font-semibold text-white drop-shadow-md">
+                {item.progress > 0 ? `${item.progress}%` : ""}
+              </span>
+              <div className="w-3/4 overflow-hidden rounded-full bg-white/30" role="progressbar" aria-valuenow={item.progress} aria-valuemin={0} aria-valuemax={100}>
+                <div
+                  className="h-2 rounded-full bg-white transition-all duration-300"
+                  style={{ width: item.progress > 0 ? `${item.progress}%` : "30%" }}
+                />
+              </div>
+              {item.progress === 0 ? (
+                <span className="text-xs text-white/80 drop-shadow-md">Uploading…</span>
+              ) : null}
+            </>
+          ) : null}
+          {item.status === "waiting" ? (
+            <span className="text-xs font-medium text-white drop-shadow-md">Waiting…</span>
+          ) : null}
+          {item.status === "processing" ? (
+            <>
+              <Loader2 className="h-5 w-5 animate-spin text-white drop-shadow-md" />
+              <span className="text-xs font-medium text-white drop-shadow-md">Processing…</span>
+            </>
+          ) : null}
+          {item.status === "failed" ? (
+            <div className="flex flex-col items-center gap-1">
+              <span className="max-w-[90%] truncate text-xs font-medium text-red-200 drop-shadow-md" title={item.error}>
+                {item.error ?? "Failed"}
+              </span>
+              {onRetry ? (
+                <button type="button" onClick={onRetry} className="rounded-md bg-white/90 px-2 py-0.5 text-[11px] font-medium text-brand-700 hover:bg-white">
+                  Retry
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {/* Filename and size */}
+      <div className="p-2">
+        <p className="truncate text-xs font-medium text-slate-800" title={item.fileName}>
+          {item.fileName}
+        </p>
+        <p className="mt-0.5 text-[10px] tabular-nums text-slate-500">{formatBytes(item.size)}</p>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Grid cards                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -1993,7 +2225,7 @@ function CardMenuButton({ onClick, label }: { onClick: (event: React.MouseEvent)
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="rounded-md bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm ring-1 ring-slate-200 transition-opacity hover:bg-white hover:text-slate-800 focus-visible:opacity-100 group-hover:opacity-100"
+      className="rounded-md bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm ring-1 ring-slate-200 transition-all duration-150 hover:bg-white hover:text-slate-800 hover:shadow-md focus-visible:opacity-100 group-hover:opacity-100"
     >
       <MoreVertical className="h-3.5 w-3.5" />
     </button>
@@ -2036,8 +2268,10 @@ function FolderCard({
       onDragLeave={uploadsAllowed ? onDragLeave : undefined}
       onDrop={uploadsAllowed ? onDrop : undefined}
       className={cn(
-        "group relative overflow-hidden rounded-xl border bg-white transition-all hover:shadow-md",
-        selected ? "border-brand-400 ring-2 ring-brand-500/40" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60",
+        "group relative overflow-hidden rounded-xl border bg-white transition-all duration-150 hover:shadow-md",
+        selected
+          ? "border-brand-400 ring-2 ring-brand-500/40"
+          : "border-slate-200 hover:border-slate-300 hover:bg-slate-50",
         dropTarget && "border-brand-500 bg-brand-50 ring-2 ring-brand-500/50",
         cut && "opacity-50 saturate-50",
       )}
@@ -2068,7 +2302,7 @@ function FolderCard({
         className="block w-full cursor-pointer px-3 pb-2 pt-9 text-left"
         aria-label={selectable ? `${folder.name} — select, double-click to open` : `Open ${folder.name}`}
       >
-        <Folder className={cn("h-9 w-9 transition-colors", selected ? "text-brand-500" : "text-slate-300 group-hover:text-slate-400")} strokeWidth={1.5} />
+        <Folder className={cn("h-9 w-9 transition-colors", selected ? "text-brand-500" : "text-slate-300 group-hover:text-brand-400")} strokeWidth={1.5} />
         <p className="mt-2 truncate text-xs font-medium text-slate-800" title={folder.name}>
           {folder.name}
         </p>
@@ -2106,8 +2340,10 @@ function AssetCard({
     <div
       onContextMenu={onContextMenu}
       className={cn(
-        "group relative overflow-hidden rounded-xl border bg-white transition-all hover:shadow-md",
-        selected ? "border-brand-400 ring-2 ring-brand-500/40" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60",
+        "group relative overflow-hidden rounded-xl border bg-white transition-all duration-150 hover:shadow-md",
+        selected
+          ? "border-brand-400 ring-2 ring-brand-500/40"
+          : "border-slate-200 hover:border-slate-300 hover:bg-slate-50",
         cut && "opacity-50 saturate-50",
       )}
     >
@@ -2142,7 +2378,6 @@ function AssetCard({
           if (event.detail === 2) onPreview();
           else onSelect(event.shiftKey);
         }}
-        onDoubleClick={onPreview}
       >
         {isImage && asset.url ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -2172,11 +2407,11 @@ function AssetCard({
         {showFolder && asset.folderPath ? <p className="mt-0.5 truncate text-[10px] text-slate-400" title={asset.folderPath}>{asset.folderPath}</p> : null}
       </div>
 
-      <div className="absolute bottom-16 right-1.5 flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-        <button type="button" onClick={onDetails} title="Details" aria-label={`Details for ${displayName(asset)}`} className="rounded-md bg-white/95 p-1.5 text-slate-500 shadow-sm ring-1 ring-slate-200 hover:text-slate-800">
+      <div className="absolute bottom-16 right-1.5 flex gap-1 opacity-0 transition-all duration-150 focus-within:opacity-100 group-hover:opacity-100">
+        <button type="button" onClick={onDetails} title="Details" aria-label={`Details for ${displayName(asset)}`} className="rounded-md bg-white/95 p-1.5 text-slate-500 shadow-sm ring-1 ring-slate-200 transition-colors hover:bg-white hover:text-slate-800 hover:shadow-md">
           <Info className="h-3.5 w-3.5" />
         </button>
-        <button type="button" onClick={onPreview} title="Preview" aria-label={`Preview ${displayName(asset)}`} className="rounded-md bg-white/95 p-1.5 text-slate-500 shadow-sm ring-1 ring-slate-200 hover:text-slate-800">
+        <button type="button" onClick={onPreview} title="Preview" aria-label={`Preview ${displayName(asset)}`} className="rounded-md bg-white/95 p-1.5 text-slate-500 shadow-sm ring-1 ring-slate-200 transition-colors hover:bg-white hover:text-slate-800 hover:shadow-md">
           <Eye className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -2215,8 +2450,15 @@ function FolderRow({
         if ((event.target as HTMLElement).closest("button, a, input")) return;
         onSelect(event.shiftKey);
       }}
-      onDoubleClick={onOpen}
-      className={cn("transition-colors hover:bg-slate-50", selected && "bg-brand-50/60 hover:bg-brand-100/60", cut && "opacity-50")}
+      onDoubleClick={(event) => {
+        if ((event.target as HTMLElement).closest("button, a, input")) return;
+        onOpen();
+      }}
+      className={cn(
+        "group transition-colors duration-100 hover:bg-slate-50",
+        selected && "bg-brand-50/60 hover:bg-brand-100/60",
+        cut && "opacity-50",
+      )}
     >
       <td className="px-3 py-2">
         {selectable ? (
@@ -2233,10 +2475,10 @@ function FolderRow({
             else if (event.detail === 0) onOpen();
             else if (event.detail === 1) onSelect(event.shiftKey);
           }}
-          onDoubleClick={selectable ? onOpen : undefined}
+          onDoubleClick={selectable ? (event) => { event.stopPropagation(); onOpen(); } : undefined}
           className="flex w-full cursor-pointer items-center gap-2.5 text-left"
         >
-          <Folder className={cn("h-5 w-5 shrink-0", selected ? "text-brand-500" : "text-slate-400")} />
+          <Folder className={cn("h-5 w-5 shrink-0 transition-colors", selected ? "text-brand-500" : "text-slate-400 group-hover:text-brand-400")} />
           <span className="truncate font-medium text-slate-800">{folder.name}</span>
           {cut ? <Badge variant="neutral" className="px-1.5 py-0 text-[9px]">Cut</Badge> : null}
         </button>
@@ -2286,8 +2528,15 @@ function AssetRow({
         if ((event.target as HTMLElement).closest("button, a, input")) return;
         onSelect(event.shiftKey);
       }}
-      onDoubleClick={onPreview}
-      className={cn("cursor-default transition-colors hover:bg-slate-50", selected && "bg-brand-50/60 hover:bg-brand-100/60", cut && "opacity-50")}
+      onDoubleClick={(event) => {
+        if ((event.target as HTMLElement).closest("button, a, input")) return;
+        onPreview();
+      }}
+      className={cn(
+        "cursor-default transition-colors duration-100 hover:bg-slate-50",
+        selected && "bg-brand-50/60 hover:bg-brand-100/60",
+        cut && "opacity-50",
+      )}
     >
       <td className="px-3 py-2">
         <span onClick={(event) => event.stopPropagation()} className="flex">

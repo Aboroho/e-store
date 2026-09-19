@@ -69,9 +69,12 @@ export function ExplorerContextMenu({ x, y, sections, title, onClose }: Explorer
 
   const activate = (item: ContextMenuItemDef) => {
     if (item.disabled) return;
+    // Capture the callback before closing — closing unmounts the menu and
+    // could theoretically invalidate the item reference in edge cases.
+    const callback = item.onSelect;
     onClose();
     // Defer so the menu unmounts before dialogs opened by the action mount.
-    setTimeout(() => item.onSelect(), 0);
+    setTimeout(() => callback(), 0);
   };
 
   const moveFocus = (delta: number) => {
