@@ -160,6 +160,17 @@ CREATE UNIQUE INDEX "ResellerOrderEarning_order_item_key"
 CREATE UNIQUE INDEX "CourierSettlementEntry_unmatched_reference_key"
   ON "CourierSettlementEntry"("settlementId", "reference") WHERE "shipmentId" IS NULL AND "reference" IS NOT NULL;
 
+-- Media file names are unique inside their folder (case-insensitively), never
+-- globally: /products/product.jpg and /brands/product.jpg both exist, two
+-- /products/product.jpg cannot. Soft-deleted rows are excluded so a deleted
+-- name becomes available again. `folderId` is nullable, so the library root
+-- needs its own index.
+CREATE UNIQUE INDEX "MediaAsset_folder_name_key"
+  ON "MediaAsset"("businessId", "folderId", lower("originalName")) WHERE "deletedAt" IS NULL AND "folderId" IS NOT NULL;
+
+CREATE UNIQUE INDEX "MediaAsset_root_name_key"
+  ON "MediaAsset"("businessId", lower("originalName")) WHERE "deletedAt" IS NULL AND "folderId" IS NULL;
+
 -- ---------------------------------------------------------------------------
 -- Operational indexes for frequent report and worker queries
 -- ---------------------------------------------------------------------------

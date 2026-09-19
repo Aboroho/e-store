@@ -81,7 +81,9 @@ export const ADMIN_NAV: NavSection[] = [
     items: [
       { label: "Storefronts", href: "/admin/storefronts", permission: "storefront.manage", icon: "Globe", stage: 5 },
       { label: "Pages", href: "/admin/pages", permission: "page.manage", icon: "FileText", stage: 5 },
-      { label: "Media", href: "/admin/media", permission: "media.manage", icon: "Image", stage: 5 },
+      // Stage 4: the Media Library page is live, so the entry is enabled — it is
+      // the standalone way into the media manager, with no upload field needed.
+      { label: "Media", href: "/admin/media", permission: "media.manage", icon: "Image", stage: 4 },
       { label: "Reviews", href: "/admin/reviews", permission: "review.moderate", icon: "Star", stage: 5 },
     ],
   },

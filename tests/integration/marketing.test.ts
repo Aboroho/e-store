@@ -32,7 +32,7 @@ describe.skipIf(!reachable)("marketing integrations (database)", () => {
   beforeAll(async () => {
     context = await createTestBusiness("marketing");
     const storefront = await prisma.storefront.create({
-      data: { businessId: context.businessId, name: "Marketing shop", slug: `mkt-${randomUUID().slice(0, 6)}`, code: `MK-${randomUUID().slice(0, 6)}`, status: "ACTIVE", isDefault: true },
+      data: { businessId: context.businessId, name: "Marketing shop", slug: `mkt-${randomUUID().slice(0, 6)}`, code: `MK-${randomUUID().slice(0, 6)}`, status: "ACTIVE", isDefault: true, allowedPaymentMethods: [], allowedCourierProviders: [] },
     });
     storefrontId = storefront.id;
   });

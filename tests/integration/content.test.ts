@@ -30,7 +30,7 @@ describe.skipIf(!reachable)("stage five content surfaces (database)", () => {
   beforeAll(async () => {
     context = await createTestBusiness("content");
     const storefront = await prisma.storefront.create({
-      data: { businessId: context.businessId, name: "Content shop", slug: `content-${randomUUID().slice(0, 6)}`, code: `CS-${randomUUID().slice(0, 6)}`, status: "ACTIVE", isDefault: true },
+      data: { businessId: context.businessId, name: "Content shop", slug: `content-${randomUUID().slice(0, 6)}`, code: `CS-${randomUUID().slice(0, 6)}`, status: "ACTIVE", isDefault: true, allowedPaymentMethods: [], allowedCourierProviders: [] },
     });
     storefrontId = storefront.id;
     actor = { businessId: context.businessId, userId: context.userId, actorLabel: "tester@example.test" };

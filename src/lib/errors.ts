@@ -140,14 +140,38 @@ export function toErrorResponse(error: unknown): {
   };
 }
 
-/** True when a value is a Prisma "record not found" style error. */
+/**
+ * True when a value is a Prisma unique-constraint violation (`P2002`).
+ *
+ * `field` narrows it to one constraint. Prisma reports the offending constraint
+ * in more than one place depending on how the query ran: `meta.target` lists
+ * the columns, while a driver adapter surfaces the *index* name under
+ * `meta.driverAdapterError.cause.constraint.index`. Partial indexes (such as
+ * the media library's per-folder file-name uniqueness) only ever appear in the
+ * latter, so both are checked.
+ */
 export function isUniqueConstraintError(error: unknown, field?: string): boolean {
-  const candidate = error as { code?: string; meta?: { target?: string[] | string } } | null;
+  const candidate = error as
+    | {
+        code?: string;
+        meta?: {
+          target?: string[] | string;
+          driverAdapterError?: { cause?: { constraint?: { index?: string; fields?: string[] } } };
+        };
+      }
+    | null
+    | undefined;
   if (!candidate || candidate.code !== "P2002") return false;
   if (!field) return true;
+
   const target = candidate.meta?.target;
-  const fields = Array.isArray(target) ? target : typeof target === "string" ? [target] : [];
-  return fields.some((entry) => entry.includes(field));
+  const names: string[] = Array.isArray(target) ? [...target] : typeof target === "string" ? [target] : [];
+
+  const constraint = candidate.meta?.driverAdapterError?.cause?.constraint;
+  if (constraint?.index) names.push(constraint.index);
+  if (Array.isArray(constraint?.fields)) names.push(...constraint.fields);
+
+  return names.some((entry) => entry.includes(field));
 }
 
 export function isForeignKeyError(error: unknown): boolean {

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission } from "@/lib/permissions";
 import { listMedia, listMediaFolders, storageSummary } from "@/modules/media/service";
-import { mediaUsageDetail } from "@/modules/media/queries";
 import { getBusinessSettings } from "@/lib/settings";
 import { ALLOWED_MEDIA_TYPES } from "@/modules/media/schemas";
 

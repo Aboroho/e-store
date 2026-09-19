@@ -31,6 +31,12 @@ export const uploadRequestSchema = z.object({
   altText: z.string().trim().max(300).optional(),
   /** Reuse an identical upload instead of storing the same bytes twice. */
   checksum: z.string().trim().length(64).optional(),
+  /**
+   * Skip the checksum reuse and always create a new media object. The media
+   * manager sets this so the same local file can be uploaded as many times as
+   * the user wants; background/system uploads keep the deduplicating default.
+   */
+  allowDuplicate: z.coerce.boolean().default(false),
 });
 
 export type UploadRequestInput = z.infer<typeof uploadRequestSchema>;
