@@ -9,18 +9,9 @@ import { requestMetadata, clearSessionCookie, getSession, setSessionCookie } fro
 import { clearCustomerSessionCookie } from "@/lib/auth/customer-session";
 import { enforceRateLimit, RateLimits } from "@/lib/rate-limit";
 import { changePassword, createPasswordResetToken, resetPasswordWithToken, signInWithPassword, signOut } from "@/modules/auth/service";
+import { type ActionState } from "@/modules/auth/action-state";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logging";
-
-export interface ActionState {
-  status: "idle" | "success" | "error";
-  message?: string;
-  fieldErrors?: Record<string, string[]>;
-  /** Non-sensitive payload for the UI (e.g. a dev-only reset link). */
-  data?: Record<string, string>;
-}
-
-export const initialActionState: ActionState = { status: "idle" };
 
 const signInSchema = z.object({
   email: z.string().trim().min(3).max(200).toLowerCase(),

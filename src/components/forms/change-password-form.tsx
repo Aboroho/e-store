@@ -1,7 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import { changePasswordAction, initialActionState } from "@/modules/auth/actions";
+import { changePasswordAction } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { Alert, Button, Card, CardContent, CardFooter, CardHeader, CardTitle, FormField, Input } from "@/components/ui/primitives";
 
 export function ChangePasswordForm() {

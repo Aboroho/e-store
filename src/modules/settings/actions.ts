@@ -7,7 +7,7 @@ import { assertPermission } from "@/lib/permissions";
 import { zEmail } from "@/lib/validation";
 import { z } from "zod";
 import { updateBusinessProfile, updateBusinessSettings, updateStorefrontSettings } from "@/modules/settings/service";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 
 function toState(error: unknown, fallback: string): ActionState {
   if (error instanceof AppError) return { status: "error", message: error.message };

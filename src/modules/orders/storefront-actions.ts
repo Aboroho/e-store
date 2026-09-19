@@ -6,7 +6,7 @@ import { AppError } from "@/lib/errors";
 import { logger } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { placeStorefrontOrder } from "@/modules/orders/checkout";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 
 /**
  * Public storefront checkout action.

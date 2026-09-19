@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { initialActionState } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import {
   cancelPurchaseOrderAction,
   createPurchaseOrderAction,

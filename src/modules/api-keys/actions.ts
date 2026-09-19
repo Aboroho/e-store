@@ -6,7 +6,7 @@ import { logger } from "@/lib/logging";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission } from "@/lib/permissions";
 import { formDataToObject } from "@/lib/validation";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import { createApiKey, createWebhook, deleteWebhook, revokeApiKey, rotateApiKey, rotateWebhookSecret, updateWebhook } from "./service";
 import { sendTestWebhook } from "./delivery";
 

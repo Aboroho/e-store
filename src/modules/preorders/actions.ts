@@ -7,7 +7,7 @@ import { assertPermission } from "@/lib/permissions";
 import { formDataToObject, parseInput } from "@/lib/validation";
 import { preorderAllocationInputSchema } from "@/modules/catalog/schemas";
 import { allocatePreorderQueue, cancelPreorderCommitment } from "@/modules/preorders/service";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import { logger } from "@/lib/logging";
 
 function toState(error: unknown, fallback: string): ActionState {

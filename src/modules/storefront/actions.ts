@@ -9,7 +9,7 @@ import { requireSession } from "@/lib/auth/session";
 import { assertPermission } from "@/lib/permissions";
 import { recordAudit } from "@/lib/audit";
 import { formDataToObject } from "@/lib/validation";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 
 /**
  * Storefront administration actions.

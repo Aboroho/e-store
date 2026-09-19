@@ -22,7 +22,7 @@ import {
   resetUserPasswordSchema,
   updateUserSchema,
 } from "@/modules/users/schemas";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 
 async function actorContext(permission: string): Promise<ActorContext> {
   const session = await requireSession();

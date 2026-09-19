@@ -16,7 +16,7 @@ import {
   updateSupplier,
 } from "@/modules/purchasing/service";
 import { goodsReceiptInputSchema, purchaseOrderInputSchema, supplierInputSchema, supplierPaymentInputSchema } from "@/modules/catalog/schemas";
-import type { ActionState } from "@/modules/auth/actions";
+import type { ActionState } from "@/modules/auth/action-state";
 import { logger } from "@/lib/logging";
 
 async function actor(permission: string) {

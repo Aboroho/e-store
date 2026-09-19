@@ -2,7 +2,8 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { initialActionState, signInAction } from "@/modules/auth/actions";
+import { signInAction } from "@/modules/auth/actions";
+import { initialActionState } from "@/modules/auth/action-state";
 import { Alert, Button, Card, CardContent, FormField, Input } from "@/components/ui/primitives";
 
 export function LoginForm({ redirectTo, notice }: { redirectTo?: string; notice?: string }) {
