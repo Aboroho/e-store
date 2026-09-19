@@ -1,0 +1,1146 @@
+// =============================================================================
+// Part 3: customers, orders, payments, couriers, settlements, exchanges
+// =============================================================================
+
+enum OrderChannel {
+  STOREFRONT
+  ADMIN
+  IN_STORE
+  RESELLER
+  API
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  READY_TO_SHIP
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum FulfillmentStatus {
+  UNFULFILLED
+  PARTIALLY_FULFILLED
+  FULFILLED
+  CANCELLED
+}
+
+enum OrderItemStatus {
+  PENDING
+  RESERVED
+  PREORDER_PENDING
+  ALLOCATED
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+  EXCHANGED
+}
+
+enum OrderAdjustmentType {
+  DISCOUNT
+  DELIVERY_FEE
+  EXTRA_CHARGE
+  PACKAGING
+  COD_SURCHARGE
+  ROUNDING
+  RESELLER_COLLECTION
+}
+
+enum OrderStatusField {
+  ORDER
+  PAYMENT
+  FULFILLMENT
+  COURIER
+  EXCHANGE
+}
+
+enum OrderAddressType {
+  SHIPPING
+  BILLING
+}
+
+enum PaymentMethod {
+  COD
+  BKASH
+  SSLCOMMERZ
+  CASH
+  BANK_TRANSFER
+  MANUAL
+}
+
+enum PaymentRecordStatus {
+  PENDING
+  PROCESSING
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentAttemptStatus {
+  INITIATED
+  REDIRECTED
+  CALLBACK_RECEIVED
+  VERIFIED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RefundMethod {
+  PROVIDER
+  BKASH
+  SSLCOMMERZ
+  CASH
+  BANK_TRANSFER
+  MANUAL
+}
+
+enum ReversalStatus {
+  PENDING
+  APPLIED
+  REJECTED
+}
+
+enum CourierProviderCode {
+  PATHAO
+  STEADFAST
+  CARRYBEE
+  MANUAL
+}
+
+enum ShipmentType {
+  SALE
+  EXCHANGE_OUT
+  EXCHANGE_RETURN
+  REPLACEMENT
+}
+
+enum ShipmentStatus {
+  DRAFT
+  PENDING
+  CREATED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  PARTIALLY_DELIVERED
+  RETURNED
+  CANCELLED
+  EXCEPTION
+  FAILED
+}
+
+enum ShipmentSource {
+  MANUAL
+  API
+  WEBHOOK
+  SYNC
+}
+
+enum CourierChargeType {
+  DELIVERY
+  COD
+  RETURN
+  WEIGHT_ADJUSTMENT
+  OTHER
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum SettlementStatus {
+  DRAFT
+  IMPORTED
+  PARTIALLY_RECONCILED
+  RECONCILED
+  DISPUTED
+}
+
+enum SettlementEntryStatus {
+  MATCHED
+  UNMATCHED
+  DISPUTED
+  IGNORED
+}
+
+enum ExchangeStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  IN_TRANSIT
+  RECEIVED
+  INSPECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum ExchangeDirection {
+  RETURN
+  REPLACEMENT
+}
+
+enum ExchangeChannel {
+  CUSTOMER
+  STAFF
+}
+
+enum InspectionOutcome {
+  PENDING
+  SELLABLE
+  DAMAGED
+  DISCARDED
+}
+
+enum PaymentReconciliationType {
+  PAYMENT_PROVIDER
+  COURIER_COD
+}
+
+enum PaymentReconciliationStatus {
+  PENDING
+  MATCHED
+  DISPUTED
+  RESOLVED
+  WRITTEN_OFF
+}
+
+// ----------------------------------------------------------------------------
+// Customers
+// ----------------------------------------------------------------------------
+
+/// A customer is identified business-wide by a normalised phone number, so the
+/// same person is one record across all storefronts and sales channels.
+model Customer {
+  id                String         @id @default(uuid())
+  businessId        String
+  name              String
+  phoneNormalized   String
+  phone             String?
+  email             String?
+  emailNormalized   String?
+  districtCode      String?
+  addressLine       String?
+  area              String?
+  status            CustomerStatus @default(ACTIVE)
+  passwordHash      String?
+  hasAccount        Boolean        @default(false)
+  phoneVerifiedAt   DateTime?
+  emailVerifiedAt   DateTime?
+  lastLoginAt       DateTime?
+  totalOrders       Int            @default(0)
+  totalSpentPaisa   Int            @default(0)
+  lifetimeValuePaisa Int           @default(0)
+  firstOrderAt      DateTime?
+  lastOrderAt       DateTime?
+  isResellerCustomer Boolean       @default(false)
+  referredByResellerId String?
+  tags              String[]
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?
+
+  business       Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  addresses      CustomerAddress[]
+  customerNotes  CustomerNote[]
+  orders         Order[]
+  reviews        Review[]
+  sessions       CustomerSession[]
+  verifications  VerificationCode[]
+  claimRequests  AccountClaimRequest[]
+  consents       ConsentRecord[]
+  reviewReports  ReviewReport[]
+  exchanges      ExchangeRequest[]
+
+  @@unique([businessId, phoneNormalized])
+  @@index([businessId, emailNormalized])
+  @@index([businessId, status])
+  @@index([businessId, deletedAt])
+}
+
+model CustomerAddress {
+  id               String   @id @default(uuid())
+  customerId       String
+  label            String?
+  recipientName    String
+  phoneNormalized  String
+  phone            String?
+  districtCode     String?
+  addressLine      String
+  area             String?
+  postcode         String?
+  isDefault        Boolean  @default(false)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  district District? @relation(fields: [districtCode], references: [code], onDelete: SetNull)
+
+  @@index([customerId])
+}
+
+model CustomerNote {
+  id         String   @id @default(uuid())
+  customerId String
+  body       String
+  isPinned   Boolean  @default(false)
+  createdByUserId String?
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+}
+
+/// Passwordless account claim request: the customer proves control of the
+/// phone number by entering a one-time code delivered over SMS.
+model AccountClaimRequest {
+  id             String              @id @default(uuid())
+  customerId     String
+  phoneNormalized String
+  purpose        VerificationPurpose @default(ACCOUNT_CLAIM)
+  codeHash       String
+  expiresAt      DateTime
+  attempts       Int                 @default(0)
+  maxAttempts    Int                 @default(5)
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime            @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+  @@index([expiresAt])
+}
+
+// ----------------------------------------------------------------------------
+// Orders
+// ----------------------------------------------------------------------------
+
+model Order {
+  id                String            @id @default(uuid())
+  businessId        String
+  orderNumber       String
+  storefrontId      String?
+  channel           OrderChannel      @default(STOREFRONT)
+  customerId        String?
+  resellerId        String?
+  status            OrderStatus       @default(PENDING)
+  paymentStatus     PaymentStatus     @default(UNPAID)
+  fulfillmentStatus FulfillmentStatus @default(UNFULFILLED)
+  currency          String            @default("BDT")
+
+  // Monetary snapshot (integer paisa, server calculated)
+  itemsSubtotalPaisa   Int  @default(0)
+  discountTotalPaisa   Int  @default(0)
+  deliveryFeePaisa     Int  @default(0)
+  extraChargePaisa     Int  @default(0)
+  packagingCostPaisa   Int  @default(0)
+  codSurchargePaisa    Int  @default(0)
+  inventoryCostPaisa   Int  @default(0)
+  grandTotalPaisa      Int  @default(0)
+  paidPaisa            Int  @default(0)
+  refundedPaisa        Int  @default(0)
+  duePaisa             Int  @default(0)
+  codCollectPaisa      Int  @default(0)
+
+  // Customer snapshot (kept for historical integrity)
+  customerName      String?
+  customerPhone     String?
+  customerPhoneNormalized String?
+  customerEmail     String?
+  shippingDistrictCode String?
+  shippingAddressLine  String?
+  shippingArea         String?
+  deliveryNotes     String?
+
+  // Reseller collection (amount reseller collects from their customer)
+  resellerCollectionPaisa Int?
+  resellerCostPaisa       Int  @default(0)
+  resellerEarningPaisa    Int  @default(0)
+
+  deliveryZoneId    String?
+  expectedDeliveryAt DateTime?
+  placedAt          DateTime          @default(now())
+  confirmedAt       DateTime?
+  processingAt      DateTime?
+  readyToShipAt     DateTime?
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  cancelReason      String?
+  cancelledByUserId String?
+  internalNote      String?
+  customerNote      String?
+  createdByUserId   String?
+  updatedByUserId   String?
+  idempotencyKey    String?           @unique
+  sourceReference   String?
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  deletedAt         DateTime?
+
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storefront  Storefront?      @relation(fields: [storefrontId], references: [id], onDelete: SetNull)
+  customer    Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  reseller    Reseller?        @relation(fields: [resellerId], references: [id], onDelete: SetNull)
+  createdBy   User?            @relation("OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  items       OrderItem[]
+  adjustments OrderAdjustment[]
+  addresses   OrderAddress[]
+  statusHistory OrderStatusHistory[]
+  payments    Payment[]
+  paymentAttempts PaymentAttempt[]
+  refunds     Refund[]
+  shipments   Shipment[]
+  reservations StockReservation[]
+  preorders   PreorderCommitment[]
+  exchanges   ExchangeRequest[]
+  codCollections CodCollection[]
+  ledgerEntries ResellerLedgerEntry[]
+  earnings    ResellerOrderEarning[]
+  collectionChanges ResellerCollectionChange[]
+  settlementEntries CourierSettlementEntry[]
+  marketingEvents MarketingEvent[]
+  reviews     Review[]
+
+  @@unique([businessId, orderNumber])
+  @@index([businessId, status, placedAt])
+  @@index([businessId, paymentStatus])
+  @@index([customerId, placedAt])
+  @@index([resellerId, placedAt])
+  @@index([storefrontId, placedAt])
+  @@index([channel, placedAt])
+  @@index([placedAt])
+  @@index([businessId, deletedAt])
+}
+
+model OrderItem {
+  id               String          @id @default(uuid())
+  orderId          String
+  variantId        String?
+  productId        String?
+  sku              String
+  productName      String
+  variantName      String
+  variantAttributes Json?
+  quantity         Int
+  unitPricePaisa   Int
+  compareAtPricePaisa Int?
+  unitCostPaisa    Int             @default(0)
+  unitResellerPricePaisa Int?
+  packagingCostPaisa Int           @default(0)
+  discountPaisa    Int             @default(0)
+  lineSubtotalPaisa Int
+  lineTotalPaisa   Int
+  taxPaisa         Int             @default(0)
+  reservedQuantity Int             @default(0)
+  preorderQuantity Int             @default(0)
+  allocatedQuantity Int            @default(0)
+  dispatchedQuantity Int           @default(0)
+  cancelledQuantity Int            @default(0)
+  returnedQuantity Int             @default(0)
+  exchangedQuantity Int            @default(0)
+  status           OrderItemStatus @default(PENDING)
+  isPreorder       Boolean         @default(false)
+  pricingSource    String?
+  priceListId      String?
+  note             String?
+  position         Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  order          Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant        Variant?         @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  product        Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+  exchangeItems  ExchangeItem[]
+  reservation    StockReservation?
+  preorder       PreorderCommitment?
+  earnings       ResellerOrderEarning?
+  review         Review?
+
+  @@index([orderId])
+  @@index([variantId])
+  @@index([productId])
+}
+
+model OrderAdjustment {
+  id              String              @id @default(uuid())
+  orderId         String
+  type            OrderAdjustmentType
+  label           String
+  /// Signed amount. Discounts are negative, charges positive.
+  amountPaisa     Int
+  note            String?
+  createdByUserId String?
+  approvedByUserId String?
+  createdAt       DateTime            @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, type])
+}
+
+model OrderAddress {
+  id           String           @id @default(uuid())
+  orderId      String
+  type         OrderAddressType @default(SHIPPING)
+  recipientName String
+  phone        String
+  phoneNormalized String?
+  districtCode String?
+  districtName String?
+  addressLine  String
+  area         String?
+  postcode     String?
+  note         String?
+  createdAt    DateTime         @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, type])
+}
+
+model OrderStatusHistory {
+  id         String           @id @default(uuid())
+  orderId    String
+  field      OrderStatusField @default(ORDER)
+  fromStatus String?
+  toStatus   String
+  note       String?
+  actorUserId String?
+  actorType  ActorType        @default(USER)
+  actorCustomerId String?
+  createdAt  DateTime         @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([field, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Payments
+// ----------------------------------------------------------------------------
+
+model Payment {
+  id            String              @id @default(uuid())
+  businessId    String
+  orderId       String
+  method        PaymentMethod
+  status        PaymentRecordStatus @default(PENDING)
+  amountPaisa   Int
+  paidPaisa     Int                 @default(0)
+  refundedPaisa Int                 @default(0)
+  currency      String              @default("BDT")
+  integrationId String?
+  providerName  String?
+  providerReference String?
+  providerPaymentId String?
+  collectedByUserId String?
+  receivedAt    DateTime?
+  verifiedAt    DateTime?
+  note          String?
+  recordedByUserId String?
+  idempotencyKey String?            @unique
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order    Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  attempts PaymentAttempt[]
+  events   PaymentEvent[]
+  refunds  Refund[]
+  allocations PaymentAllocation[]
+  settlements CourierSettlementEntry[]
+
+  @@index([orderId, createdAt])
+  @@index([businessId, status])
+  @@index([providerReference])
+  @@index([method, createdAt])
+}
+
+/// A single attempt to collect a payment through a provider (or manually).
+/// Multiple attempts may exist for the same order/payment.
+model PaymentAttempt {
+  id                String               @id @default(uuid())
+  paymentId         String?
+  orderId           String
+  businessId        String
+  method            PaymentMethod
+  status            PaymentAttemptStatus @default(INITIATED)
+  amountPaisa       Int
+  currency          String               @default("BDT")
+  providerName      String?
+  providerPaymentId String?
+  providerTransactionId String?
+  providerReference String?
+  /// Our own unique reference sent to the provider (used for verification).
+  clientReference   String               @unique
+  redirectUrl       String?
+  requestPayload    Json?
+  responsePayload   Json?
+  failureReason     String?
+  verifiedAt        DateTime?
+  expiresAt         DateTime?
+  idempotencyKey    String?              @unique
+  createdByUserId   String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  events  PaymentEvent[]
+
+  @@index([orderId, status])
+  @@index([providerReference])
+  @@index([providerPaymentId])
+}
+
+/// Raw provider callback / webhook record; unique provider event ids make
+/// callback processing idempotent.
+model PaymentEvent {
+  id              String   @id @default(uuid())
+  paymentId       String?
+  paymentAttemptId String?
+  orderId         String?
+  businessId      String?
+  providerName    String
+  eventType       String
+  providerEventId String?
+  signatureValid  Boolean  @default(false)
+  payload         Json
+  headers         Json?
+  status          WebhookEventStatus @default(RECEIVED)
+  processingResult String?
+  errorMessage    String?
+  processedAt     DateTime?
+  attempts        Int      @default(0)
+  ipAddress       String?
+  createdAt       DateTime @default(now())
+
+  payment Payment?        @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  attempt PaymentAttempt? @relation(fields: [paymentAttemptId], references: [id], onDelete: SetNull)
+
+  @@unique([providerName, providerEventId])
+  @@index([status, createdAt])
+  @@index([providerName, createdAt])
+}
+
+/// Allocation of a payment to an order (supports partial payments and
+/// payments spread across orders via exchanges).
+model PaymentAllocation {
+  id          String   @id @default(uuid())
+  paymentId   String
+  orderId     String?
+  exchangeRequestId String?
+  amountPaisa Int
+  direction   String   @default("COLLECT")
+  note        String?
+  createdAt   DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([orderId])
+}
+
+model Refund {
+  id              String       @id @default(uuid())
+  businessId      String
+  orderId         String?
+  paymentId       String?
+  exchangeRequestId String?
+  customerId      String?
+  method          RefundMethod @default(MANUAL)
+  status          RefundStatus @default(REQUESTED)
+  amountPaisa     Int
+  reason          String?
+  note            String?
+  providerName    String?
+  providerReference String?
+  providerRefundId String?
+  requestedByUserId String?
+  processedByUserId String?
+  processedAt     DateTime?
+  failureReason   String?
+  idempotencyKey  String?      @unique
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order    Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  payment  Payment?  @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  attempts RefundAttempt[]
+  exchange ExchangeRequest? @relation(fields: [exchangeRequestId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([businessId, status, createdAt])
+}
+
+model RefundAttempt {
+  id              String   @id @default(uuid())
+  refundId        String
+  status          RefundStatus @default(PROCESSING)
+  providerName    String?
+  providerReference String?
+  requestPayload  Json?
+  responsePayload Json?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+
+  refund Refund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+
+  @@index([refundId])
+}
+
+/// Actual COD cash collected from the courier (or rider) for a shipment.
+model CodCollection {
+  id              String   @id @default(uuid())
+  businessId      String
+  orderId         String
+  shipmentId      String?  @unique
+  expectedPaisa   Int      @default(0)
+  collectedPaisa  Int      @default(0)
+  courierChargePaisa Int   @default(0)
+  codChargePaisa  Int      @default(0)
+  netPaisa        Int      @default(0)
+  collectedAt     DateTime?
+  recordedByUserId String?
+  settlementId    String?
+  status          String   @default("RECORDED")
+  note            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  settlement CourierSettlement? @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, collectedAt])
+  @@index([orderId])
+}
+
+/// Payment provider settlement / bank reconciliation records.
+model PaymentReconciliation {
+  id            String                      @id @default(uuid())
+  businessId    String
+  type          PaymentReconciliationType   @default(PAYMENT_PROVIDER)
+  status        PaymentReconciliationStatus @default(PENDING)
+  providerName  String?
+  reference     String
+  statementDate DateTime?
+  grossPaisa    Int @default(0)
+  feePaisa      Int @default(0)
+  netPaisa      Int @default(0)
+  matchedPaisa  Int @default(0)
+  note          String?
+  createdByUserId String?
+  reconciledByUserId String?
+  reconciledAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, type, reference])
+  @@index([businessId, status])
+}
+
+// ----------------------------------------------------------------------------
+// Couriers and shipments
+// ----------------------------------------------------------------------------
+
+model CourierProvider {
+  id            String               @id @default(uuid())
+  businessId    String
+  code          CourierProviderCode
+  name          String
+  isEnabled     Boolean              @default(false)
+  testMode      Boolean              @default(true)
+  integrationId String?
+  pickupName    String?
+  pickupPhone   String?
+  pickupAddress String?
+  pickupCity    String?
+  pickupArea    String?
+  defaultWeightGrams Int             @default(500)
+  defaultDeliveryType String?
+  codEnabled    Boolean              @default(true)
+  returnFeePaisa Int                 @default(0)
+  priority      Int                  @default(0)
+  config        Json?
+  lastSyncAt    DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  shipments  Shipment[]
+  webhookEvents CourierWebhookEvent[]
+  settlements CourierSettlement[]
+
+  @@unique([businessId, code])
+  @@index([businessId, isEnabled])
+}
+
+model Shipment {
+  id                  String              @id @default(uuid())
+  businessId          String
+  orderId             String?
+  exchangeRequestId   String?
+  courierProviderId   String?
+  providerCode        CourierProviderCode @default(MANUAL)
+  type                ShipmentType        @default(SALE)
+  status              ShipmentStatus      @default(DRAFT)
+  internalCode        String
+  providerConsignmentId String?
+  trackingCode        String?
+  merchantOrderId     String?
+  // Recipient snapshot
+  recipientName       String
+  recipientPhone      String
+  recipientPhoneNormalized String?
+  recipientDistrictCode String?
+  recipientAddress    String
+  recipientArea       String?
+  recipientNote       String?
+  // Parcel description snapshot
+  itemDescription     String?
+  itemQuantity        Int                 @default(0)
+  declaredWeightGrams Int                 @default(500)
+  deliveryType        String?
+  // Money (paisa)
+  codAmountPaisa      Int                 @default(0)
+  courierChargePaisa  Int                 @default(0)
+  codChargePaisa      Int                 @default(0)
+  deliveryFeePaisa    Int                 @default(0)
+  expectedCollectionPaisa Int             @default(0)
+  collectedPaisa      Int                 @default(0)
+  // Lifecycle
+  attemptCount        Int                 @default(0)
+  requestedAt         DateTime?
+  dispatchedAt        DateTime?
+  deliveredAt         DateTime?
+  returnedAt          DateTime?
+  cancelledAt         DateTime?
+  lastStatusAt        DateTime?
+  failureReason       String?
+  providerStatusRaw   String?
+  // Delivery
+  deliverableQuantity Int                 @default(0)
+  partialDelivery     Boolean             @default(false)
+  assignedDeliveryAgent String?
+  idempotencyKey      String?             @unique
+  createdByUserId     String?
+  metadata            Json?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  business   Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order      Order?           @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  exchange   ExchangeRequest? @relation(fields: [exchangeRequestId], references: [id], onDelete: SetNull)
+  courier    CourierProvider? @relation(fields: [courierProviderId], references: [id], onDelete: SetNull)
+  statusHistory ShipmentStatusHistory[]
+  charges    CourierCharge[]
+  codCollection CodCollection?
+  settlementEntries CourierSettlementEntry[]
+  outbox     OutboxEvent[]
+
+  @@unique([businessId, internalCode])
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([trackingCode])
+  @@index([providerConsignmentId])
+  @@index([providerCode, lastStatusAt])
+}
+
+model ShipmentStatusHistory {
+  id            String         @id @default(uuid())
+  shipmentId    String
+  fromStatus    ShipmentStatus?
+  toStatus      ShipmentStatus
+  providerStatus String?
+  source        ShipmentSource @default(MANUAL)
+  note          String?
+  actorUserId   String?
+  recordedAt    DateTime       @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, recordedAt])
+}
+
+model CourierCharge {
+  id            String            @id @default(uuid())
+  shipmentId    String
+  type          CourierChargeType @default(DELIVERY)
+  amountPaisa   Int
+  codChargePaisa Int              @default(0)
+  note          String?
+  recordedByUserId String?
+  createdAt     DateTime          @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, type])
+}
+
+/// Raw inbound courier webhook payloads. Provider event ids (when supplied)
+/// are unique per provider so that duplicate callbacks are ignored.
+model CourierWebhookEvent {
+  id              String             @id @default(uuid())
+  courierProviderId String?
+  providerCode    CourierProviderCode
+  providerEventId String?
+  eventType       String
+  trackingCode    String?
+  signatureValid  Boolean            @default(false)
+  payload         Json
+  headers         Json?
+  status          WebhookEventStatus @default(RECEIVED)
+  processingResult String?
+  errorMessage    String?
+  attempts        Int                @default(1)
+  receivedAt      DateTime           @default(now())
+  processedAt     DateTime?
+  ipAddress       String?
+
+  courier CourierProvider? @relation(fields: [courierProviderId], references: [id], onDelete: SetNull)
+
+  @@unique([providerCode, providerEventId])
+  @@index([status, receivedAt])
+  @@index([providerCode, receivedAt])
+}
+
+// ----------------------------------------------------------------------------
+// Courier settlements
+// ----------------------------------------------------------------------------
+
+model CourierSettlement {
+  id                  String            @id @default(uuid())
+  businessId          String
+  courierProviderId   String?
+  providerCode        CourierProviderCode
+  reference           String
+  status              SettlementStatus  @default(DRAFT)
+  periodStart         DateTime?
+  periodEnd           DateTime?
+  settlementDate      DateTime?
+  receivedAt          DateTime?
+  bankReference       String?
+  grossCollectedPaisa Int               @default(0)
+  courierFeePaisa     Int               @default(0)
+  codChargePaisa      Int               @default(0)
+  otherDeductionPaisa Int               @default(0)
+  netReceivedPaisa    Int               @default(0)
+  reconciledPaisa     Int               @default(0)
+  unmatchedPaisa      Int               @default(0)
+  note                String?
+  importedByUserId    String?
+  reconciledByUserId  String?
+  reconciledAt        DateTime?
+  idempotencyKey      String?           @unique
+  sourceFileName      String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  courier   CourierProvider? @relation(fields: [courierProviderId], references: [id], onDelete: SetNull)
+  entries   CourierSettlementEntry[]
+  codCollections CodCollection[]
+  ledgerEntries ResellerLedgerEntry[]
+
+  @@unique([businessId, providerCode, reference])
+  @@index([businessId, status, settlementDate])
+  @@index([providerCode, settlementDate])
+}
+
+/// A single line of a courier settlement, matched to a shipment/order.
+model CourierSettlementEntry {
+  id             String                @id @default(uuid())
+  settlementId   String
+  shipmentId     String?
+  orderId        String?
+  paymentId      String?
+  reference      String?
+  trackingCode   String?
+  grossPaisa     Int                   @default(0)
+  courierFeePaisa Int                  @default(0)
+  codChargePaisa Int                   @default(0)
+  otherDeductionPaisa Int              @default(0)
+  netPaisa       Int                   @default(0)
+  status         SettlementEntryStatus @default(UNMATCHED)
+  matchMethod    String?
+  discrepancyPaisa Int                 @default(0)
+  discrepancyReason String?
+  note           String?
+  ledgerProcessedAt DateTime?
+  matchedAt      DateTime?
+  matchedByUserId String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  settlement CourierSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  shipment   Shipment?         @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  order      Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  payment    Payment?          @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  ledgerEntries ResellerLedgerEntry[]
+
+  @@unique([settlementId, shipmentId])
+  @@index([settlementId, status])
+  @@index([orderId])
+  @@index([trackingCode])
+}
+
+// ----------------------------------------------------------------------------
+// Exchanges
+// ----------------------------------------------------------------------------
+
+model ExchangeRequest {
+  id                String         @id @default(uuid())
+  businessId        String
+  exchangeNumber    String
+  orderId           String
+  customerId        String?
+  resellerId        String?
+  reasonId          String?
+  reasonCode        String
+  reasonNote        String?
+  status            ExchangeStatus @default(REQUESTED)
+  channel           ExchangeChannel @default(CUSTOMER)
+  isPartial         Boolean        @default(false)
+  // Money (paisa)
+  returnValuePaisa    Int          @default(0)
+  replacementValuePaisa Int        @default(0)
+  deliveryChargePaisa Int          @default(0)
+  additionalChargePaisa Int        @default(0)
+  discountPaisa       Int          @default(0)
+  /// Positive => customer owes the business, negative => business owes customer.
+  differencePaisa     Int          @default(0)
+  collectionStatus    String       @default("NONE")
+  refundId            String?
+  paymentId           String?
+  // Lifecycle
+  requestedAt         DateTime     @default(now())
+  approvedAt          DateTime?
+  approvedByUserId    String?
+  rejectedAt          DateTime?
+  rejectedByUserId    String?
+  rejectionReason     String?
+  receivedAt          DateTime?
+  receivedByUserId    String?
+  inspectedAt         DateTime?
+  inspectedByUserId   String?
+  completedAt         DateTime?
+  cancelledAt         DateTime?
+  cancelReason        String?
+  replacementOrderId  String?
+  replacementShipmentId String?
+  returnShipmentId    String?
+  expectedDeliveryAt  DateTime?
+  note                String?
+  internalNote        String?
+  createdByUserId     String?
+  updatedByUserId     String?
+  idempotencyKey      String?      @unique
+  metadata            Json?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  business     Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order        Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  reseller     Reseller?         @relation(fields: [resellerId], references: [id], onDelete: SetNull)
+  reason       ExchangeReason?   @relation(fields: [reasonId], references: [id], onDelete: SetNull)
+  items        ExchangeItem[]
+  statusHistory ExchangeStatusHistory[]
+  shipments    Shipment[]
+  refunds      Refund[]
+
+  @@unique([businessId, exchangeNumber])
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([customerId])
+}
+
+model ExchangeItem {
+  id               String            @id @default(uuid())
+  exchangeRequestId String
+  direction        ExchangeDirection
+  orderItemId      String?
+  variantId        String?
+  sku              String
+  productName      String
+  variantName      String
+  attributesSnapshot Json?
+  quantity         Int
+  unitPricePaisa   Int
+  lineTotalPaisa   Int
+  unitCostPaisa    Int               @default(0)
+  inspectionOutcome InspectionOutcome @default(PENDING)
+  inspectionNote   String?
+  inspectedByUserId String?
+  inspectedAt      DateTime?
+  inspectionQuantity Int?
+  restockMovementId String?
+  replacementStatus String?
+  note             String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  exchangeRequest ExchangeRequest @relation(fields: [exchangeRequestId], references: [id], onDelete: Cascade)
+  orderItem       OrderItem?      @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  variant         Variant?        @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([exchangeRequestId, direction])
+  @@index([orderItemId])
+}
+
+model ExchangeStatusHistory {
+  id                String         @id @default(uuid())
+  exchangeRequestId String
+  fromStatus        ExchangeStatus?
+  toStatus          ExchangeStatus
+  note              String?
+  actorUserId       String?
+  actorCustomerId   String?
+  actorType         ActorType      @default(USER)
+  createdAt         DateTime       @default(now())
+
+  exchangeRequest ExchangeRequest @relation(fields: [exchangeRequestId], references: [id], onDelete: Cascade)
+
+  @@index([exchangeRequestId, createdAt])
+}

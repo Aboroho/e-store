@@ -1,0 +1,260 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { prisma } from "@/lib/db/client";
+import { AppError } from "@/lib/errors";
+import { archiveProduct, createAttribute, createCategory, createProduct, updateProduct } from "@/modules/catalog/service";
+import { setPriceListItem, resolveVariantPrice } from "@/modules/pricing/service";
+import { applyStockMovement } from "@/modules/inventory/service";
+import { withTransaction } from "@/lib/db/client";
+import { createTestBusiness, databaseReachable, destroyTestBusiness, type TestContext } from "./fixtures";
+
+/**
+ * Catalog and pricing services against the real database: slug generation,
+ * server-side duplicate SKU detection, price-list resolution and the archive
+ * guards that stop a variant with stock or order history from disappearing.
+ */
+
+const reachable = await databaseReachable();
+
+describe.skipIf(!reachable)("catalog and pricing (database)", () => {
+  let context: TestContext;
+  const actor = () => ({ userId: context.userId, businessId: context.businessId, actorLabel: "test-actor" });
+
+  beforeAll(async () => {
+    context = await createTestBusiness("catalog");
+  });
+
+  afterAll(async () => {
+    await destroyTestBusiness(context.businessId);
+    await prisma.$disconnect();
+  });
+
+  it("creates a product with variants, price list items and balance rows", async () => {
+    const createdAttribute = await createAttribute(actor(), {
+      name: `Colour ${context.slug}`,
+      type: "COLOR",
+      unit: undefined,
+      isVariantDefining: true,
+      values: [
+        { value: "Red", colorHex: "#dc2626" },
+        { value: "Blue", colorHex: "#2563eb" },
+      ],
+    });
+
+    const attributeValues = await prisma.attributeValue.findMany({
+      where: { attributeId: createdAttribute.id },
+      orderBy: { position: "asc" },
+    });
+    expect(attributeValues).toHaveLength(2);
+
+    const created = await createProduct(actor(), {
+      name: "Kitchen Scarf",
+      slug: undefined,
+      productType: "VARIABLE",
+      status: "ACTIVE",
+      shortDescription: "Soft cotton scarf",
+      unitLabel: "piece",
+      requiresShipping: true,
+      isFeatured: false,
+      isPreorderEnabled: false,
+      taxRateBps: 0,
+      packagingCostPaisa: 0,
+      categoryIds: [],
+      attributeIds: [createdAttribute.id],
+      variants: attributeValues.map((value, index) => ({
+        name: value.value,
+        sku: `SCARF-${index}-${context.slug}`,
+        pricePaisa: 12_500 + index * 500,
+        costPaisa: 7_000,
+        attributeValueIds: [value.id],
+        isPreorderEnabled: false,
+      })),
+    });
+
+    expect(created.slug).toContain("kitchen-scarf");
+
+    const product = await prisma.product.findUniqueOrThrow({
+      where: { id: created.id },
+      include: { variants: { orderBy: { position: "asc" } } },
+    });
+    expect(product.variants).toHaveLength(2);
+
+    for (const variant of product.variants) {
+      const priceItem = await prisma.priceListItem.findFirst({
+        where: { variantId: variant.id, minQuantity: 1 },
+      });
+      expect(priceItem?.pricePaisa ?? variant.priceOverridePaisa).toBeGreaterThan(0);
+
+      const balance = await prisma.inventoryBalance.findUnique({
+        where: { locationId_variantId: { locationId: context.locationId, variantId: variant.id } },
+      });
+      expect(balance).not.toBeNull();
+      expect(balance?.onHand).toBe(0);
+    }
+
+    // The generated slug must be unique even when the same name is used twice.
+    const second = await createProduct(actor(), {
+      name: "Kitchen Scarf",
+      slug: undefined,
+      productType: "SIMPLE",
+      status: "DRAFT",
+      unitLabel: "piece",
+      requiresShipping: true,
+      isFeatured: false,
+      isPreorderEnabled: false,
+      taxRateBps: 0,
+      packagingCostPaisa: 0,
+      categoryIds: [],
+      attributeIds: [],
+      variants: [
+        { name: "Default", sku: `SCARF-ALT-${context.slug}`, pricePaisa: 9_900, attributeValueIds: [], isPreorderEnabled: false },
+      ],
+    });
+    expect(second.slug).not.toBe(product.slug);
+  });
+
+  it("rejects duplicate SKUs across variants instead of letting the database fail", async () => {
+    const duplicateSku = `DUP-${context.slug}`;
+
+    await expect(
+      createProduct(actor(), {
+        name: "Duplicate SKU product",
+        slug: undefined,
+        productType: "VARIABLE",
+        status: "DRAFT",
+        unitLabel: "piece",
+        requiresShipping: true,
+        isFeatured: false,
+        isPreorderEnabled: false,
+        taxRateBps: 0,
+        packagingCostPaisa: 0,
+        categoryIds: [],
+        attributeIds: [],
+        variants: [
+          { name: "One", sku: duplicateSku, pricePaisa: 10_000, attributeValueIds: [], isPreorderEnabled: false },
+          { name: "Two", sku: duplicateSku, pricePaisa: 10_000, attributeValueIds: [], isPreorderEnabled: false },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(AppError);
+  });
+
+  it("creates categories with a materialised path and blocks cycles", async () => {
+    const parentCreated = await createCategory(actor(), {
+      name: `Apparel ${context.slug}`,
+      slug: undefined,
+      parentId: undefined,
+      position: 0,
+      isActive: true,
+      isFeatured: false,
+    });
+    const childCreated = await createCategory(actor(), {
+      name: `Winter ${context.slug}`,
+      slug: undefined,
+      parentId: parentCreated.id,
+      position: 0,
+      isActive: true,
+      isFeatured: false,
+    });
+
+    const parent = await prisma.category.findUniqueOrThrow({ where: { id: parentCreated.id } });
+    const child = await prisma.category.findUniqueOrThrow({ where: { id: childCreated.id } });
+    expect(child.path).toBe(`${parent.slug}/${child.slug}`);
+    expect(parent.path).toBe(parent.slug);
+    expect(parent.parentId).toBeNull();
+
+    await expect(
+      updateProduct(actor(), "00000000-0000-0000-0000-000000000000", { name: "Nope" }),
+    ).rejects.toThrowError(/not found/i);
+
+    const { updateCategory } = await import("@/modules/catalog/service");
+    await expect(updateCategory(actor(), parent.id, { parentId: child.id })).rejects.toThrowError(/cycle|own|descendant/i);
+  });
+
+  it("resolves prices from the price list and honours the variant override fallback", async () => {
+    const product = await createProduct(actor(), {
+      name: "Priced product",
+      slug: undefined,
+      productType: "SIMPLE",
+      status: "ACTIVE",
+      unitLabel: "piece",
+      requiresShipping: true,
+      isFeatured: false,
+      isPreorderEnabled: false,
+      taxRateBps: 0,
+      packagingCostPaisa: 0,
+      categoryIds: [],
+      attributeIds: [],
+      variants: [
+        { name: "Default", sku: `PRICED-${context.slug}`, pricePaisa: 20_000, attributeValueIds: [], isPreorderEnabled: false },
+      ],
+    });
+
+    const [variant] = await prisma.variant.findMany({ where: { productId: product.id } });
+    if (!variant) throw new Error("product did not create a variant");
+
+    await setPriceListItem(actor(), { priceListId: context.priceListId, variantId: variant.id, pricePaisa: 19_500 });
+
+    const resolved = await resolveVariantPrice(variant.id, { quantity: 1, priceListId: context.priceListId });
+    expect(resolved.pricePaisa).toBe(19_500);
+
+    // Bulk pricing tier wins for larger quantities.
+    await setPriceListItem(actor(), { priceListId: context.priceListId, variantId: variant.id, pricePaisa: 17_000, minQuantity: 10 });
+    const bulk = await resolveVariantPrice(variant.id, { quantity: 12, priceListId: context.priceListId });
+    expect(bulk.pricePaisa).toBe(17_000);
+
+    const single = await resolveVariantPrice(variant.id, { quantity: 1, priceListId: context.priceListId });
+    expect(single.pricePaisa).toBe(19_500);
+  });
+
+  it("refuses to archive a variant that still has stock, and allows it once the stock is gone", async () => {
+    const product = await createProduct(actor(), {
+      name: "Archivable product",
+      slug: undefined,
+      productType: "SIMPLE",
+      status: "ACTIVE",
+      unitLabel: "piece",
+      requiresShipping: true,
+      isFeatured: false,
+      isPreorderEnabled: false,
+      taxRateBps: 0,
+      packagingCostPaisa: 0,
+      categoryIds: [],
+      attributeIds: [],
+      variants: [
+        { name: "Default", sku: `ARCH-${context.slug}`, pricePaisa: 5_000, attributeValueIds: [], isPreorderEnabled: false },
+      ],
+    });
+
+    const [variant] = await prisma.variant.findMany({ where: { productId: product.id } });
+    if (!variant) throw new Error("product did not create a variant");
+
+    await withTransaction((tx) =>
+      applyStockMovement(tx, {
+        businessId: context.businessId,
+        locationId: context.locationId,
+        variantId: variant.id,
+        type: "OPENING",
+        onHandDelta: 4,
+        unitCostPaisa: 3_000,
+        actorUserId: context.userId,
+      }),
+    );
+
+    await expect(archiveProduct(actor(), product.id)).rejects.toThrowError(/stock|reserved|preorder/i);
+
+    await withTransaction((tx) =>
+      applyStockMovement(tx, {
+        businessId: context.businessId,
+        locationId: context.locationId,
+        variantId: variant.id,
+        type: "CORRECTION",
+        onHandDelta: -4,
+        actorUserId: context.userId,
+      }),
+    );
+
+    await archiveProduct(actor(), product.id, "test cleanup");
+    const archived = await prisma.product.findUniqueOrThrow({ where: { id: product.id } });
+    expect(archived.status).toBe("ARCHIVED");
+    expect(archived.deletedAt).not.toBeNull();
+  });
+});

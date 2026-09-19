@@ -1,0 +1,1073 @@
+// =============================================================================
+// Part 4: resellers & payouts, media, CMS/page builder, reviews,
+//         integrations, API keys, marketing, plugins, notifications, ops
+// =============================================================================
+
+enum ResellerStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum ResellerCommissionType {
+  MARGIN_BASED
+  PERCENT_OF_MARGIN
+  FIXED_PER_ORDER
+  FIXED_PER_ITEM
+  NONE
+}
+
+enum ResellerLedgerType {
+  EARNING
+  PACKAGING_CHARGE
+  COURIER_CHARGE
+  COD_CHARGE
+  ADJUSTMENT
+  REVERSAL
+  PAYOUT
+  PAYOUT_REVERSAL
+}
+
+enum LedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum LedgerEntryStatus {
+  PENDING
+  ELIGIBLE
+  PAID
+  VOID
+}
+
+enum PayoutStatus {
+  DRAFT
+  PENDING
+  PENDING_APPROVAL
+  APPROVED
+  PAID
+  CANCELLED
+  FAILED
+}
+
+enum PayoutMethod {
+  BKASH
+  BANK_TRANSFER
+  CASH
+  OTHER
+}
+
+enum MediaVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum PageType {
+  HOME
+  CONTENT
+  LANDING
+  POLICY
+  COLLECTION
+  CONTACT
+}
+
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PageVersionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum NavigationItemType {
+  PAGE
+  CATEGORY
+  PRODUCT
+  URL
+  GROUP
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SPAM
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum MarketingProvider {
+  META_PIXEL
+  META_CONVERSIONS
+  TIKTOK_PIXEL
+  GOOGLE_ANALYTICS
+  CUSTOM
+}
+
+enum MarketingEventStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED_NO_CONSENT
+  DISCARDED
+}
+
+enum PluginStatus {
+  REGISTERED
+  ENABLED
+  DISABLED
+  INCOMPATIBLE
+  ERROR
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  CRITICAL
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRYING
+  DEAD
+  CANCELLED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  FAILED
+  DEAD
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  DEAD
+}
+
+// ----------------------------------------------------------------------------
+// Resellers
+// ----------------------------------------------------------------------------
+
+model Reseller {
+  id                String               @id @default(uuid())
+  businessId        String
+  userId            String?              @unique
+  code              String
+  name              String
+  businessName      String?
+  phone             String?
+  phoneNormalized   String?
+  email             String?
+  status            ResellerStatus       @default(ACTIVE)
+  commissionType    ResellerCommissionType @default(MARGIN_BASED)
+  commissionValue   Int                  @default(0)
+  /// When true, the configured reseller price already includes packaging cost.
+  packagingIncluded Boolean              @default(true)
+  packagingCostPaisa Int                 @default(0)
+  deliveryChargePaisa Int                @default(0)
+  codChargePaisa    Int                  @default(0)
+  defaultDistrictCode String?
+  address           String?
+  nidNumber         String?
+  payoutMethod      PayoutMethod         @default(BKASH)
+  payoutAccountNumber String?
+  payoutAccountName String?
+  minimumPayoutPaisa Int                 @default(0)
+  creditLimitPaisa  Int                  @default(0)
+  joinedAt          DateTime             @default(now())
+  suspendedAt       DateTime?
+  note              String?
+  createdByUserId   String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  business     Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user         User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  priceList    PriceList?
+  orders       Order[]
+  ledgerEntries ResellerLedgerEntry[]
+  payouts      ResellerPayout[]
+  earnings     ResellerOrderEarning[]
+  collectionChanges ResellerCollectionChange[]
+  exchanges    ExchangeRequest[]
+
+  @@unique([businessId, code])
+  @@index([businessId, status])
+  @@index([phoneNormalized])
+}
+
+/// Immutable ledger of everything the business owes (or has paid to) a
+/// reseller. Entries become ELIGIBLE only after the matching courier COD
+/// settlement has been received and reconciled.
+model ResellerLedgerEntry {
+  id               String              @id @default(uuid())
+  businessId       String
+  resellerId       String
+  type             ResellerLedgerType
+  direction        LedgerDirection
+  amountPaisa      Int
+  status           LedgerEntryStatus   @default(PENDING)
+  orderId          String?
+  orderItemId      String?
+  settlementId     String?
+  settlementEntryId String?
+  exchangeRequestId String?
+  payoutId         String?
+  description      String
+  reason           String?
+  eligibleAt       DateTime?
+  paidAt           DateTime?
+  voidedAt         DateTime?
+  reversesEntryId  String?             @unique
+  idempotencyKey   String?             @unique
+  createdByUserId  String?
+  actorType        ActorType           @default(SYSTEM)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reseller   Reseller            @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  order      Order?              @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  settlement CourierSettlement?  @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  settlementEntry CourierSettlementEntry? @relation(fields: [settlementEntryId], references: [id], onDelete: SetNull)
+  payout     ResellerPayout?     @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  reversesEntry ResellerLedgerEntry? @relation("LedgerReversal", fields: [reversesEntryId], references: [id], onDelete: SetNull)
+  reversedBy ResellerLedgerEntry? @relation("LedgerReversal")
+  payoutEntries ResellerPayoutEntry[]
+
+  @@index([resellerId, status])
+  @@index([resellerId, createdAt])
+  @@index([businessId, status])
+  @@index([orderId])
+  @@index([type, createdAt])
+}
+
+/// Snapshot of the earnings calculation for one reseller order item.
+/// Calculated from order snapshots (never from current prices).
+model ResellerOrderEarning {
+  id                    String   @id @default(uuid())
+  businessId            String
+  resellerId            String
+  orderId               String
+  orderItemId           String?
+  collectedPaisa        Int      @default(0)
+  resellerPricePaisa    Int      @default(0)
+  resellerCostPaisa     Int      @default(0)
+  packagingCostPaisa    Int      @default(0)
+  courierChargePaisa    Int      @default(0)
+  codChargePaisa        Int      @default(0)
+  earningsPaisa         Int      @default(0)
+  expectedCodPaisa      Int      @default(0)
+  settledPaisa          Int      @default(0)
+  eligibilityStatus     String   @default("PENDING")
+  eligibleAt            DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reseller  Reseller  @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+
+  @@unique([orderItemId])
+  @@index([resellerId, eligibilityStatus])
+  @@index([orderId])
+}
+
+/// Audit trail for changes to the amount a reseller collects from their own
+/// customer on a given order.
+model ResellerCollectionChange {
+  id            String   @id @default(uuid())
+  orderId       String
+  resellerId    String
+  previousPaisa Int?
+  newPaisa      Int
+  reason        String?
+  changedByUserId String?
+  changedByResellerId String?
+  createdAt     DateTime @default(now())
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([resellerId, createdAt])
+}
+
+model ResellerPayout {
+  id              String       @id @default(uuid())
+  businessId      String
+  resellerId      String
+  payoutNumber    String
+  status          PayoutStatus @default(DRAFT)
+  method          PayoutMethod @default(BKASH)
+  amountPaisa     Int
+  accountNumber   String?
+  accountName     String?
+  transactionReference String?
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  note            String?
+  requestedByUserId String?
+  approvedByUserId String?
+  approvedAt      DateTime?
+  paidByUserId    String?
+  paidAt          DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  failureReason   String?
+  idempotencyKey  String?      @unique
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  business  Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  reseller  Reseller              @relation(fields: [resellerId], references: [id], onDelete: Restrict)
+  entries   ResellerPayoutEntry[]
+  transactions ResellerPayoutTransaction[]
+  ledgerEntries ResellerLedgerEntry[]
+
+  @@unique([businessId, payoutNumber])
+  @@index([resellerId, status])
+  @@index([businessId, status, createdAt])
+}
+
+/// A ledger entry allocated to a payout. The unique constraint on
+/// `ledgerEntryId` is the database guarantee against double payouts.
+model ResellerPayoutEntry {
+  id            String   @id @default(uuid())
+  payoutId      String
+  ledgerEntryId String   @unique
+  amountPaisa   Int
+  createdAt     DateTime @default(now())
+
+  payout      ResellerPayout      @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  ledgerEntry ResellerLedgerEntry @relation(fields: [ledgerEntryId], references: [id], onDelete: Restrict)
+
+  @@index([payoutId])
+}
+
+model ResellerPayoutTransaction {
+  id              String       @id @default(uuid())
+  payoutId        String
+  status          PayoutStatus @default(PENDING)
+  providerName    String?
+  providerReference String?
+  requestPayload  Json?
+  responsePayload Json?
+  errorMessage    String?
+  createdByUserId String?
+  createdAt       DateTime     @default(now())
+
+  payout ResellerPayout @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+
+  @@index([payoutId])
+}
+
+// ----------------------------------------------------------------------------
+// Media
+// ----------------------------------------------------------------------------
+
+model MediaFolder {
+  id          String   @id @default(uuid())
+  businessId  String
+  parentId    String?
+  name        String
+  path        String
+  createdByUserId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  business Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   MediaFolder? @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children MediaFolder[] @relation("FolderHierarchy")
+  assets   MediaAsset[]
+
+  @@unique([businessId, path])
+  @@index([businessId, parentId])
+}
+
+model MediaAsset {
+  id            String          @id @default(uuid())
+  businessId    String
+  folderId      String?
+  storageProvider String        @default("S3")
+  bucket        String?
+  objectKey     String          @unique
+  originalName  String
+  mimeType      String
+  extension     String
+  sizeBytes     Int
+  width         Int?
+  height        Int?
+  checksum      String?
+  altText       String?
+  title         String?
+  caption       String?
+  visibility    MediaVisibility @default(PUBLIC)
+  uploadedByUserId String?
+  usageCount    Int             @default(0)
+  metadata      Json?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  deletedAt     DateTime?
+
+  business  Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  folder    MediaFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  usages    MediaUsage[]
+  productImages ProductImage[]
+  variantImages VariantImage[]
+  reviewImages  ReviewImage[]
+  pagesAsOgImage Page[]     @relation("PageOgImage")
+
+  @@index([businessId, createdAt])
+  @@index([businessId, folderId])
+  @@index([mimeType])
+  @@index([businessId, deletedAt])
+}
+
+/// Where a media asset is used. Prevents deleting assets that are referenced.
+model MediaUsage {
+  id          String   @id @default(uuid())
+  mediaId     String
+  entityType  String
+  entityId    String
+  field       String   @default("image")
+  productId   String?
+  variantId   String?
+  createdAt   DateTime @default(now())
+
+  media   MediaAsset @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  product Product?   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant Variant?   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, entityType, entityId, field])
+  @@index([entityType, entityId])
+}
+
+// ----------------------------------------------------------------------------
+// Storefront content: pages, versions, navigation
+// ----------------------------------------------------------------------------
+
+model Page {
+  id               String      @id @default(uuid())
+  businessId       String
+  storefrontId     String?
+  title            String
+  slug             String
+  type             PageType    @default(CONTENT)
+  status           PageStatus  @default(DRAFT)
+  isSystem         Boolean     @default(false)
+  isHomepage       Boolean     @default(false)
+  publishedVersionId String?   @unique
+  draftVersionId   String?     @unique
+  currentVersion   Int         @default(0)
+  seoTitle         String?
+  seoDescription   String?
+  seoKeywords      String?
+  ogMediaId        String?
+  canonicalUrl     String?
+  robots           String?
+  template         String      @default("default")
+  createdByUserId  String?
+  updatedByUserId  String?
+  publishedAt      DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  deletedAt        DateTime?
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storefront   Storefront?   @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+  ogMedia      MediaAsset?   @relation("PageOgImage", fields: [ogMediaId], references: [id], onDelete: SetNull)
+  versions     PageVersion[]
+  navigationItems NavigationMenuItem[]
+
+  @@unique([businessId, storefrontId, slug])
+  @@index([businessId, status])
+  @@index([storefrontId, status])
+}
+
+/// Immutable revision of a page. `document` holds the validated, versioned
+/// page-builder document (see src/modules/page-builder).
+model PageVersion {
+  id            String            @id @default(uuid())
+  pageId        String
+  version       Int
+  status        PageVersionStatus @default(DRAFT)
+  document      Json
+  documentVersion Int             @default(1)
+  blocksCount   Int               @default(0)
+  note          String?
+  createdByUserId String?
+  publishedByUserId String?
+  publishedAt   DateTime?
+  archivedAt    DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, version])
+  @@index([pageId, status])
+}
+
+model NavigationMenu {
+  id           String   @id @default(uuid())
+  storefrontId String
+  handle       String
+  name         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  storefront Storefront           @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+  items      NavigationMenuItem[]
+
+  @@unique([storefrontId, handle])
+}
+
+model NavigationMenuItem {
+  id          String              @id @default(uuid())
+  menuId      String
+  parentId    String?
+  label       String
+  type        NavigationItemType  @default(URL)
+  url         String?
+  pageId      String?
+  categoryId  String?
+  productId   String?
+  position    Int                 @default(0)
+  isActive    Boolean             @default(true)
+  openInNewTab Boolean            @default(false)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  menu     NavigationMenu      @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  parent   NavigationMenuItem? @relation("NavHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children NavigationMenuItem[] @relation("NavHierarchy")
+  page     Page?               @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  @@index([menuId, position])
+}
+
+// ----------------------------------------------------------------------------
+// Reviews
+// ----------------------------------------------------------------------------
+
+model Review {
+  id               String       @id @default(uuid())
+  businessId       String
+  storefrontId     String?
+  productId        String
+  variantId        String?
+  customerId       String
+  orderId          String?
+  orderItemId      String?      @unique
+  rating           Int
+  title            String?
+  body             String
+  status           ReviewStatus @default(PENDING)
+  verifiedPurchase Boolean      @default(false)
+  isFeatured       Boolean      @default(false)
+  helpfulCount     Int          @default(0)
+  reportedCount    Int          @default(0)
+  moderatedByUserId String?
+  moderatedAt      DateTime?
+  moderationNote   String?
+  rejectionReason  String?
+  publishedAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  business   Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storefront Storefront?  @relation(fields: [storefrontId], references: [id], onDelete: SetNull)
+  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant    Variant?     @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  customer   Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order      Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  orderItem  OrderItem?   @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  images     ReviewImage[]
+  reports    ReviewReport[]
+
+  @@unique([productId, customerId])
+  @@index([productId, status, createdAt])
+  @@index([status, createdAt])
+  @@index([customerId])
+}
+
+model ReviewImage {
+  id       String @id @default(uuid())
+  reviewId String
+  mediaId  String
+  position Int    @default(0)
+  createdAt DateTime @default(now())
+
+  review Review     @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  media  MediaAsset @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@unique([reviewId, mediaId])
+  @@index([reviewId, position])
+}
+
+model ReviewReport {
+  id         String   @id @default(uuid())
+  reviewId   String
+  customerId String?
+  reason     String
+  note       String?
+  status     String   @default("OPEN")
+  handledByUserId String?
+  handledAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  review   Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([reviewId])
+  @@index([status, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Integrations, secrets, API keys, marketing, plugins
+// ----------------------------------------------------------------------------
+
+/// Generic integration registration (payments, storage, marketing, other).
+/// Credentials live in `IntegrationSecret` encrypted with the application key.
+model Integration {
+  id           String          @id @default(uuid())
+  businessId   String
+  storefrontId String?
+  kind         IntegrationKind
+  provider     String
+  name         String
+  scopeKey     String          @default("")
+  isEnabled    Boolean         @default(false)
+  testMode     Boolean         @default(true)
+  config       Json?
+  lastCheckedAt DateTime?
+  lastError    String?
+  createdByUserId String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  business   Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storefront Storefront?        @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+  secrets    IntegrationSecret[]
+
+  @@unique([businessId, kind, provider, scopeKey])
+  @@index([businessId, kind, isEnabled])
+}
+
+/// Encrypted credential storage. Values are encrypted at rest with
+/// AES-256-GCM using APP_ENCRYPTION_KEY and are never returned to clients.
+model IntegrationSecret {
+  id            String   @id @default(uuid())
+  integrationId String?
+  courierProviderId String?
+  key           String
+  ciphertext    String
+  iv            String
+  authTag       String
+  description   String?
+  updatedByUserId String?
+  lastRotatedAt DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, key])
+  @@index([courierProviderId, key])
+}
+
+model ApiKey {
+  id            String       @id @default(uuid())
+  businessId    String
+  name          String
+  /// Public lookup prefix (safe to display, e.g. "pk_live_3f9a2c").
+  keyPrefix     String       @unique
+  /// SHA-256 hash of the full secret. The plaintext is shown only once.
+  keyHash       String
+  lastFour      String?
+  status        ApiKeyStatus @default(ACTIVE)
+  rateLimitPerMinute Int     @default(120)
+  expiresAt     DateTime?
+  lastUsedAt    DateTime?
+  usageCount    Int          @default(0)
+  allowedIpAddresses String[]
+  description   String?
+  createdByUserId String?
+  revokedByUserId String?
+  revokedAt     DateTime?
+  revokedReason String?
+  rotatedFromKeyId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  scopes   ApiKeyScope[]
+  logs     ApiRequestLog[]
+  webhookSubscriptions WebhookSubscription[]
+
+  @@index([businessId, status])
+  @@index([keyHash])
+}
+
+model ApiKeyScope {
+  id       String @id @default(uuid())
+  apiKeyId String
+  scope    String
+  createdAt DateTime @default(now())
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([apiKeyId, scope])
+}
+
+model ApiRequestLog {
+  id         String   @id @default(uuid())
+  apiKeyId   String?
+  method     String
+  path       String
+  statusCode Int
+  durationMs Int
+  scope      String?
+  ipAddress  String?
+  userAgent  String?
+  requestId  String?
+  errorCode  String?
+  createdAt  DateTime @default(now())
+
+  apiKey ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+
+  @@index([apiKeyId, createdAt])
+  @@index([createdAt])
+}
+
+model MarketingIntegration {
+  id            String            @id @default(uuid())
+  businessId    String
+  storefrontId  String?
+  provider      MarketingProvider
+  name          String
+  isEnabled     Boolean           @default(false)
+  consentRequired Boolean         @default(true)
+  pixelId       String?
+  /// Server side credentials live in IntegrationSecret (never in config).
+  integrationId String?
+  trackProductView Boolean        @default(true)
+  trackAddToCart Boolean          @default(true)
+  trackInitiateCheckout Boolean   @default(true)
+  trackPurchase Boolean           @default(true)
+  testEventCode String?
+  config        Json?
+  createdByUserId String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  storefront Storefront? @relation(fields: [storefrontId], references: [id], onDelete: Cascade)
+  events     MarketingEvent[]
+
+  @@unique([businessId, provider, storefrontId])
+  @@index([businessId, isEnabled])
+}
+
+/// Server side conversion event with provider deduplication key and delivery
+/// state. Never reports SENT unless the provider confirmed delivery.
+model MarketingEvent {
+  id             String               @id @default(uuid())
+  businessId     String
+  marketingIntegrationId String
+  storefrontId   String?
+  eventName      String
+  /// Deterministic deduplication key sent to providers as `event_id`.
+  dedupeKey      String
+  customerId     String?
+  orderId        String?
+  sessionId      String?
+  consentGranted Boolean              @default(false)
+  status         MarketingEventStatus @default(PENDING)
+  attempts       Int                  @default(0)
+  payload        Json
+  responsePayload Json?
+  lastError      String?
+  sentAt         DateTime?
+  nextAttemptAt  DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  integration  MarketingIntegration @relation(fields: [marketingIntegrationId], references: [id], onDelete: Cascade)
+  storefront   Storefront?          @relation(fields: [storefrontId], references: [id], onDelete: SetNull)
+  order        Order?               @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([marketingIntegrationId, dedupeKey])
+  @@index([status, nextAttemptAt])
+  @@index([orderId])
+}
+
+/// Cookie/consent state per storefront session, used to gate tracking.
+model ConsentRecord {
+  id           String   @id @default(uuid())
+  businessId   String
+  storefrontId String?
+  sessionId    String
+  customerId   String?
+  marketingConsent Boolean @default(false)
+  analyticsConsent Boolean @default(false)
+  necessaryConsent Boolean @default(true)
+  policyVersion String?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@unique([storefrontId, sessionId])
+  @@index([businessId, createdAt])
+}
+
+/// Trusted, explicitly registered extensions. Version 1 does not execute
+/// arbitrary third-party code.
+model Plugin {
+  id            String       @id @default(uuid())
+  businessId    String
+  key           String
+  name          String
+  version       String
+  description   String?
+  author        String?
+  status        PluginStatus @default(REGISTERED)
+  isTrusted     Boolean      @default(false)
+  capabilities  String[]
+  permissions   String[]
+  config        Json?
+  configSchema  Json?
+  compatibility Json?
+  installedByUserId String?
+  enabledAt     DateTime?
+  disabledAt    DateTime?
+  lastError     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, key])
+  @@index([businessId, status])
+}
+
+/// Outbound webhook subscriptions for external integrations.
+model WebhookSubscription {
+  id            String   @id @default(uuid())
+  businessId    String
+  apiKeyId      String?
+  name          String
+  url           String
+  secretHash    String
+  secretCiphertext String
+  secretIv      String
+  secretAuthTag String
+  events        String[]
+  isActive      Boolean  @default(true)
+  failureCount  Int      @default(0)
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
+  createdByUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  apiKey   ApiKey?  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  deliveries WebhookDelivery[]
+
+  @@index([businessId, isActive])
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid())
+  subscriptionId String
+  eventType      String
+  payload        Json
+  dedupeKey      String?
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  maxAttempts    Int                   @default(6)
+  responseStatus Int?
+  responseBody   String?
+  lastError      String?
+  nextAttemptAt  DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, dedupeKey])
+  @@index([status, nextAttemptAt])
+  @@index([createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Notifications, audit, background jobs, outbox
+// ----------------------------------------------------------------------------
+
+model Notification {
+  id          String              @id @default(uuid())
+  businessId  String
+  type        String
+  title       String
+  body        String?
+  severity    NotificationSeverity @default(INFO)
+  entityType  String?
+  entityId    String?
+  url         String?
+  data        Json?
+  permissionKey String?
+  createdByUserId String?
+  createdAt   DateTime            @default(now())
+  expiresAt   DateTime?
+
+  business   Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  recipients NotificationRecipient[]
+
+  @@index([businessId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model NotificationRecipient {
+  id             String    @id @default(uuid())
+  notificationId String
+  userId         String
+  readAt         DateTime?
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt, createdAt])
+}
+
+model NotificationPreference {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  inApp     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+}
+
+model AuditLog {
+  id            String    @id @default(uuid())
+  businessId    String?
+  actorType     ActorType @default(USER)
+  actorUserId   String?
+  actorCustomerId String?
+  actorApiKeyId String?
+  actorLabel    String?
+  action        String
+  entityType    String
+  entityId      String?
+  summary       String?
+  before        Json?
+  after         Json?
+  changedFields String[]
+  reason        String?
+  requestId     String?
+  correlationId String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  actor    User?     @relation("AuditActorUser", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}
+
+/// Durable background job queue (processed by scripts/worker.ts).
+model BackgroundJob {
+  id             String    @id @default(uuid())
+  businessId     String?
+  queue          String    @default("default")
+  type           String
+  payload        Json
+  status         JobStatus @default(PENDING)
+  priority       Int       @default(0)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  runAt          DateTime  @default(now())
+  lockedAt       DateTime?
+  lockedBy       String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  lastError      String?
+  resultSummary  String?
+  idempotencyKey String?   @unique
+  correlationId  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([status, runAt, priority])
+  @@index([queue, status])
+  @@index([type, createdAt])
+}
+
+/// Transactional outbox: business transactions write an event here and the
+/// worker performs external side effects (courier API calls, marketing events,
+/// notifications) outside of the transaction.
+model OutboxEvent {
+  id            String       @id @default(uuid())
+  businessId    String?
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  shipmentId    String?
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  maxAttempts   Int          @default(8)
+  availableAt   DateTime     @default(now())
+  processedAt   DateTime?
+  lastError     String?
+  dedupeKey     String?      @unique
+  correlationId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@index([eventType, status])
+}
