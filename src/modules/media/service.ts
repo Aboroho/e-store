@@ -6,7 +6,7 @@ import { AppError } from "@/lib/errors";
 import { getBusinessSettings } from "@/lib/settings";
 import { recordAudit } from "@/lib/audit";
 import { deleteObject, headObject, putObject, createDownloadUrl, createUploadTarget, storageDriverName, storageIsConfigured } from "@/modules/media/storage";
-import { ALLOWED_MEDIA_TYPES, copyMediaSchema, deleteMediaSchema, folderInputSchema, mediaUsageSchema, moveAssetSchema, renameMediaSchema, updateAssetSchema, uploadRequestSchema, confirmUploadSchema } from "@/modules/media/schemas";
+import { ALLOWED_MEDIA_TYPES, copyAssetsSchema, copyFolderSchema, copyMediaSchema, deleteMediaSchema, folderInputSchema, mediaUsageSchema, moveAssetSchema, moveFolderSchema, renameMediaSchema, updateAssetSchema, uploadRequestSchema, confirmUploadSchema } from "@/modules/media/schemas";
 import type { MediaVisibility } from "@/generated/prisma/client";
 import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
@@ -152,7 +152,7 @@ export async function toAssetView(asset: {
 export interface MediaListFilter {
   search?: string;
   folderId?: string | null;
-  mimeGroup?: "image" | "document" | "all" | "video" | "audio" | "unused";
+  mimeGroup?: "image" | "document" | "all" | "video" | "audio" | "file" | "unused";
   visibility?: MediaVisibility;
   page?: number;
   pageSize?: number;
@@ -180,9 +180,11 @@ export async function listMedia(businessId: string, filter: MediaListFilter = {}
           ? { mimeType: { startsWith: "video/" } }
           : filter.mimeGroup === "audio"
             ? { mimeType: { startsWith: "audio/" } }
-            : filter.mimeGroup === "unused"
-              ? { usageCount: 0 }
-              : {};
+            : filter.mimeGroup === "file"
+              ? { NOT: [{ mimeType: { startsWith: "image/" } }, { mimeType: { startsWith: "video/" } }, { mimeType: { startsWith: "audio/" } }] }
+              : filter.mimeGroup === "unused"
+                ? { usageCount: 0 }
+                : {};
 
   const where: Prisma.MediaAssetWhereInput = {
     businessId,
@@ -495,6 +497,169 @@ export async function deleteFolder(actor: MediaActor, folderId: string) {
     action: "media.folder_deleted",
     summary: `Deleted media folder ${folder.path}`,
   });
+}
+
+/** Move a folder to another parent (or the top level), rewriting descendant paths. */
+export async function moveFolder(actor: MediaActor, folderId: string, parentId: string | null) {
+  const parsed = moveFolderSchema.parse({ folderId, parentId });
+  const folder = await assertFolder(actor.businessId, parsed.folderId);
+  const parent = parsed.parentId ? await assertFolder(actor.businessId, parsed.parentId) : null;
+
+  if (parent && parent.id === folder.id) throw AppError.invalidState("A folder cannot be moved into itself");
+  if (parent && parent.path.startsWith(`${folder.path}/`)) {
+    throw AppError.invalidState("A folder cannot be moved into one of its own sub-folders");
+  }
+  if ((folder.parentId ?? null) === (parent?.id ?? null)) return folder;
+
+  const newPath = parent ? `${parent.path}/${folder.name}` : folder.name;
+  const clash = await prisma.mediaFolder.findFirst({
+    where: { businessId: actor.businessId, path: newPath, id: { not: folder.id } },
+  });
+  if (clash) throw AppError.conflict(`A folder named "${folder.name}" already exists in the destination`);
+
+  return prisma.$transaction(async (tx) => {
+    const descendants = await tx.mediaFolder.findMany({
+      where: { businessId: actor.businessId, path: { startsWith: `${folder.path}/` } },
+    });
+    for (const child of descendants) {
+      await tx.mediaFolder.update({ where: { id: child.id }, data: { path: child.path.replace(folder.path, newPath) } });
+    }
+    const updated = await tx.mediaFolder.update({ where: { id: folder.id }, data: { parentId: parent?.id ?? null, path: newPath } });
+    await recordAudit({
+      businessId: actor.businessId,
+      actorUserId: actor.userId,
+      actorLabel: actor.actorLabel,
+      entityType: "MediaFolder",
+      entityId: folder.id,
+      action: "media.folder_moved",
+      summary: `Moved folder ${folder.path} to ${newPath}`,
+    });
+    return updated;
+  });
+}
+
+/** Largest folder tree (by file count) that a single copy operation will duplicate. */
+const MAX_FOLDER_COPY_ASSETS = 200;
+
+async function descendantFolderIds(businessId: string, folderPath: string): Promise<string[]> {
+  const descendants = await prisma.mediaFolder.findMany({
+    where: { businessId, path: { startsWith: `${folderPath}/` } },
+    select: { id: true },
+  });
+  return descendants.map((row) => row.id);
+}
+
+/**
+ * Deep-copy a folder (sub-folders and files) to another parent. Files are real
+ * copies (new rows, new storage objects); usages are never copied. Name clashes
+ * are resolved with a ` (2)`, ` (3)`, … suffix.
+ */
+export async function copyFolder(actor: MediaActor, folderId: string, parentId?: string | null) {
+  const parsed = copyFolderSchema.parse({ folderId, parentId: parentId ?? undefined });
+  const folder = await assertFolder(actor.businessId, parsed.folderId);
+  const parent = parsed.parentId ? await assertFolder(actor.businessId, parsed.parentId) : null;
+
+  if (parent && parent.id === folder.id) throw AppError.invalidState("A folder cannot be copied into itself");
+  if (parent && parent.path.startsWith(`${folder.path}/`)) {
+    throw AppError.invalidState("A folder cannot be copied into one of its own sub-folders");
+  }
+
+  // Guard against runaway copies: count the whole tree before writing anything.
+  const treeIds = [folder.id, ...(await descendantFolderIds(actor.businessId, folder.path))];
+  const treeAssets = await prisma.mediaAsset.count({
+    where: { businessId: actor.businessId, folderId: { in: treeIds }, deletedAt: null },
+  });
+  if (treeAssets > MAX_FOLDER_COPY_ASSETS) {
+    throw AppError.invalidState(`This folder holds ${treeAssets} files; copy at most ${MAX_FOLDER_COPY_ASSETS} at a time`);
+  }
+
+  const created = await copyFolderTree(actor, folder, parent?.id ?? null, parent?.path ?? null);
+  await recordAudit({
+    businessId: actor.businessId,
+    actorUserId: actor.userId,
+    actorLabel: actor.actorLabel,
+    entityType: "MediaFolder",
+    entityId: created.id,
+    action: "media.folder_copied",
+    summary: `Copied folder ${folder.path} to ${created.path}`,
+  });
+  return created;
+}
+
+async function copyFolderTree(
+  actor: MediaActor,
+  folder: { id: string; name: string },
+  parentId: string | null,
+  parentPath: string | null,
+) {
+  let name = folder.name;
+  let candidate = parentPath ? `${parentPath}/${name}` : name;
+  let counter = 2;
+  while (await prisma.mediaFolder.findFirst({ where: { businessId: actor.businessId, path: candidate } })) {
+    name = `${folder.name} (${counter})`;
+    candidate = parentPath ? `${parentPath}/${name}` : name;
+    counter += 1;
+  }
+
+  const created = await prisma.mediaFolder.create({
+    data: { businessId: actor.businessId, parentId, name, path: candidate, createdByUserId: actor.userId },
+  });
+
+  const assets = await prisma.mediaAsset.findMany({
+    where: { businessId: actor.businessId, folderId: folder.id, deletedAt: null },
+    orderBy: { originalName: "asc" },
+  });
+  for (const asset of assets) {
+    try {
+      await copyMediaAsset(actor, { assetId: asset.id, title: asset.title ?? asset.originalName, folderId: created.id });
+    } catch (error) {
+      throw AppError.invalidState(
+        `Copy stopped at "${asset.originalName}": ${error instanceof AppError ? error.message : "the file could not be copied"}. ` +
+          `Remove the partially copied folder "${created.path}" and retry with fewer files.`,
+      );
+    }
+  }
+
+  const children = await prisma.mediaFolder.findMany({
+    where: { businessId: actor.businessId, parentId: folder.id },
+    orderBy: { name: "asc" },
+  });
+  for (const child of children) {
+    await copyFolderTree(actor, child, created.id, created.path);
+  }
+  return created;
+}
+
+/**
+ * Copy several assets in one round trip. Best effort per file: the caller gets a
+ * per-file failure list instead of losing the whole batch to one bad file.
+ */
+export async function copyMediaAssets(actor: MediaActor, input: unknown) {
+  const parsed = copyAssetsSchema.parse(input);
+  if (parsed.folderId) await assertFolder(actor.businessId, parsed.folderId);
+
+  const assets = await prisma.mediaAsset.findMany({
+    where: { id: { in: parsed.assetIds }, businessId: actor.businessId, deletedAt: null },
+  });
+  const byId = new Map(assets.map((asset) => [asset.id, asset]));
+  const failed: Array<{ assetId: string; name: string; error: string }> = [];
+  let copied = 0;
+
+  for (const assetId of parsed.assetIds) {
+    const source = byId.get(assetId);
+    if (!source) {
+      failed.push({ assetId, name: "Unknown file", error: "It is no longer available" });
+      continue;
+    }
+    try {
+      await copyMediaAsset(actor, { assetId, folderId: parsed.folderId ?? source.folderId });
+      copied += 1;
+    } catch (error) {
+      failed.push({ assetId, name: source.originalName, error: error instanceof AppError ? error.message : "Copy failed" });
+    }
+  }
+
+  return { copied, failed };
 }
 
 export async function moveMediaAssets(actor: MediaActor, input: unknown) {
