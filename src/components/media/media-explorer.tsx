@@ -447,10 +447,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
   /** Flat render order (folders first) backing shift-click ranges. */
   const flatOrder = React.useMemo<Array<{ type: "asset" | "folder"; id: string }>>(
     () => [
-      ...(mode === "manage" ? visibleFolders.map((folder) => ({ type: "folder" as const, id: folder.id })) : []),
+      ...visibleFolders.map((folder) => ({ type: "folder" as const, id: folder.id })),
       ...visibleAssets.map((asset) => ({ type: "asset" as const, id: asset.id })),
     ],
-    [mode, visibleFolders, visibleAssets],
+    [visibleFolders, visibleAssets],
   );
 
   const selectedAssets = React.useMemo(() => new Set(selectedAssetOrder), [selectedAssetOrder]);
@@ -533,6 +533,9 @@ export function MediaExplorer(props: MediaExplorerProps) {
     }
     if (mode === "pick" && !multiple) {
       anchorRef.current = index !== undefined ? { type: "asset", id: asset.id, index } : null;
+      // The single-selection picker replaces its selection: a file click drops
+      // any selected folder, so the selection always describes at most one file.
+      setSelectedFolderIds([]);
       setSelectedAssetOrder((prev) => (prev.includes(asset.id) ? [] : [asset.id]));
       return;
     }
@@ -599,11 +602,16 @@ export function MediaExplorer(props: MediaExplorerProps) {
   /**
    * Select a folder. A single click selects it (and only it) so the toolbar can
    * offer its rename / move / copy / delete actions; it never opens the folder.
+   *
+   * The behaviour is identical in manage mode and in pickers: folder selection
+   * is a pure management concern and can never leak into a picker's confirmed
+   * result, which is built from asset ids only. Single-select pickers keep
+   * their replace-on-click rule — a folder click becomes the sole selection.
    */
   const toggleFolder = (folder: ExplorerFolder, intent: SelectIntent = {}, index?: number) => {
-    if (mode !== "manage") return;
-    if (intent.range && anchorRef.current) {
-      if (index === undefined) return;
+    const rangeAllowed = mode === "manage" || multiple;
+    if (intent.range && rangeAllowed) {
+      if (!anchorRef.current || index === undefined) return;
       const anchor = anchorRef.current.index;
       const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
       const slice = flatOrder.slice(from, to + 1);
@@ -620,7 +628,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
     anchorRef.current = index !== undefined ? { type: "folder", id: folder.id, index } : null;
 
-    if (intent.toggle) {
+    // Additive toggling (Ctrl/Cmd, or the checkbox) is only meaningful where
+    // multi-selection is allowed; a single-select picker falls through to the
+    // exclusive selection below.
+    if (intent.toggle && rangeAllowed) {
       setSelectedFolderIds((prev) => (prev.includes(folder.id) ? prev.filter((id) => id !== folder.id) : [...prev, folder.id]));
       return;
     }
@@ -944,23 +955,19 @@ export function MediaExplorer(props: MediaExplorerProps) {
   };
 
   const buildFolderMenu = (folder: ExplorerFolder): ContextMenuItemDef[][] => {
-    const isMulti = mode === "manage" && selectedFolders.has(folder.id) && selectionCount > 1;
+    const isMulti = selectedFolders.has(folder.id) && selectionCount > 1;
     const targetAssetIds = isMulti ? selectedAssetOrder : [];
     const targetFolderIds = isMulti ? selectedFolderIds : [folder.id];
     const sections: ContextMenuItemDef[][] = [
       [
         { key: "open", label: "Open", icon: <FolderOpen {...iconProps} />, onSelect: () => openFolder(folder.id) },
-        ...(mode === "manage"
-          ? [
-              selectedFolders.has(folder.id)
-                ? { key: "deselect", label: "Deselect", icon: <X {...iconProps} />, onSelect: () => toggleFolder(folder, { toggle: true }) }
-                : { key: "select", label: "Select", icon: <Check {...iconProps} />, onSelect: () => toggleFolder(folder, { toggle: true }) },
-            ]
-          : []),
+        selectedFolders.has(folder.id)
+          ? { key: "deselect", label: "Deselect", icon: <X {...iconProps} />, onSelect: () => toggleFolder(folder, { toggle: true }) }
+          : { key: "select", label: "Select", icon: <Check {...iconProps} />, onSelect: () => toggleFolder(folder, { toggle: true }) },
       ],
     ];
 
-    if (canManage && mode === "manage") {
+    if (canManage) {
       const edit: ContextMenuItemDef[] = [
         { key: "copy", label: isMulti ? `Copy ${selectionCount} items` : "Copy", shortcut: "⌃C", icon: <Copy {...iconProps} />, onSelect: () => copySelection(targetAssetIds, targetFolderIds) },
         { key: "cut", label: isMulti ? `Cut ${selectionCount} items` : "Cut", shortcut: "⌃X", icon: <Scissors {...iconProps} />, onSelect: () => cutSelection(targetAssetIds, targetFolderIds) },
@@ -1015,8 +1022,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
     // Right-clicking an unselected item selects it first (standard explorer behaviour).
     if (!selectedAssets.has(asset.id)) {
       cacheView(asset);
-      if (mode === "pick" && !multiple) setSelectedAssetOrder([asset.id]);
-      else if (mode === "pick") {
+      if (mode === "pick" && !multiple) {
+        setSelectedFolderIds([]);
+        setSelectedAssetOrder([asset.id]);
+      } else if (mode === "pick") {
         if (selectedAssetOrder.length < maxSelection) setSelectedAssetOrder((prev) => [...prev, asset.id]);
       } else {
         // Manage mode mirrors a plain left click: the file becomes the selection.
@@ -1031,12 +1040,13 @@ export function MediaExplorer(props: MediaExplorerProps) {
    * Right-clicking a folder opens its own menu at the cursor. Standard explorer
    * behaviour: an unselected folder becomes the selection first (so the menu
    * and the toolbar act on the same thing), an already-selected one keeps the
-   * multi-selection intact. It never navigates.
+   * multi-selection intact. It never navigates. Works the same in manage mode
+   * and in pickers.
    */
   const handleFolderContextMenu = (event: React.MouseEvent, folder: ExplorerFolder) => {
     event.preventDefault();
     event.stopPropagation();
-    if (mode === "manage" && !selectedFolders.has(folder.id)) {
+    if (!selectedFolders.has(folder.id)) {
       anchorRef.current = null;
       setSelectedFolderIds([folder.id]);
       setSelectedAssetOrder([]);
@@ -1340,72 +1350,95 @@ export function MediaExplorer(props: MediaExplorerProps) {
           </div>
         </div>
 
-        {/* Selection + clipboard bars */}
-        {selectionCount > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs text-white">
-            <span className="mr-1 font-medium">
-              {selectionCount} selected
-              {mode === "pick" ? ` · ${selectedAssetOrder.length} file${selectedAssetOrder.length === 1 ? "" : "s"}` : null}
-            </span>
-            {/* Single selection gets the per-item actions: open and rename. */}
-            {soleSelection?.type === "folder" ? (
-              <BarButton onClick={() => openFolder(soleSelection.folder.id)} title="Open this folder">
-                <FolderOpen className="h-3.5 w-3.5" /> Open
+        {/* Reserved action bar. The region is a permanent part of the layout:
+            its contents swap between selection actions, the clipboard notice
+            and an empty-state hint, but the slot itself never mounts or
+            unmounts and its height never changes — so selecting, deselecting
+            or navigating can never shift the content below. */}
+        <div
+          role="toolbar"
+          aria-label="Selection actions"
+          className="flex h-10 items-center gap-1.5 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs"
+        >
+          {selectionCount > 0 ? (
+            <>
+              <span className="mr-0.5 shrink-0 rounded-md bg-brand-100/80 px-1.5 py-0.5 font-semibold tabular-nums text-brand-700">
+                {selectionCount} selected
+                {mode === "pick" ? ` · ${selectedAssetOrder.length} file${selectedAssetOrder.length === 1 ? "" : "s"}` : null}
+              </span>
+              {/* Single selection gets the per-item actions: open and rename. */}
+              {soleSelection?.type === "folder" ? (
+                <BarButton onClick={() => openFolder(soleSelection.folder.id)} title="Open this folder">
+                  <FolderOpen className="h-3.5 w-3.5" /> Open
+                </BarButton>
+              ) : null}
+              {canManage && soleSelection ? (
+                <BarButton
+                  onClick={() =>
+                    setRenameTarget(
+                      soleSelection.type === "folder"
+                        ? { type: "folder", id: soleSelection.folder.id, currentName: soleSelection.folder.name }
+                        : { type: "asset", id: soleSelection.asset.id, currentName: displayName(soleSelection.asset) },
+                    )
+                  }
+                  title={soleSelection.type === "folder" ? "Rename this folder" : "Rename this file"}
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Rename
+                </BarButton>
+              ) : null}
+              {canManage ? (
+                <>
+                  <BarButton onClick={() => copySelection(selectedAssetOrder, selectedFolderIds)} title="Copy (Ctrl+C)">
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </BarButton>
+                  <BarButton onClick={() => cutSelection(selectedAssetOrder, selectedFolderIds)} title="Cut (Ctrl+X)">
+                    <Scissors className="h-3.5 w-3.5" /> Cut
+                  </BarButton>
+                  {clipboard ? (
+                    <BarButton onClick={() => void pasteClipboard()} title="Paste into the current folder (Ctrl+V)">
+                      <ClipboardPaste className="h-3.5 w-3.5" /> Paste
+                    </BarButton>
+                  ) : null}
+                  <BarButton onClick={() => setMoveDialog({ assetIds: selectedAssetOrder, folderIds: selectedFolderIds })} title="Move to another folder">
+                    <FolderInput className="h-3.5 w-3.5" /> Move
+                  </BarButton>
+                  <BarButton onClick={() => setDeleteDialog({ assetIds: selectedAssetOrder, folderIds: selectedFolderIds })} danger title="Delete (Del)">
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </BarButton>
+                </>
+              ) : null}
+              <BarButton onClick={selectAllVisible} title="Select all visible (Ctrl+A)">
+                <CheckCheck className="h-3.5 w-3.5" /> All
               </BarButton>
-            ) : null}
-            {canManage && soleSelection ? (
-              <BarButton
-                onClick={() =>
-                  setRenameTarget(
-                    soleSelection.type === "folder"
-                      ? { type: "folder", id: soleSelection.folder.id, currentName: soleSelection.folder.name }
-                      : { type: "asset", id: soleSelection.asset.id, currentName: displayName(soleSelection.asset) },
-                  )
-                }
-                title={soleSelection.type === "folder" ? "Rename this folder" : "Rename this file"}
-              >
-                <Pencil className="h-3.5 w-3.5" /> Rename
+              <BarButton onClick={clearSelection} title="Clear selection (Esc)">
+                <X className="h-3.5 w-3.5" /> Clear
               </BarButton>
-            ) : null}
-            {canManage ? (
-              <>
-                <BarButton onClick={() => copySelection(selectedAssetOrder, selectedFolderIds)} title="Copy (Ctrl+C)">
-                  <Copy className="h-3.5 w-3.5" /> Copy
-                </BarButton>
-                <BarButton onClick={() => cutSelection(selectedAssetOrder, selectedFolderIds)} title="Cut (Ctrl+X)">
-                  <Scissors className="h-3.5 w-3.5" /> Cut
-                </BarButton>
-                <BarButton onClick={() => setMoveDialog({ assetIds: selectedAssetOrder, folderIds: selectedFolderIds })} title="Move to another folder">
-                  <FolderInput className="h-3.5 w-3.5" /> Move
-                </BarButton>
-                <BarButton onClick={() => setDeleteDialog({ assetIds: selectedAssetOrder, folderIds: selectedFolderIds })} danger title="Delete (Del)">
-                  <Trash2 className="h-3.5 w-3.5" /> Delete
-                </BarButton>
-              </>
-            ) : null}
-            <BarButton onClick={selectAllVisible} title="Select all visible (Ctrl+A)">
-              <CheckCheck className="h-3.5 w-3.5" /> All
-            </BarButton>
-            <BarButton onClick={clearSelection} title="Clear selection (Esc)">
-              <X className="h-3.5 w-3.5" /> Clear
-            </BarButton>
-          </div>
-        ) : null}
-        {clipboard && canManage ? (
-          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-xs text-brand-800">
-            <ClipboardPaste className="h-3.5 w-3.5" />
-            <span className="mr-1 font-medium">
-              {clipboard.assetIds.length + clipboard.folderIds.length} item{clipboard.assetIds.length + clipboard.folderIds.length === 1 ? "" : "s"}{" "}
-              {clipboard.mode === "copy" ? "copied" : "cut"} — paste into {currentFolder ? `“${currentFolder.name}”` : "the library"}
-            </span>
-            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => void pasteClipboard()}>
-              Paste here
-            </Button>
-            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setClipboard(null)}>
-              Dismiss
-            </Button>
-          </div>
-        ) : null}
+            </>
+          ) : clipboard && canManage ? (
+            <>
+              <ClipboardPaste className="h-3.5 w-3.5 shrink-0 text-brand-600" />
+              <span className="min-w-0 shrink truncate font-medium text-slate-600">
+                {clipboard.assetIds.length + clipboard.folderIds.length} item{clipboard.assetIds.length + clipboard.folderIds.length === 1 ? "" : "s"}{" "}
+                {clipboard.mode === "copy" ? "copied" : "cut"} — paste into {currentFolder ? `“${currentFolder.name}”` : "the library"}
+              </span>
+              <BarButton onClick={() => void pasteClipboard()} title="Paste into the current folder (Ctrl+V)">
+                Paste here
+              </BarButton>
+              <BarButton onClick={() => setClipboard(null)} title="Forget the copied or cut items">
+                Dismiss
+              </BarButton>
+            </>
+          ) : (
+            <>
+              <span className="min-w-0 flex-1 truncate text-slate-400">
+                Nothing selected — click to select, double-click to open, right-click for actions
+              </span>
+              <BarButton className="ml-auto" onClick={selectAllVisible} title="Select all visible (Ctrl+A)">
+                <CheckCheck className="h-3.5 w-3.5" /> Select all
+              </BarButton>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Storage warning */}
@@ -1551,7 +1584,6 @@ export function MediaExplorer(props: MediaExplorerProps) {
                   <FolderCard
                     key={folder.id}
                     folder={folder}
-                    selectable={mode === "manage"}
                     selected={selectedFolders.has(folder.id)}
                     cut={cutIds.has(folder.id)}
                     dropTarget={dropFolderId === folder.id}
@@ -1560,7 +1592,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                     onSelect={(intent) => toggleFolder(folder, intent, folderIndex)}
                     onContextMenu={(event) => handleFolderContextMenu(event, folder)}
                     onMenuButton={(event) => {
-                      if (mode === "manage" && !selectedFolders.has(folder.id)) toggleFolder(folder);
+                      if (!selectedFolders.has(folder.id)) toggleFolder(folder);
                       openMenuForButton(event, { kind: "folder", folderId: folder.id });
                     }}
                     onDragOver={(event) => {
@@ -1646,14 +1678,13 @@ export function MediaExplorer(props: MediaExplorerProps) {
                       <FolderRow
                         key={folder.id}
                         folder={folder}
-                        selectable={mode === "manage"}
                         selected={selectedFolders.has(folder.id)}
                         cut={cutIds.has(folder.id)}
                         onOpen={() => openFolder(folder.id)}
                         onSelect={(intent) => toggleFolder(folder, intent, folderIndex)}
                         onContextMenu={(event) => handleFolderContextMenu(event, folder)}
                         onMenuButton={(event) => {
-                          if (mode === "manage" && !selectedFolders.has(folder.id)) toggleFolder(folder);
+                          if (!selectedFolders.has(folder.id)) toggleFolder(folder);
                           openMenuForButton(event, { kind: "folder", folderId: folder.id });
                         }}
                       />
@@ -1983,16 +2014,23 @@ function ContextMenuHost({
 /* Toolbar bits                                                                */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Compact toolbar button for the reserved action bar. Styled after the app's
+ * ghost buttons so the bar blends with the rest of the Media Manager instead
+ * of standing out as a separate surface.
+ */
 function BarButton({
   children,
   onClick,
   title,
   danger,
+  className,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   title?: string;
   danger?: boolean;
+  className?: string;
 }) {
   return (
     <button
@@ -2000,8 +2038,9 @@ function BarButton({
       onClick={onClick}
       title={title}
       className={cn(
-        "flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors",
-        danger ? "bg-red-500/20 text-red-100 hover:bg-red-500/40" : "bg-white/10 text-white hover:bg-white/20",
+        "flex h-7 shrink-0 items-center gap-1 rounded-md px-2 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500",
+        danger ? "text-red-600 hover:bg-red-100/70 hover:text-red-700" : "text-slate-600 hover:bg-slate-200/70 hover:text-slate-900",
+        className,
       )}
     >
       {children}
@@ -2391,7 +2430,6 @@ function CardMenuButton({ onClick, label }: { onClick: (event: React.MouseEvent)
 
 function FolderCard({
   folder,
-  selectable,
   selected,
   cut,
   dropTarget,
@@ -2405,7 +2443,6 @@ function FolderCard({
   onDrop,
 }: {
   folder: ExplorerFolder;
-  selectable: boolean;
   selected: boolean;
   cut: boolean;
   dropTarget: boolean;
@@ -2434,11 +2471,9 @@ function FolderCard({
       )}
     >
       <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5">
-        {selectable ? (
-          <span onClick={(event) => event.stopPropagation()}>
-            <Checkbox checked={selected} onCheckedChange={() => onSelect({ toggle: true })} aria-label={`Select ${folder.name}`} className="bg-white" />
-          </span>
-        ) : null}
+        <span onClick={(event) => event.stopPropagation()}>
+          <Checkbox checked={selected} onCheckedChange={() => onSelect({ toggle: true })} aria-label={`Select ${folder.name}`} className="bg-white" />
+        </span>
         {cut ? <Badge variant="neutral" className="px-1.5 py-0 text-[9px]">Cut</Badge> : null}
       </div>
       <div className="absolute right-1.5 top-1.5 z-10">
@@ -2452,22 +2487,18 @@ function FolderCard({
           // with `detail === 2` and is ignored, so `onDoubleClick` is the only
           // thing that opens the folder and the navigation happens exactly
           // once. Keyboard activation (`detail === 0`) opens, matching the
-          // button's primary action. In pick mode folders are navigation-only.
-          if (!selectable) onOpen();
-          else if (event.detail === 0) onOpen();
+          // button's primary action. This is identical in manage mode and in
+          // pickers; a selected folder is never returned as media.
+          if (event.detail === 0) onOpen();
           else if (event.detail === 1) onSelect(selectIntentFrom(event));
         }}
-        onDoubleClick={
-          selectable
-            ? (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpen();
-              }
-            : undefined
-        }
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen();
+        }}
         className="block w-full cursor-pointer px-3 pb-2 pt-9 text-left"
-        aria-label={selectable ? `${folder.name} — select, double-click to open` : `Open ${folder.name}`}
+        aria-label={`${folder.name} — select, double-click to open`}
       >
         <Folder className={cn("h-9 w-9 transition-colors", selected ? "text-brand-500" : "text-slate-300 group-hover:text-brand-400")} strokeWidth={1.5} />
         <p className="mt-2 truncate text-xs font-medium text-slate-800" title={folder.name}>
@@ -2592,7 +2623,6 @@ function AssetCard({
 
 function FolderRow({
   folder,
-  selectable,
   selected,
   cut,
   onOpen,
@@ -2601,7 +2631,6 @@ function FolderRow({
   onMenuButton,
 }: {
   folder: ExplorerFolder;
-  selectable: boolean;
   selected: boolean;
   cut: boolean;
   onOpen: () => void;
@@ -2613,7 +2642,6 @@ function FolderRow({
     <tr
       onContextMenu={onContextMenu}
       onClick={(event) => {
-        if (!selectable) return;
         if ((event.target as HTMLElement).closest("button, a, input")) return;
         // Only the first click of a double-click selects; the second (detail 2)
         // belongs to `onDoubleClick`, so selection is never toggled twice.
@@ -2632,11 +2660,9 @@ function FolderRow({
       )}
     >
       <td className="px-3 py-2">
-        {selectable ? (
-          <span onClick={(event) => event.stopPropagation()} className="flex">
-            <Checkbox checked={selected} onCheckedChange={() => onSelect({ toggle: true })} aria-label={`Select ${folder.name}`} />
-          </span>
-        ) : null}
+        <span onClick={(event) => event.stopPropagation()} className="flex">
+          <Checkbox checked={selected} onCheckedChange={() => onSelect({ toggle: true })} aria-label={`Select ${folder.name}`} />
+        </span>
       </td>
       <td className="px-2 py-2" colSpan={1}>
         <button
@@ -2645,19 +2671,14 @@ function FolderRow({
             // The row already handles selection for a plain click; stopping the
             // bubble here keeps it from being counted twice.
             event.stopPropagation();
-            if (!selectable) onOpen();
-            else if (event.detail === 0) onOpen();
+            if (event.detail === 0) onOpen();
             else if (event.detail === 1) onSelect(selectIntentFrom(event));
           }}
-          onDoubleClick={
-            selectable
-              ? (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpen();
-                }
-              : undefined
-          }
+          onDoubleClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpen();
+          }}
           className="flex w-full cursor-pointer items-center gap-2.5 text-left"
         >
           <Folder className={cn("h-5 w-5 shrink-0 transition-colors", selected ? "text-brand-500" : "text-slate-400 group-hover:text-brand-400")} />
