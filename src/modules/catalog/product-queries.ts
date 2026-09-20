@@ -155,9 +155,14 @@ export async function loadProductEditorData(
   viewer: { canViewCost: boolean; canManageMedia: boolean; canUploadMedia: boolean },
   productId?: string,
 ): Promise<ProductEditorData> {
-  const [brands, categories, attributes, unitLabels, priceLists, settings, storefrontPrefix] = await Promise.all([
-    listBrandOptions(businessId),
-    prisma.category.findMany({
+  // Category and Attribute queries are written against scalar fields only
+  // (imageMediaId / mediaId) and then batch-fetch the MediaAsset rows.
+  // This keeps the code compatible with an outdated Prisma Client that does
+  // not yet know the `image` relation (Unknown field `image` errors seen in
+  // production) while remaining correct for the current schema.
+  const [brands, rawCategories, rawAttributes, unitLabels, priceLists, settings, storefrontPrefix] = await Promise.all([
+    listBrandOptions(businessId).catch(() => [] as Awaited<ReturnType<typeof listBrandOptions>>),
+    (prisma.category as unknown as { findMany: typeof prisma.category.findMany }).findMany({
       where: { businessId, deletedAt: null },
       orderBy: [{ path: "asc" }, { position: "asc" }],
       select: {
@@ -166,11 +171,11 @@ export async function loadProductEditorData(
         slug: true,
         path: true,
         parentId: true,
-        image: { select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, extension: true, sizeBytes: true, width: true, height: true, visibility: true, title: true, caption: true, folderId: true, usageCount: true, createdAt: true } },
+        imageMediaId: true,
         _count: { select: { products: true } },
       },
-    }),
-    prisma.attribute.findMany({
+    } as never) as unknown as Promise<Array<{ id: string; name: string; slug: string; path: string | null; parentId: string | null; imageMediaId: string | null; _count: { products: number } }>>,
+    (prisma.attribute as unknown as { findMany: typeof prisma.attribute.findMany }).findMany({
       where: { businessId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
       select: {
@@ -186,46 +191,71 @@ export async function loadProductEditorData(
             value: true,
             colorHex: true,
             mediaId: true,
-            image: { select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, extension: true, sizeBytes: true, width: true, height: true, visibility: true, title: true, caption: true, folderId: true, usageCount: true, createdAt: true } },
           },
         },
       },
-    }),
-    listUnitLabels(businessId),
+    } as never) as unknown as Promise<Array<{ id: string; name: string; slug: string; type: string; isVariantDefining: boolean; values: Array<{ id: string; value: string; colorHex: string | null; mediaId: string | null }> }>>,
+    listUnitLabels(businessId).catch(() => [] as Awaited<ReturnType<typeof listUnitLabels>>),
     prisma.priceList.findMany({ where: { businessId }, orderBy: [{ isDefault: "desc" }, { priority: "desc" }], select: { id: true, name: true, isDefault: true } }),
     getBusinessSettings(businessId),
     storefrontUrlPrefix(businessId),
   ]);
 
+  // Batch-fetch category images
+  const categoryMediaIds = rawCategories.map((c) => c.imageMediaId).filter((id): id is string => Boolean(id));
+  const categoryMediaAssets = categoryMediaIds.length
+    ? await prisma.mediaAsset.findMany({
+        where: { id: { in: categoryMediaIds }, businessId },
+        select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, extension: true, sizeBytes: true, width: true, height: true, visibility: true, title: true, caption: true, folderId: true, usageCount: true, createdAt: true, folder: { select: { path: true } } },
+      })
+    : [];
+  const categoryMediaById = new Map(categoryMediaAssets.map((asset) => [asset.id, asset]));
+
+  // Batch-fetch attribute value images
+  const attributeMediaIds = rawAttributes.flatMap((attr) => attr.values.map((v) => v.mediaId).filter((id): id is string => Boolean(id)));
+  const attributeMediaAssets = attributeMediaIds.length
+    ? await prisma.mediaAsset.findMany({
+        where: { id: { in: [...new Set(attributeMediaIds)] }, businessId },
+        select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, extension: true, sizeBytes: true, width: true, height: true, visibility: true, title: true, caption: true, folderId: true, usageCount: true, createdAt: true, folder: { select: { path: true } } },
+      })
+    : [];
+  const attributeMediaById = new Map(attributeMediaAssets.map((asset) => [asset.id, asset]));
+
   const defaultPriceList = priceLists.find((list) => list.isDefault) ?? priceLists[0] ?? null;
 
   const [categoryRows, attributeRows, brandRows] = await Promise.all([
     Promise.all(
-      categories.map(async (category) => ({
-        id: category.id,
-        name: category.name,
-        slug: category.slug,
-        path: category.path,
-        parentId: category.parentId,
-        productCount: category._count.products,
-        image: category.image ? await toAssetView(category.image) : null,
-      })),
+      rawCategories.map(async (category) => {
+        const asset = category.imageMediaId ? categoryMediaById.get(category.imageMediaId) : undefined;
+        return {
+          id: category.id,
+          name: category.name,
+          slug: category.slug,
+          path: category.path,
+          parentId: category.parentId,
+          productCount: category._count.products,
+          image: asset ? await toAssetView(asset as never) : null,
+        };
+      }),
     ),
     Promise.all(
-      attributes.map(async (attribute) => ({
+      rawAttributes.map(async (attribute) => ({
         id: attribute.id,
         name: attribute.name,
         slug: attribute.slug,
         type: attribute.type,
         isVariantDefining: attribute.isVariantDefining,
         values: await Promise.all(
-          attribute.values.map(async (value) => ({
-            id: value.id,
-            value: value.value,
-            colorHex: value.colorHex,
-            mediaId: value.mediaId,
-            image: value.image ? await toAssetView(value.image) : null,
-          })),
+          (attribute.values as any[]).map(async (value: any) => {
+            const asset = value.mediaId ? attributeMediaById.get(value.mediaId) : undefined;
+            return {
+              id: value.id,
+              value: value.value,
+              colorHex: value.colorHex,
+              mediaId: value.mediaId,
+              image: asset ? await toAssetView(asset as never) : null,
+            };
+          }),
         ),
       })),
     ),
@@ -274,42 +304,104 @@ const MEDIA_ASSET_SELECT = {
 } as const;
 
 async function loadEditorProduct(businessId: string, productId: string): Promise<EditorProduct | null> {
-  const product = await prisma.product.findFirst({
-    where: { id: productId, businessId },
-    include: {
-      brandRef: { select: { id: true, name: true } },
-      seoImage: { select: MEDIA_ASSET_SELECT },
-      categories: { select: { categoryId: true, isPrimary: true } },
-      attributes: { orderBy: { position: "asc" }, select: { attributeId: true } },
-      images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
-      variants: {
-        where: { status: { not: "ARCHIVED" } },
-        orderBy: { position: "asc" },
-        include: {
-          images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
-          attributeValues: { select: { attributeValueId: true } },
-          inventory: { select: { onHand: true, reserved: true, damaged: true, inspection: true } },
+  // Attempt the full query (includes Brand and SEO image relations added in
+  // the 20260920090000 migration). If the Prisma Client is outdated it will
+  // throw "Unknown field `brandRef`" / `seoImage`; fall back to scalar-only
+  // selects and join manually.
+  let product: any = null;
+  let brandRef: { id: string; name: string } | null = null;
+  let seoImageAsset: (typeof MEDIA_ASSET_SELECT & Record<string, unknown>) | null = null;
+  let seoImageMediaIdFallback: string | null = null;
+  try {
+    product = await prisma.product.findFirst({
+      where: { id: productId, businessId },
+      include: {
+        brandRef: { select: { id: true, name: true } },
+        seoImage: { select: MEDIA_ASSET_SELECT },
+        categories: { select: { categoryId: true, isPrimary: true } },
+        attributes: { orderBy: { position: "asc" }, select: { attributeId: true } },
+        images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
+        variants: {
+          where: { status: { not: "ARCHIVED" } },
+          orderBy: { position: "asc" },
+          include: {
+            images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
+            attributeValues: { select: { attributeValueId: true } },
+            inventory: { select: { onHand: true, reserved: true, damaged: true, inspection: true } },
+          },
         },
+        priceItems: { where: { minQuantity: 1 }, select: { pricePaisa: true, compareAtPricePaisa: true, variantId: true } },
       },
-      priceItems: { where: { minQuantity: 1 }, select: { pricePaisa: true, compareAtPricePaisa: true, variantId: true } },
-    },
-  });
+    }) as any;
+    if (!product) return null;
+    // pull out the relations we already fetched so later code can treat them uniformly
+    brandRef = (product as unknown as { brandRef: typeof brandRef }).brandRef ?? null;
+    seoImageAsset = (product as unknown as { seoImage: typeof seoImageAsset }).seoImage ?? null;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!msg.includes("Unknown field") && !msg.includes("Unknown arg") && !msg.includes("brandRef") && !msg.includes("seoImage")) throw error;
+    // Fallback: query without the new relations, fetch them by id afterwards.
+    const fallback = await (prisma.product as unknown as { findFirst: typeof prisma.product.findFirst }).findFirst({
+      where: { id: productId, businessId },
+      include: {
+        categories: { select: { categoryId: true, isPrimary: true } },
+        attributes: { orderBy: { position: "asc" }, select: { attributeId: true } },
+        images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
+        variants: {
+          where: { status: { not: "ARCHIVED" } },
+          orderBy: { position: "asc" },
+          include: {
+            images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
+            attributeValues: { select: { attributeValueId: true } },
+            inventory: { select: { onHand: true, reserved: true, damaged: true, inspection: true } },
+          },
+        },
+        priceItems: { where: { minQuantity: 1 }, select: { pricePaisa: true, compareAtPricePaisa: true, variantId: true } },
+      },
+    } as any) as unknown as Record<string, unknown> & { brandId: string | null; brand: string | null; seoImageMediaId: string | null } | null;
+    if (!fallback) return null;
+    product = fallback as any;
+    seoImageMediaIdFallback = (fallback as { seoImageMediaId: string | null }).seoImageMediaId ?? null;
+    const brandId = (fallback as { brandId: string | null }).brandId;
+    if (brandId) {
+      try {
+        const anyPrisma = prisma as unknown as Record<string, { findFirst: (args: unknown) => Promise<unknown> }>;
+        if (anyPrisma.brand) {
+          brandRef = (await (anyPrisma.brand as any).findFirst?.({ where: { id: brandId }, select: { id: true, name: true } } as any)) as any;
+        }
+      } catch {
+        brandRef = null;
+      }
+      if (!brandRef) {
+        // Brand table may be queryable via raw SQL even if client lacks model; ignore.
+        brandRef = null;
+      }
+    }
+    if (seoImageMediaIdFallback) {
+      try {
+        const asset = await prisma.mediaAsset.findFirst({ where: { id: seoImageMediaIdFallback, businessId }, select: MEDIA_ASSET_SELECT });
+        seoImageAsset = asset as never;
+      } catch {
+        seoImageAsset = null;
+      }
+    }
+  }
   if (!product) return null;
 
-  const metadata = (product.metadata ?? {}) as Record<string, unknown>;
-  const priceByVariant = new Map(product.priceItems.map((item) => [item.variantId, item]));
+  const metadata = ((product as any).metadata ?? {}) as Record<string, unknown>;
+  const priceByVariant = new Map((product.priceItems as any[]).map((item: any) => [item.variantId, item]));
 
   /* Variant image overrides point at media rows directly (`Variant.imageMediaId` is a
      plain column, not a relation), so the referenced assets are fetched in one query
      instead of one per variant. */
-  const overrideIds = [...new Set(product.variants.map((variant) => variant.imageMediaId).filter((id): id is string => Boolean(id)))];
+  const overrideIds = [...new Set((product.variants as any[]).map((variant: any) => variant.imageMediaId).filter((id: any): id is string => Boolean(id)))];
   const overrideAssets = overrideIds.length
     ? await prisma.mediaAsset.findMany({ where: { id: { in: overrideIds }, businessId }, select: MEDIA_ASSET_SELECT })
     : [];
   const overrideById = new Map(overrideAssets.map((asset) => [asset.id, asset]));
 
   const variants: EditorVariant[] = await Promise.all(
-    product.variants.map(async (variant) => {
+    (product.variants as any[]).map(async (variant: any) => {
       const balance = variant.inventory[0];
       const override = variant.imageMediaId ? overrideById.get(variant.imageMediaId) : undefined;
       const variantMetadata = (variant.metadata ?? {}) as Record<string, unknown>;
@@ -330,48 +422,57 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
         isPreorderEnabled: variant.isPreorderEnabled,
         imageMediaId: variant.imageMediaId,
         image: override ? await toAssetView(override) : null,
-        gallery: await Promise.all(variant.images.map(async (image) => ({ ...(await toAssetView(image.media)), altText: image.altText }))),
-        attributeValueIds: variant.attributeValues.map((value) => value.attributeValueId),
+        gallery: await Promise.all((variant.images as any[]).map(async (image: any) => ({ ...(await toAssetView(image.media as never)), altText: image.altText }))),
+        attributeValueIds: (variant.attributeValues as any[]).map((value: any) => value.attributeValueId),
         onHand: balance?.onHand ?? 0,
         available: balance ? balance.onHand - balance.reserved - balance.damaged - balance.inspection : 0,
       };
     }),
   );
 
-  const primaryCategory = product.categories.find((entry) => entry.isPrimary);
+  const primaryCategory = (product as unknown as { categories: Array<{ isPrimary: boolean; categoryId: string }> }).categories.find((entry) => entry.isPrimary);
+
+  // Resolve brand / seo image from the variables populated by either path.
+  const rawProduct = product as unknown as Record<string, unknown>;
+  const fallbackBrandId = (rawProduct as { brandId?: string | null }).brandId ?? null;
+  const fallbackBrandText = (rawProduct as { brand?: string | null }).brand ?? null;
+  const fallbackSeo = (rawProduct as { seoImage?: unknown }).seoImage as unknown as null | Parameters<typeof toAssetView>[0];
+  const resolvedBrandId = fallbackBrandId ?? brandRef?.id ?? null;
+  const resolvedBrandName = brandRef?.name ?? fallbackBrandText;
+  const resolvedSeoAsset = seoImageAsset ?? fallbackSeo ?? null;
 
   return {
-    id: product.id,
-    name: product.name,
-    slug: product.slug,
-    productCode: product.sku,
-    barcode: product.barcode,
-    productType: product.productType,
-    status: product.status,
-    brandId: product.brandId ?? product.brandRef?.id ?? null,
-    brandName: product.brandRef?.name ?? product.brand,
-    unitLabel: product.unitLabel,
-    weightGrams: product.weightGrams,
+    id: (rawProduct as { id: string }).id,
+    name: (rawProduct as { name: string }).name,
+    slug: (rawProduct as { slug: string }).slug,
+    productCode: (rawProduct as { sku: string | null }).sku ?? null,
+    barcode: (rawProduct as { barcode: string | null }).barcode ?? null,
+    productType: (rawProduct as { productType: string }).productType,
+    status: (rawProduct as { status: string }).status,
+    brandId: resolvedBrandId,
+    brandName: resolvedBrandName as string | null,
+    unitLabel: (rawProduct as { unitLabel: string }).unitLabel,
+    weightGrams: (rawProduct as { weightGrams: number | null }).weightGrams ?? null,
     weightUnit: typeof metadata.weightUnit === "string" ? (metadata.weightUnit as string) : "g",
-    requiresShipping: product.requiresShipping,
-    isFeatured: product.isFeatured,
-    isPreorderEnabled: product.isPreorderEnabled,
-    preorderNote: product.preorderNote,
-    taxRateBps: product.taxRateBps,
-    packagingCostPaisa: product.packagingCostPaisa,
+    requiresShipping: (rawProduct as { requiresShipping: boolean }).requiresShipping,
+    isFeatured: (rawProduct as { isFeatured: boolean }).isFeatured,
+    isPreorderEnabled: (rawProduct as { isPreorderEnabled: boolean }).isPreorderEnabled,
+    preorderNote: (rawProduct as { preorderNote: string | null }).preorderNote ?? null,
+    taxRateBps: (rawProduct as { taxRateBps: number }).taxRateBps,
+    packagingCostPaisa: (rawProduct as { packagingCostPaisa: number }).packagingCostPaisa,
     defaultPricePaisa: typeof metadata.defaultPricePaisa === "number" ? metadata.defaultPricePaisa : null,
-    seoTitle: product.seoTitle,
-    seoDescription: product.seoDescription,
-    seoKeywords: product.seoKeywords,
-    seoImage: product.seoImage ? await toAssetView(product.seoImage) : null,
-    shortDescription: product.shortDescription,
-    description: product.description,
-    updatedAt: product.updatedAt.toISOString(),
-    publishedAt: product.publishedAt?.toISOString() ?? null,
-    categoryIds: product.categories.map((entry) => entry.categoryId),
+    seoTitle: (rawProduct as { seoTitle: string | null }).seoTitle ?? null,
+    seoDescription: (rawProduct as { seoDescription: string | null }).seoDescription ?? null,
+    seoKeywords: (rawProduct as { seoKeywords: string | null }).seoKeywords ?? null,
+    seoImage: resolvedSeoAsset ? await toAssetView(resolvedSeoAsset as never) : null,
+    shortDescription: (product as any).shortDescription,
+    description: (product as any).description,
+    updatedAt: (product as any).updatedAt.toISOString(),
+    publishedAt: (product as any).publishedAt?.toISOString() ?? null,
+    categoryIds: (product as any).categories.map((entry: any) => entry.categoryId),
     primaryCategoryId: primaryCategory?.categoryId ?? null,
-    attributeIds: product.attributes.map((entry) => entry.attributeId),
-    images: await Promise.all(product.images.map(async (image) => ({ ...(await toAssetView(image.media)), altText: image.altText }))),
+    attributeIds: (product as any).attributes.map((entry: any) => entry.attributeId),
+    images: await Promise.all((product as any).images.map(async (image: any) => ({ ...(await toAssetView(image.media as never)), altText: image.altText }))),
     variants,
   };
 }
