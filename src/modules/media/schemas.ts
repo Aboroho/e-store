@@ -17,6 +17,30 @@ export const ALLOWED_MEDIA_TYPES = [
   "image/gif",
   "image/svg+xml",
   "application/pdf",
+  // Video is stored like any other asset so product descriptions can embed a
+  // video through the shared library instead of an external iframe.
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+] as const;
+
+/**
+ * Every entity type that may reference a media asset. The list is the contract
+ * between the media manager and the features that consume it: a new feature adds
+ * its type here and the library then understands its references (labels, usage
+ * counts and safe deletion), instead of inventing its own tracking.
+ */
+export const MEDIA_ENTITY_TYPES = [
+  "PRODUCT",
+  "VARIANT",
+  "ATTRIBUTE_VALUE",
+  "BRAND",
+  "CATEGORY",
+  "PAGE",
+  "REVIEW",
+  "STOREFRONT",
+  "NAVIGATION",
+  "PLUGIN",
 ] as const;
 
 export const mediaVisibilitySchema = z.enum(["PUBLIC", "PRIVATE"]);
@@ -110,12 +134,13 @@ export const folderInputSchema = z.object({
 
 export const mediaUsageSchema = z.object({
   mediaId: z.string().uuid(),
-  entityType: z.enum(["PRODUCT", "VARIANT", "PAGE", "REVIEW", "STOREFRONT", "NAVIGATION", "PLUGIN"]),
+  entityType: z.enum(MEDIA_ENTITY_TYPES),
   entityId: z.string().uuid(),
   field: z.string().trim().min(1).max(40).default("image"),
   productId: z.string().uuid().optional(),
   variantId: z.string().uuid().optional(),
 });
 
+export type MediaEntityType = (typeof MEDIA_ENTITY_TYPES)[number];
 export type MediaVisibilityInput = z.infer<typeof mediaVisibilitySchema>;
 export type UpdateAssetInput = z.infer<typeof updateAssetSchema>;

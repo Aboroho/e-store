@@ -41,32 +41,62 @@ export async function pickerContext(businessId: string) {
   };
 }
 
-/** Where an asset is referenced, with a human label for each usage. */
+/**
+ * Where an asset is referenced, with a human label for each usage.
+ *
+ * Every entity type that can reference media resolves to a readable name here, so
+ * the media manager can explain why a file cannot be deleted ("Used by product
+ * Classic Black Leather Shoes") and offer detaching instead.
+ */
 export async function mediaUsageDetail(businessId: string, assetId: string) {
   const usages = await prisma.mediaUsage.findMany({ where: { mediaId: assetId, media: { businessId } } });
   if (usages.length === 0) return [];
 
-  const productIds = usages.filter((usage) => usage.entityType === "PRODUCT").map((usage) => usage.entityId);
-  const pageIds = usages.filter((usage) => usage.entityType === "PAGE").map((usage) => usage.entityId);
-  const reviewIds = usages.filter((usage) => usage.entityType === "REVIEW").map((usage) => usage.entityId);
+  const idsFor = (entityType: string) =>
+    usages.filter((usage) => usage.entityType === entityType).map((usage) => usage.entityId);
 
-  const [products, pages, reviews] = await Promise.all([
-    productIds.length > 0 ? prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true } }) : [],
-    pageIds.length > 0 ? prisma.page.findMany({ where: { id: { in: pageIds } }, select: { id: true, title: true } }) : [],
-    reviewIds.length > 0 ? prisma.review.findMany({ where: { id: { in: reviewIds } }, select: { id: true, title: true, product: { select: { name: true } } } }) : [],
+  const [products, pages, reviews, brands, categoryRows, attributeValues] = await Promise.all([
+    idsFor("PRODUCT").length > 0
+      ? prisma.product.findMany({ where: { id: { in: idsFor("PRODUCT") } }, select: { id: true, name: true } })
+      : [],
+    idsFor("PAGE").length > 0 ? prisma.page.findMany({ where: { id: { in: idsFor("PAGE") } }, select: { id: true, title: true } }) : [],
+    idsFor("REVIEW").length > 0
+      ? prisma.review.findMany({ where: { id: { in: idsFor("REVIEW") } }, select: { id: true, title: true, product: { select: { name: true } } } })
+      : [],
+    idsFor("BRAND").length > 0 ? prisma.brand.findMany({ where: { id: { in: idsFor("BRAND") } }, select: { id: true, name: true } }) : [],
+    idsFor("CATEGORY").length > 0 ? prisma.category.findMany({ where: { id: { in: idsFor("CATEGORY") } }, select: { id: true, name: true } }) : [],
+    idsFor("ATTRIBUTE_VALUE").length > 0
+      ? prisma.attributeValue.findMany({
+          where: { id: { in: idsFor("ATTRIBUTE_VALUE") } },
+          select: { id: true, value: true, attribute: { select: { name: true } } },
+        })
+      : [],
   ]);
 
-  return usages.map((usage) => ({
-    ...usage,
-    label:
-      usage.entityType === "PRODUCT"
-        ? products.find((product) => product.id === usage.entityId)?.name ?? "Product"
-        : usage.entityType === "PAGE"
-          ? pages.find((page) => page.id === usage.entityId)?.title ?? "Page"
-          : usage.entityType === "REVIEW"
-            ? `${reviews.find((review) => review.id === usage.entityId)?.product.name ?? "Product"} review`
-            : usage.entityId.slice(0, 8),
-  }));
+  const labelFor = (usage: { entityType: string; entityId: string }): string => {
+    switch (usage.entityType) {
+      case "PRODUCT":
+        return products.find((product) => product.id === usage.entityId)?.name ?? "Product";
+      case "VARIANT":
+        return "Product variant";
+      case "ATTRIBUTE_VALUE": {
+        const value = attributeValues.find((entry) => entry.id === usage.entityId);
+        return value ? `${value.attribute.name}: ${value.value}` : "Attribute value";
+      }
+      case "BRAND":
+        return brands.find((brand) => brand.id === usage.entityId)?.name ?? "Brand";
+      case "CATEGORY":
+        return categoryRows.find((category) => category.id === usage.entityId)?.name ?? "Category";
+      case "PAGE":
+        return pages.find((page) => page.id === usage.entityId)?.title ?? "Page";
+      case "REVIEW":
+        return `${reviews.find((review) => review.id === usage.entityId)?.product.name ?? "Product"} review`;
+      default:
+        return `${usage.entityType.charAt(0)}${usage.entityType.slice(1).toLowerCase()}`;
+    }
+  };
+
+  return usages.map((usage) => ({ ...usage, label: labelFor(usage) }));
 }
 
 export { toAssetView };

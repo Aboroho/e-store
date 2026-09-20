@@ -88,6 +88,11 @@ export type RichTextMediaKind = "image" | "file";
 
 /** What the editor needs to know about an uploaded or selected asset. */
 export interface RichTextAsset {
+  /**
+   * Stable id of the media asset in the shared library. Stored on the node so the
+   * asset stays referenced (and cannot be deleted) while a document uses it.
+   */
+  id?: string | null;
   url: string;
   name?: string;
   mimeType?: string;

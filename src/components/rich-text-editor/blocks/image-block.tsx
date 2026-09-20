@@ -16,6 +16,7 @@ import { safeSrc } from "../internal/url";
 function ImageBlockView({ node, selected, editor, updateAttributes, deleteNode }: NodeViewProps) {
   const src = safeSrc(node.attrs.src);
   const alt = typeof node.attrs.alt === "string" ? node.attrs.alt : "";
+  const fromLibrary = typeof node.attrs.mediaId === "string" && node.attrs.mediaId.length > 0;
   const width = typeof node.attrs.width === "number" ? node.attrs.width : undefined;
   const height = typeof node.attrs.height === "number" ? node.attrs.height : undefined;
   const [altDraft, setAltDraft] = React.useState(alt);
@@ -27,7 +28,15 @@ function ImageBlockView({ node, selected, editor, updateAttributes, deleteNode }
     <NodeViewWrapper className="rte-image" data-selected={selected ? "true" : undefined}>
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- user supplied media from arbitrary storage.
-        <img src={src} alt={alt} width={width} height={height} draggable={false} data-drag-handle />
+        <img
+          src={src}
+          alt={alt}
+          width={width}
+          height={height}
+          draggable={false}
+          data-drag-handle
+          data-media-library={fromLibrary ? "true" : undefined}
+        />
       ) : (
         <div className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">Image unavailable</div>
       )}
@@ -93,6 +102,23 @@ function ImageBlockView({ node, selected, editor, updateAttributes, deleteNode }
 }
 
 export const ImageBlock = ImageExtension.extend({
+  /**
+   * `mediaId` is the stable reference to the shared media asset the image came
+   * from. The URL is how it is displayed; the id is how the media manager knows
+   * which asset is still in use, so an image inserted into a description can
+   * never be deleted by accident and never has to be uploaded twice.
+   */
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      mediaId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute("data-media-id"),
+        renderHTML: (attributes) => (attributes.mediaId ? { "data-media-id": attributes.mediaId as string } : {}),
+      },
+    };
+  },
+
   addNodeView() {
     return ReactNodeViewRenderer(ImageBlockView, { className: "rte-node-host" });
   },

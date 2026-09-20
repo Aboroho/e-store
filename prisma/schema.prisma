@@ -130,6 +130,8 @@ model Business {
   storefronts          Storefront[]
   customers            Customer[]
   categories           Category[]
+  brands               Brand[]
+  unitLabels           UnitLabel[]
   products             Product[]
   attributes           Attribute[]
   priceLists           PriceList[]
@@ -736,14 +738,62 @@ model Category {
   updatedAt    DateTime      @updatedAt
   deletedAt    DateTime?
 
-  business  Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  parent    Category?    @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children  Category[]   @relation("CategoryHierarchy")
-  products  ProductCategory[]
+  business   Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent     Category?    @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children   Category[]   @relation("CategoryHierarchy")
+  products   ProductCategory[]
+  image      MediaAsset?  @relation("CategoryImage", fields: [imageMediaId], references: [id], onDelete: SetNull)
 
   @@unique([businessId, slug])
   @@index([businessId, isActive, position])
   @@index([parentId])
+}
+
+/// A brand a product can belong to. `Product.brand` keeps the display name (legacy
+/// free-text column read by the storefront and search) while `brandId` is the stable
+/// reference used by the catalogue UI and the media manager.
+model Brand {
+  id             String   @id @default(uuid())
+  businessId     String
+  name           String
+  slug           String
+  description    String?
+  logoMediaId    String?
+  websiteUrl     String?
+  isActive       Boolean  @default(true)
+  seoTitle       String?
+  seoDescription String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  business Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  logo     MediaAsset?  @relation("BrandLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
+  products Product[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, isActive, name])
+  @@index([businessId, deletedAt])
+}
+
+/// Selectable unit labels ("piece", "pair", "box", …). `Product.unitLabel` stays a
+/// text column (historic values and storefront rendering are unchanged); this table is
+/// the pickable, de-duplicated list the catalogue UI offers.
+model UnitLabel {
+  id         String   @id @default(uuid())
+  businessId String
+  name       String
+  slug       String
+  position   Int      @default(0)
+  isDefault  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, slug])
+  @@index([businessId, position])
 }
 
 model Product {
@@ -755,7 +805,9 @@ model Product {
   status           ProductStatus @default(DRAFT)
   shortDescription String?
   description      String?
+  /// Display name of the brand (kept in step with `brandRef` for storefront search).
   brand            String?
+  brandId          String?
   sku              String?
   barcode          String?
   unitLabel        String        @default("piece")
@@ -764,6 +816,8 @@ model Product {
   isFeatured       Boolean       @default(false)
   isPreorderEnabled Boolean      @default(false)
   preorderNote     String?
+  /// @deprecated Superseded by the preorder note. Retained for historical data only:
+  /// the create/edit UI no longer writes it and no business rule reads it.
   preorderExpectedAt DateTime?
   taxRateBps       Int           @default(0)
   packagingCostPaisa Int         @default(0)
@@ -771,6 +825,7 @@ model Product {
   seoTitle         String?
   seoDescription   String?
   seoKeywords      String?
+  seoImageMediaId  String?
   publishedAt      DateTime?
   archivedAt       DateTime?
   createdByUserId  String?
@@ -781,6 +836,8 @@ model Product {
   deletedAt        DateTime?
 
   business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  brandRef   Brand?              @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  seoImage   MediaAsset?         @relation("ProductSeoImage", fields: [seoImageMediaId], references: [id], onDelete: SetNull)
   categories ProductCategory[]
   images     ProductImage[]
   variants   Variant[]
@@ -794,6 +851,8 @@ model Product {
   @@index([businessId, status, createdAt])
   @@index([businessId, isFeatured])
   @@index([businessId, deletedAt])
+  @@index([businessId, brandId])
+  @@index([businessId, sku])
 }
 
 model ProductCategory {
@@ -840,12 +899,15 @@ model AttributeValue {
   slug        String
   colorHex    String?
   position    Int      @default(0)
+  /// Default image for this value. Variants that carry this value inherit it unless
+  /// they have their own override, so one asset serves every matching variant.
   mediaId     String?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   attribute      Attribute               @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  image          MediaAsset?             @relation("AttributeValueImage", fields: [mediaId], references: [id], onDelete: SetNull)
   variantValues  VariantAttributeValue[]
 
   @@unique([attributeId, slug])
@@ -3006,6 +3068,10 @@ model MediaAsset {
   variantImages VariantImage[]
   reviewImages  ReviewImage[]
   pagesAsOgImage Page[]     @relation("PageOgImage")
+  brandLogos Brand[]        @relation("BrandLogo")
+  attributeValues AttributeValue[] @relation("AttributeValueImage")
+  categories Category[]     @relation("CategoryImage")
+  productsAsSeoImage Product[] @relation("ProductSeoImage")
 
   @@index([businessId, createdAt])
   @@index([businessId, folderId])

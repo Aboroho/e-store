@@ -48,6 +48,7 @@ function putWithProgress(url: string, method: string, headers: Record<string, st
 export function assetToRichTextAsset(asset: MediaAssetView): RichTextAsset | null {
   if (!asset.url) return null;
   return {
+    id: asset.id,
     url: asset.url,
     name: asset.title ?? asset.originalName,
     mimeType: asset.mimeType,

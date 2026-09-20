@@ -10,18 +10,15 @@ import {
   addAttributeValue,
   archiveProduct,
   archiveVariant,
-  bulkUpdateVariants,
   createAttribute,
   createCategory,
-  createProduct,
   createStarterAttributes,
   deleteCategory,
   restoreProduct,
   updateCategory,
-  updateProduct,
   updateVariant,
 } from "@/modules/catalog/service";
-import { attributeInputSchema, categoryInputSchema, productInputSchema, variantInputSchema } from "@/modules/catalog/schemas";
+import { attributeInputSchema, categoryInputSchema, variantInputSchema } from "@/modules/catalog/schemas";
 import { attributeValuesFromForm } from "@/modules/catalog/attribute-form-values";
 import { setPriceListItem, setPriceListItems } from "@/modules/pricing/service";
 import type { ActionState } from "@/modules/auth/action-state";
@@ -57,102 +54,6 @@ function bdtToPaisa(value: unknown): number | undefined {
   return Math.round(amount * 100);
 }
 
-/** Variants arrive as parallel arrays from the dynamic variant editor. */
-function variantsFromFormData(formData: FormData) {
-  const skus = formData.getAll("variantSku").map(String);
-  const rows = skus.map((sku, index) => ({
-    id: String(formData.getAll("variantId")[index] ?? "") || undefined,
-    name: String(formData.getAll("variantName")[index] ?? "").trim() || `Variant ${index + 1}`,
-    sku,
-    barcode: String(formData.getAll("variantBarcode")[index] ?? "").trim() || undefined,
-    pricePaisa: bdtToPaisa(formData.getAll("variantPrice")[index]) ?? 0,
-    compareAtPricePaisa: bdtToPaisa(formData.getAll("variantCompareAt")[index]),
-    costPaisa: bdtToPaisa(formData.getAll("variantCost")[index]),
-    weightGrams: formData.getAll("variantWeight")[index] ? Number(formData.getAll("variantWeight")[index]) : undefined,
-    isPreorderEnabled: formData.getAll("variantPreorder")[index] === "on",
-    attributeValueIds: formData.getAll(`variantAttributes_${index}`).map(String).filter(Boolean),
-  }));
-  return rows;
-}
-
-export async function createProductAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context;
-  try {
-    context = await actor("product.create");
-  } catch (error) {
-    return toState(error, "You are not allowed to create products");
-  }
-
-  let productId: string;
-  try {
-    const raw = formDataToObject(formData);
-    const parsed = parseInput(
-      productInputSchema,
-      {
-        ...raw,
-        productType: raw.productType === "VARIABLE" ? "VARIABLE" : "SIMPLE",
-        requiresShipping: raw.requiresShipping === "on",
-        isFeatured: raw.isFeatured === "on",
-        isPreorderEnabled: raw.isPreorderEnabled === "on",
-        packagingCostPaisa: bdtToPaisa(raw.packagingCostPaisa) ?? 0,
-        weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
-        taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
-        preorderExpectedAt: raw.preorderExpectedAt || undefined,
-        categoryIds: formData.getAll("categoryIds").map(String),
-        primaryCategoryId: raw.primaryCategoryId || undefined,
-        attributeIds: formData.getAll("attributeIds").map(String),
-        mediaIds: formData.getAll("mediaIds").map(String),
-        variants: variantsFromFormData(formData),
-      },
-      "Create product",
-    );
-    const product = await createProduct(context, parsed);
-    productId = product.id;
-  } catch (error) {
-    return toState(error, "Unable to create the product");
-  }
-
-  revalidatePath("/admin/catalog/products");
-  redirect(`/admin/catalog/products/${productId}`);
-}
-
-export async function updateProductAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context;
-  try {
-    context = await actor("product.update");
-  } catch (error) {
-    return toState(error, "You are not allowed to update products");
-  }
-
-  try {
-    const raw = formDataToObject(formData);
-    const productId = String(raw.productId ?? "");
-    const parsed = parseInput(
-      productInputSchema.omit({ variants: true }),
-      {
-        ...raw,
-        requiresShipping: raw.requiresShipping === "on",
-        isFeatured: raw.isFeatured === "on",
-        isPreorderEnabled: raw.isPreorderEnabled === "on",
-        packagingCostPaisa: bdtToPaisa(raw.packagingCostPaisa) ?? 0,
-        weightGrams: raw.weightGrams === "" ? undefined : Number(raw.weightGrams),
-        taxRateBps: raw.taxRateBps === "" ? 0 : Number(raw.taxRateBps),
-        preorderExpectedAt: raw.preorderExpectedAt || undefined,
-        categoryIds: formData.getAll("categoryIds").map(String),
-        primaryCategoryId: raw.primaryCategoryId || undefined,
-        attributeIds: formData.getAll("attributeIds").map(String),
-        mediaIds: formData.getAll("mediaIds").map(String),
-      },
-      "Update product",
-    );
-    await updateProduct(context, productId, parsed);
-    revalidatePath("/admin/catalog/products");
-    revalidatePath(`/admin/catalog/products/${productId}`);
-    return { status: "success", message: "Product saved." };
-  } catch (error) {
-    return toState(error, "Unable to save the product");
-  }
-}
 
 export async function archiveProductAction(productId: string, reasonOrForm?: string | FormData): Promise<void> {
   const context = await actor("product.archive");
@@ -205,40 +106,6 @@ export async function archiveVariantAction(variantId: string, productId: string)
   revalidatePath(`/admin/catalog/products/${productId}`);
 }
 
-/** Bulk editor: rows arrive as `bulk_<variantId>_<field>`. */
-export async function bulkUpdateVariantsAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context;
-  try {
-    context = await actor("product.update");
-  } catch (error) {
-    return toState(error, "You are not allowed to update products");
-  }
-
-  const productId = String(formData.get("productId") ?? "");
-  const variantIds = formData.getAll("bulkVariantId").map(String);
-  const rows = variantIds.map((variantId, index) => {
-    const price = formData.getAll("bulkPrice")[index];
-    const compareAt = formData.getAll("bulkCompareAt")[index];
-    const cost = formData.getAll("bulkCost")[index];
-    const status = formData.getAll("bulkStatus")[index];
-    return {
-      variantId,
-      pricePaisa: bdtToPaisa(price),
-      compareAtPricePaisa: bdtToPaisa(compareAt),
-      costPaisa: bdtToPaisa(cost),
-      status: status === "ACTIVE" || status === "ARCHIVED" ? (status as "ACTIVE" | "ARCHIVED") : undefined,
-    };
-  });
-
-  try {
-    const count = await bulkUpdateVariants(context, productId, rows);
-    revalidatePath(`/admin/catalog/products/${productId}`);
-    revalidatePath("/admin/catalog/products");
-    return { status: "success", message: `${count} variant(s) updated.` };
-  } catch (error) {
-    return toState(error, "Unable to update the variants");
-  }
-}
 
 // ------------------------------------------------------------------ categories
 

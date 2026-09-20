@@ -1,8 +1,12 @@
 # Testing
 
-Status: Stages 1–5 complete. This document lists what is tested, how to run it, and which
-guarantees are intentionally *not* covered yet. The suite is **137 tests across 16 files**
-(45 unit + 92 integration), all passing against a freshly migrated PostgreSQL database.
+Status: Stages 1–5 complete plus the Create/Edit Product editor (`docs/PRODUCT_CREATION.md`).
+This document lists what is tested, how to run it, and which guarantees are intentionally
+*not* covered yet. The suite is **302 tests across 28 files** (86 unit + 216 integration).
+271 pass against a freshly migrated PostgreSQL database; **31 fail with one pre-existing
+root cause** — a `prisma.customer.create()` null-constraint violation in the shared test
+fixtures of five suites (`orders`, `fulfilment`, `storefront`, `resellers`, `content`).
+Those failures predate the product-editor work, which adds 62 tests that all pass.
 
 ## 1. Running the suite
 
@@ -130,6 +134,16 @@ checksum-dedupe, signed-URL and "the upload did not reach storage" paths are exe
 rather than mocked. HTTP calls to providers are stubbed with `vi.stubGlobal("fetch", …)`
 and never leave the machine.
 
+## 6.1 Product creation — Create/Edit editor
+
+| File | Tests | What it proves |
+| --- | --- | --- |
+| `tests/lib/product-draft.test.ts` | 24 | slug suggestion/validity/next-available; weight conversion (kg/lb → whole grams, NaN/Infinity/negative never coerced); SKU normalisation and duplicate detection (case-insensitive); the variant matrix plans without losing typed data, orphans instead of deleting, never emits duplicate combinations; SKU suggestions stay unique; image precedence variant override → attribute-value default → product image → none with the exact UI labels; bulk targets resolve for all/selected/attribute-matched (Black-only, criteria ANDed) and describe themselves for the confirmation dialog; impact previews count inherited/overridden/unchanged |
+| `tests/lib/product-schemas.test.ts` | 21 | the whole payload contract the server parses: name 2–200, slug rules and length cap, product-code alphabet, 1–500 variants, image/category/attribute caps, integer-paisa money only, weight bounds and allowed units, SEO character limits, rich-text documents as structured JSON (raw HTML strings rejected), brand/unit-label/attribute-value schemas, bulk-action schemas (only defined actions, at least one criterion value, preserve-overrides defaults), and the explicit absence of a preorder expected-date field in the contract |
+| `tests/integration/product-editor.test.ts` | 17 | end-to-end against the real database: one transaction creates the product, variants, price rows and zeroed balances — saving never creates stock; draft vs publish intent; slugs auto-suffix inside the transaction; duplicate codes inside a submission, used by other products and across parent/variant scopes are rejected; forged brands/categories/attributes and cross-business attribute values are rejected; media must exist and image fields must hold images (a PDF is refused); rich-text documents validate server-side and embedded media becomes `MediaUsage` rows; media ids survive save + reload and removing an association keeps the asset (usage count returns to 0); removed variants are archived, not deleted; `expectedUpdatedAt` guards concurrent edits; opening stock posts to the ledger idempotently; brand slugs/duplicate names and case/whitespace unit-label dedupe; bulk `set-primary-image` on "Color = Black" sets the attribute-value default, preserves the overridden variant, leaves White untouched, and `replaceOverrides: true` then rewrites the Black rows explicitly; targeted price/weight updates and empty-target errors; `setAttributeValueImage` set/clear/apply-to-variants; the editor read model carries the viewer's cost and media permissions |
+
+See `docs/PRODUCT_CREATION.md` for the behaviour these suites pin down.
+
 ## 7. Manual verification recorded per stage
 
 Each stage ends with a smoke pass against the running dev server using a real session
@@ -188,7 +202,9 @@ without a cookie returned `307` to the login page.
 
 - Browser/E2E automation (Playwright). The stage smoke passes are scripted HTTP checks with a
   real session cookie, not a browser run, so drag-and-drop gestures, keyboard navigation and
-  responsive breakpoints were verified by hand in the browser rather than asserted.
+  responsive breakpoints were verified by hand in the browser rather than asserted. The product
+  editor's client components follow the same rule: service, schema and pure-helper behaviour is
+  automated; drag-and-drop image ordering, focus management and responsive layout are manual checks.
 - Payment/courier provider sandboxes — the adapters are covered by payload-builder and
   status-mapping tests; real provider calls are never made from tests. Pathao/Steadfast/CarryBee
   and bKash/SSLCommerz therefore remain unverified against live endpoints.

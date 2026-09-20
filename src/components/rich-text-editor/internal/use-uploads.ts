@@ -75,9 +75,19 @@ export function insertAsset(editor: Editor, kind: RichTextMediaKind, asset: Rich
   const url = safeSrc(asset.url);
   if (!url) return false;
   const useImage = kind === "image" && Boolean(editor.schema.nodes.image);
+  const mediaId = asset.id ?? null;
   const content = useImage
-    ? { type: "image", attrs: { src: url, alt: asset.alt ?? "", width: asset.width ?? null, height: asset.height ?? null } }
-    : { type: "fileAttachment", attrs: { href: url, name: asset.name ?? url.split("/").pop() ?? "File", size: asset.size ?? null, mimeType: asset.mimeType ?? null } };
+    ? { type: "image", attrs: { src: url, alt: asset.alt ?? "", width: asset.width ?? null, height: asset.height ?? null, mediaId } }
+    : {
+        type: "fileAttachment",
+        attrs: {
+          href: url,
+          name: asset.name ?? url.split("/").pop() ?? "File",
+          size: asset.size ?? null,
+          mimeType: asset.mimeType ?? null,
+          mediaId,
+        },
+      };
   if (!useImage && !editor.schema.nodes.fileAttachment) return false;
   const chain = editor.chain().focus();
   return (typeof position === "number" ? chain.insertContentAt(position, content) : chain.insertContent(content)).run();

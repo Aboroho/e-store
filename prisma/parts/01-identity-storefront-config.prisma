@@ -128,6 +128,8 @@ model Business {
   storefronts          Storefront[]
   customers            Customer[]
   categories           Category[]
+  brands               Brand[]
+  unitLabels           UnitLabel[]
   products             Product[]
   attributes           Attribute[]
   priceLists           PriceList[]
