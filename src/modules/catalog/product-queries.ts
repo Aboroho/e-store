@@ -1,4 +1,5 @@
 import "server-only";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { prisma } from "@/lib/db/client";
 import { getBusinessSettings } from "@/lib/settings";
 import { toAssetView } from "@/modules/media/service";

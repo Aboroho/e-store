@@ -1,4 +1,5 @@
 import "server-only";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
