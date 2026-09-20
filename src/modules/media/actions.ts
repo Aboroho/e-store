@@ -66,8 +66,29 @@ function revalidateMedia() {
 
 /** Step 1 of the upload handshake: ask for a signed target. */
 export async function requestUploadAction(
-  input: { fileName: string; mimeType: string; sizeBytes: number; folderId?: string | null; visibility?: "PUBLIC" | "PRIVATE"; checksum?: string },
-): Promise<{ ok: true; assetId: string; uploadUrl: string | null; method: string; headers: Record<string, string>; reused: boolean } | { ok: false; message: string }> {
+  input: {
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    folderId?: string | null;
+    visibility?: "PUBLIC" | "PRIVATE";
+    checksum?: string;
+    /** Always create a new media object, even when identical bytes already exist. */
+    allowDuplicate?: boolean;
+  },
+): Promise<
+  | {
+      ok: true;
+      assetId: string;
+      uploadUrl: string | null;
+      method: string;
+      headers: Record<string, string>;
+      reused: boolean;
+      fileName: string;
+      asset: MediaAssetView;
+    }
+  | { ok: false; message: string }
+> {
   try {
     const context = await actor();
     const result = await requestUpload(context, input);
@@ -79,6 +100,10 @@ export async function requestUploadAction(
       method: result.upload?.method ?? "PUT",
       headers: result.upload?.headers ?? {},
       reused: result.reused,
+      // The server may have renamed the file to keep the folder unique.
+      fileName: result.asset.originalName,
+      // A reused asset is already complete; a fresh one is filled in on confirm.
+      asset: result.asset,
     };
   } catch (error) {
     const state = toState(error, "Unable to start the upload");
@@ -92,12 +117,14 @@ export async function confirmUploadAction(input: {
   checksum?: string;
   width?: number;
   height?: number;
-}): Promise<{ ok: true } | { ok: false; message: string }> {
+}): Promise<{ ok: true; asset: MediaAssetView } | { ok: false; message: string }> {
   try {
     const context = await actor();
-    await confirmUpload(context, input);
+    const asset = await confirmUpload(context, input);
     revalidateMedia();
-    return { ok: true };
+    // The confirmed asset is returned so the explorer can swap its temporary
+    // upload card for the real media item without reloading the whole library.
+    return { ok: true, asset };
   } catch (error) {
     const state = toState(error, "Unable to confirm the upload");
     return { ok: false, message: state.message ?? "Unable to confirm the upload" };

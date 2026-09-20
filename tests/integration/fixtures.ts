@@ -251,6 +251,10 @@ export async function createTestStorefront(
       code: options.code ?? `SHOP-${suffix}`,
       status: "ACTIVE",
       isDefault: true,
+      // Required list columns have no database default, so every fixture has to
+      // supply them explicitly.
+      allowedPaymentMethods: [],
+      allowedCourierProviders: [],
       defaultPriceListId: options.priceListId ?? context.priceListId,
       defaultLocationId: options.locationId ?? context.locationId,
     },

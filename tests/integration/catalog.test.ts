@@ -58,6 +58,7 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       isPreorderEnabled: false,
       taxRateBps: 0,
       packagingCostPaisa: 0,
+      mediaIds: [],
       categoryIds: [],
       attributeIds: [createdAttribute.id],
       variants: attributeValues.map((value, index) => ({
@@ -103,6 +104,7 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       isPreorderEnabled: false,
       taxRateBps: 0,
       packagingCostPaisa: 0,
+      mediaIds: [],
       categoryIds: [],
       attributeIds: [],
       variants: [
@@ -161,6 +163,7 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
         isPreorderEnabled: false,
         taxRateBps: 0,
         packagingCostPaisa: 0,
+        mediaIds: [],
         categoryIds: [],
         attributeIds: [],
         variants: [
@@ -215,6 +218,7 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       isPreorderEnabled: false,
       taxRateBps: 0,
       packagingCostPaisa: 0,
+      mediaIds: [],
       categoryIds: [],
       attributeIds: [],
       variants: [
@@ -251,6 +255,7 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       isPreorderEnabled: false,
       taxRateBps: 0,
       packagingCostPaisa: 0,
+      mediaIds: [],
       categoryIds: [],
       attributeIds: [],
       variants: [

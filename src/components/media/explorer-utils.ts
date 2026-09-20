@@ -28,6 +28,24 @@ export interface ExplorerFolder {
 
 export type MediaKind = "image" | "video" | "audio" | "pdf" | "file";
 
+/**
+ * What a click means for the selection, read from the modifier keys in the
+ * same way every file explorer does:
+ *
+ * - no modifier → the item becomes the selection (everything else is dropped)
+ * - `toggle` (Ctrl / Cmd, or the item's checkbox) → add or remove this item
+ * - `range` (Shift) → extend from the last anchor to this item
+ */
+export interface SelectIntent {
+  range?: boolean;
+  toggle?: boolean;
+}
+
+/** Read the selection intent out of a mouse or keyboard event. */
+export function selectIntentFrom(event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): SelectIntent {
+  return { range: event.shiftKey, toggle: event.ctrlKey || event.metaKey };
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes < 1024) return `${bytes} B`;

@@ -7,6 +7,8 @@ import { getBusinessSettings } from "@/lib/settings";
 import { recordAudit } from "@/lib/audit";
 import { deleteObject, headObject, putObject, createDownloadUrl, createUploadTarget, storageDriverName, storageIsConfigured } from "@/modules/media/storage";
 import { ALLOWED_MEDIA_TYPES, copyAssetsSchema, copyFolderSchema, copyMediaSchema, deleteMediaSchema, folderInputSchema, mediaUsageSchema, moveAssetSchema, moveFolderSchema, renameMediaSchema, updateAssetSchema, uploadRequestSchema, confirmUploadSchema } from "@/modules/media/schemas";
+import { fileNameKey, fileNamePrefix, generateUniqueFileName } from "@/modules/media/filename";
+import { isUniqueConstraintError } from "@/lib/errors";
 import type { MediaVisibility } from "@/generated/prisma/client";
 import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
@@ -81,6 +83,131 @@ export function buildObjectKey(businessId: string, fileName: string, mimeType: s
 function downloadName(asset: { originalName: string; extension: string }): string {
   const base = path.basename(asset.originalName, path.extname(asset.originalName));
   return `${slugify(base)}.${asset.extension}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Folder-scoped file names                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The single place that decides what a file is called inside a folder.
+ *
+ * Names are unique per folder (never globally): `/products/product.jpg` and
+ * `/brands/product.jpg` can coexist, two `/products/product.jpg` cannot. A
+ * clash gets the `-1`, `-2`, … suffix while keeping the extension.
+ *
+ * Only already-taken siblings are read (a `base%` prefix match), so the check
+ * stays cheap in large folders. Two uploads racing for the same name can still
+ * both compute the same candidate — the partial unique index on
+ * `(businessId, folderId, lower(originalName))` rejects the loser, and the
+ * caller retries through `createAssetWithUniqueName`.
+ */
+async function uniqueFileNameInFolder(
+  businessId: string,
+  folderId: string | null,
+  desiredName: string,
+  options: { excludeAssetId?: string } = {},
+): Promise<string> {
+  const siblings = await prisma.mediaAsset.findMany({
+    where: {
+      businessId,
+      folderId,
+      deletedAt: null,
+      originalName: { startsWith: fileNamePrefix(desiredName), mode: "insensitive" },
+      ...(options.excludeAssetId ? { id: { not: options.excludeAssetId } } : {}),
+    },
+    select: { originalName: true },
+  });
+  return generateUniqueFileName(desiredName, siblings.map((sibling) => sibling.originalName));
+}
+
+/** Display names already used in a folder (title falls back to the file name). */
+async function displayNamesInFolder(businessId: string, folderId: string | null, excludeAssetId?: string): Promise<string[]> {
+  const siblings = await prisma.mediaAsset.findMany({
+    where: {
+      businessId,
+      folderId,
+      deletedAt: null,
+      ...(excludeAssetId ? { id: { not: excludeAssetId } } : {}),
+    },
+    select: { title: true, originalName: true },
+  });
+  return siblings.map((sibling) => sibling.title ?? sibling.originalName);
+}
+
+/**
+ * The partial unique indexes that enforce one file name per folder. Postgres
+ * reports the *index* name in `P2002`, not the column, so both are matched
+ * here: `MediaAsset_folder_name_key` for files inside a folder and
+ * `MediaAsset_root_name_key` for the library root (`folderId IS NULL`).
+ */
+const FILE_NAME_CONSTRAINTS = ["MediaAsset_folder_name_key", "MediaAsset_root_name_key", "originalName"] as const;
+
+/** True when a write lost a race for a file name inside its folder. */
+function isFileNameConflict(error: unknown): boolean {
+  return FILE_NAME_CONSTRAINTS.some((constraint) => isUniqueConstraintError(error, constraint));
+}
+
+/**
+ * How many times a name collision is re-resolved before giving up. Each retry
+ * only loses to a writer that committed in between, so this tolerates far more
+ * concurrency than its value suggests.
+ */
+const UNIQUE_NAME_ATTEMPTS = 25;
+
+/**
+ * Create an asset row whose `originalName` is unique inside its folder.
+ *
+ * Two uploads racing for the same folder can compute the same candidate name
+ * before either has committed. The partial unique index is the authority: it
+ * rejects the loser, and the loop recomputes against the row that is now
+ * visible, so the retry lands on the next free suffix. Nothing is ever
+ * overwritten and no upload is dropped.
+ */
+async function createAssetWithUniqueName(
+  businessId: string,
+  folderId: string | null,
+  desiredName: string,
+  build: (uniqueName: string) => Prisma.MediaAssetUncheckedCreateInput,
+) {
+  for (let attempt = 0; attempt < UNIQUE_NAME_ATTEMPTS; attempt += 1) {
+    const uniqueName = await uniqueFileNameInFolder(businessId, folderId, desiredName);
+    try {
+      return await prisma.mediaAsset.create({
+        data: build(uniqueName),
+        include: { folder: { select: { path: true } } },
+      });
+    } catch (error) {
+      if (!isFileNameConflict(error)) throw error;
+    }
+  }
+  throw AppError.conflict(`Could not find a free name for "${desiredName}" in this folder — please retry`);
+}
+
+/**
+ * Apply a folder/name change to an existing asset, resolving collisions the
+ * same way `createAssetWithUniqueName` does for new rows.
+ */
+async function updateAssetWithUniqueName(
+  assetId: string,
+  businessId: string,
+  folderId: string | null,
+  desiredName: string,
+  build: (uniqueName: string) => Prisma.MediaAssetUncheckedUpdateInput,
+) {
+  for (let attempt = 0; attempt < UNIQUE_NAME_ATTEMPTS; attempt += 1) {
+    const uniqueName = await uniqueFileNameInFolder(businessId, folderId, desiredName, { excludeAssetId: assetId });
+    try {
+      return await prisma.mediaAsset.update({
+        where: { id: assetId },
+        data: build(uniqueName),
+        include: { folder: { select: { path: true } } },
+      });
+    } catch (error) {
+      if (!isFileNameConflict(error)) throw error;
+    }
+  }
+  throw AppError.conflict(`Could not find a free name for "${desiredName}" in this folder — please retry`);
 }
 
 async function limits(businessId: string): Promise<{ maxBytes: number; allowed: string[] }> {
@@ -292,9 +419,13 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
     throw AppError.integration("Media storage is not configured on this deployment (set STORAGE_DRIVER and bucket settings)");
   }
 
+  const folderId = parsed.folderId ?? null;
+
   // A storage-level duplicate (same bytes) reuses the existing asset rather than
   // storing a second copy — the reference count tells us whether it is still used.
-  if (parsed.checksum) {
+  // `allowDuplicate` opts out: the media manager uploads the same local file as
+  // many times as the user asks for, each time as its own media object.
+  if (parsed.checksum && !parsed.allowDuplicate) {
     const existing = await prisma.mediaAsset.findFirst({
       where: { businessId: actor.businessId, checksum: parsed.checksum, deletedAt: null },
       include: { folder: { select: { path: true } } },
@@ -304,26 +435,28 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
     }
   }
 
-  const objectKey = buildObjectKey(actor.businessId, parsed.fileName, parsed.mimeType);
-  const asset = await prisma.mediaAsset.create({
-    data: {
-      businessId: actor.businessId,
-      folderId: parsed.folderId ?? null,
-      objectKey,
-      originalName: parsed.fileName,
-      mimeType: parsed.mimeType,
-      extension: extensionFor(parsed.fileName, parsed.mimeType),
-      sizeBytes: parsed.sizeBytes,
-      visibility: parsed.visibility,
-      title: parsed.title ?? parsed.fileName,
-      altText: parsed.altText ?? null,
-      checksum: parsed.checksum ?? null,
-      uploadedByUserId: actor.userId,
-      metadata: { pendingUpload: true },
+  // The stored name is unique inside the target folder; the original stays in
+  // `metadata.originalFileName` so the upload can still be traced back.
+  const asset = await createAssetWithUniqueName(actor.businessId, folderId, parsed.fileName, (uniqueName) => ({
+    businessId: actor.businessId,
+    folderId,
+    objectKey: buildObjectKey(actor.businessId, uniqueName, parsed.mimeType),
+    originalName: uniqueName,
+    mimeType: parsed.mimeType,
+    extension: extensionFor(uniqueName, parsed.mimeType),
+    sizeBytes: parsed.sizeBytes,
+    visibility: parsed.visibility,
+    title: parsed.title ?? uniqueName,
+    altText: parsed.altText ?? null,
+    checksum: parsed.checksum ?? null,
+    uploadedByUserId: actor.userId,
+    metadata: {
+      pendingUpload: true,
+      ...(fileNameKey(uniqueName) !== fileNameKey(parsed.fileName) ? { originalFileName: parsed.fileName } : {}),
     },
-  });
+  }));
 
-  const upload = await createUploadTarget({ key: objectKey, contentType: parsed.mimeType });
+  const upload = await createUploadTarget({ key: asset.objectKey, contentType: parsed.mimeType });
 
   await recordAudit({
     businessId: actor.businessId,
@@ -332,7 +465,10 @@ export async function requestUpload(actor: MediaActor, input: unknown) {
     entityType: "MediaAsset",
     entityId: asset.id,
     action: "media.upload_requested",
-    summary: `Requested upload for ${parsed.fileName}`,
+    summary:
+      fileNameKey(asset.originalName) === fileNameKey(parsed.fileName)
+        ? `Requested upload for ${parsed.fileName}`
+        : `Requested upload for ${parsed.fileName} (stored as ${asset.originalName})`,
   });
 
   return { asset: await toAssetView(asset), upload, reused: false };
@@ -367,8 +503,16 @@ export async function confirmUpload(actor: MediaActor, input: unknown) {
       width: parsed.width ?? asset.width,
       height: parsed.height ?? asset.height,
       checksum: parsed.checksum ?? asset.checksum,
-      metadata: { pendingUpload: false },
+      // Merge, never replace: `originalFileName` (set when the upload had to be
+      // renamed for folder uniqueness) has to survive the confirm step.
+      metadata: {
+        ...(asset.metadata && typeof asset.metadata === "object" && !Array.isArray(asset.metadata) ? asset.metadata : {}),
+        pendingUpload: false,
+      },
     },
+    // Included so the returned view carries `folderPath` and the explorer can
+    // place the new item without another round-trip.
+    include: { folder: { select: { path: true } } },
   });
 
   await recordAudit({
@@ -392,16 +536,29 @@ export async function updateMediaAsset(actor: MediaActor, input: unknown) {
     await assertFolder(actor.businessId, parsed.folderId);
   }
 
-  const updated = await prisma.mediaAsset.update({
-    where: { id: asset.id },
-    data: {
-      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
-      ...(parsed.altText !== undefined ? { altText: parsed.altText } : {}),
-      ...(parsed.caption !== undefined ? { caption: parsed.caption } : {}),
-      ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
-      ...(parsed.folderId !== undefined ? { folderId: parsed.folderId } : {}),
-    },
-  });
+  // Changing the folder from the details panel is a move: the file keeps its
+  // name when the destination allows it, and gets the `-1`, `-2`, … suffix when
+  // that name is already taken there.
+  const movingFolder = parsed.folderId !== undefined && (parsed.folderId ?? null) !== (asset.folderId ?? null);
+
+  const fields: Prisma.MediaAssetUncheckedUpdateInput = {
+    ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+    ...(parsed.altText !== undefined ? { altText: parsed.altText } : {}),
+    ...(parsed.caption !== undefined ? { caption: parsed.caption } : {}),
+    ...(parsed.visibility !== undefined ? { visibility: parsed.visibility } : {}),
+    ...(parsed.folderId !== undefined ? { folderId: parsed.folderId } : {}),
+  };
+
+  const updated = movingFolder
+    ? await updateAssetWithUniqueName(asset.id, actor.businessId, parsed.folderId ?? null, asset.originalName, (uniqueName) => ({
+        ...fields,
+        ...(fileNameKey(uniqueName) === fileNameKey(asset.originalName) ? {} : { originalName: uniqueName }),
+      }))
+    : await prisma.mediaAsset.update({
+        where: { id: asset.id },
+        data: fields,
+        include: { folder: { select: { path: true } } },
+      });
 
   // Product images mirror the asset's alt text so the storefront stays accessible.
   if (parsed.altText !== undefined) {
@@ -728,10 +885,36 @@ export async function moveMediaAssets(actor: MediaActor, input: unknown) {
   const assets = await prisma.mediaAsset.findMany({ where: { id: { in: parsed.assetIds }, businessId: actor.businessId, deletedAt: null } });
   if (assets.length !== parsed.assetIds.length) throw AppError.notFound("One or more media assets were not found");
 
-  const result = await prisma.mediaAsset.updateMany({
-    where: { id: { in: parsed.assetIds }, businessId: actor.businessId },
-    data: { folderId: parsed.folderId },
-  });
+  // Moving is a per-file update because the destination may already hold a file
+  // with the same name: the mover is renamed (`photo.jpg` → `photo-1.jpg`)
+  // instead of colliding with — or overwriting — the resident file.
+  let moved = 0;
+  let renamed = 0;
+  for (const asset of assets) {
+    if ((asset.folderId ?? null) === (parsed.folderId ?? null)) {
+      moved += 1;
+      continue;
+    }
+    const updated = await updateAssetWithUniqueName(
+      asset.id,
+      actor.businessId,
+      parsed.folderId,
+      asset.originalName,
+      (uniqueName) => ({
+        folderId: parsed.folderId,
+        ...(fileNameKey(uniqueName) === fileNameKey(asset.originalName)
+          ? {}
+          : {
+              originalName: uniqueName,
+              // Only a filename-derived title follows the rename; a title the
+              // user typed is theirs and stays untouched.
+              ...(asset.title === asset.originalName ? { title: uniqueName } : {}),
+            }),
+      }),
+    );
+    if (updated.originalName !== asset.originalName) renamed += 1;
+    moved += 1;
+  }
 
   await recordAudit({
     businessId: actor.businessId,
@@ -740,10 +923,10 @@ export async function moveMediaAssets(actor: MediaActor, input: unknown) {
     entityType: "MediaAsset",
     entityId: parsed.assetIds[0],
     action: "media.moved",
-    summary: `Moved ${result.count} asset(s)`,
+    summary: renamed > 0 ? `Moved ${moved} asset(s), renamed ${renamed} to avoid a name clash` : `Moved ${moved} asset(s)`,
   });
 
-  return { moved: result.count };
+  return { moved, renamed };
 }
 
 export async function renameMediaAsset(actor: MediaActor, input: unknown) {
@@ -751,7 +934,12 @@ export async function renameMediaAsset(actor: MediaActor, input: unknown) {
   const asset = await prisma.mediaAsset.findFirst({ where: { id: parsed.assetId, businessId: actor.businessId, deletedAt: null } });
   if (!asset) throw AppError.notFound("Media asset not found");
 
-  const updated = await prisma.mediaAsset.update({ where: { id: asset.id }, data: { title: parsed.title } });
+  // Display names follow the same per-folder uniqueness rule as uploads, so the
+  // grid can never show two identical labels side by side.
+  const taken = await displayNamesInFolder(actor.businessId, asset.folderId, asset.id);
+  const title = generateUniqueFileName(parsed.title, taken);
+
+  const updated = await prisma.mediaAsset.update({ where: { id: asset.id }, data: { title } });
   await recordAudit({
     businessId: actor.businessId,
     actorUserId: actor.userId,
@@ -759,7 +947,7 @@ export async function renameMediaAsset(actor: MediaActor, input: unknown) {
     entityType: "MediaAsset",
     entityId: asset.id,
     action: "media.renamed",
-    summary: `Renamed asset to ${parsed.title}`,
+    summary: title === parsed.title ? `Renamed asset to ${title}` : `Renamed asset to ${title} (“${parsed.title}” was taken)`,
   });
   return toAssetView(updated);
 }
@@ -772,28 +960,36 @@ export async function copyMediaAsset(actor: MediaActor, input: unknown) {
   if (parsed.folderId) await assertFolder(actor.businessId, parsed.folderId);
 
   const body = await import("@/modules/media/storage").then((module) => module.getObject(source.objectKey));
-  const key = buildObjectKey(actor.businessId, source.originalName, source.mimeType);
-  await putObject({ key, body, contentType: source.mimeType });
+  const destinationFolderId = parsed.folderId === undefined ? source.folderId : parsed.folderId;
 
-  const copy = await prisma.mediaAsset.create({
-    data: {
-      businessId: actor.businessId,
-      folderId: parsed.folderId === undefined ? source.folderId : parsed.folderId,
-      objectKey: key,
-      originalName: source.originalName,
-      mimeType: source.mimeType,
-      extension: source.extension,
-      sizeBytes: source.sizeBytes,
-      width: source.width,
-      height: source.height,
-      visibility: source.visibility,
-      title: parsed.title ?? `${source.title ?? source.originalName} (copy)`,
-      altText: source.altText,
-      caption: source.caption,
-      checksum: source.checksum,
-      uploadedByUserId: actor.userId,
-    },
-  });
+  // The copy gets its own free name in the destination folder (`photo.jpg` →
+  // `photo-1.jpg`), so it never overwrites or shadows the file already there.
+  const copy = await createAssetWithUniqueName(actor.businessId, destinationFolderId, source.originalName, (uniqueName) => ({
+    businessId: actor.businessId,
+    folderId: destinationFolderId,
+    objectKey: buildObjectKey(actor.businessId, uniqueName, source.mimeType),
+    originalName: uniqueName,
+    mimeType: source.mimeType,
+    extension: source.extension,
+    sizeBytes: source.sizeBytes,
+    width: source.width,
+    height: source.height,
+    visibility: source.visibility,
+    title: parsed.title ?? `${source.title ?? source.originalName} (copy)`,
+    altText: source.altText,
+    caption: source.caption,
+    checksum: source.checksum,
+    uploadedByUserId: actor.userId,
+  }));
+
+  // The bytes are written after the row so a lost name race never leaves an orphan
+  // object; a failed write rolls the reservation back instead of leaving a broken row.
+  try {
+    await putObject({ key: copy.objectKey, body, contentType: source.mimeType });
+  } catch (error) {
+    await prisma.mediaAsset.delete({ where: { id: copy.id } }).catch(() => undefined);
+    throw error;
+  }
 
   await recordAudit({
     businessId: actor.businessId,
@@ -951,7 +1147,10 @@ export async function replaceMediaAsset(actor: MediaActor, input: { assetId: str
   }
 
   const oldKey = asset.objectKey;
-  const newKey = buildObjectKey(actor.businessId, input.fileName, input.mimeType);
+  // The replacement takes the new file's name, still unique inside the folder
+  // (the asset id and every reference to it stay exactly the same).
+  const storedName = await uniqueFileNameInFolder(actor.businessId, asset.folderId, input.fileName, { excludeAssetId: asset.id });
+  const newKey = buildObjectKey(actor.businessId, storedName, input.mimeType);
 
   const upload = await createUploadTarget({ key: newKey, contentType: input.mimeType });
 
@@ -960,9 +1159,9 @@ export async function replaceMediaAsset(actor: MediaActor, input: { assetId: str
     where: { id: asset.id },
     data: {
       objectKey: newKey,
-      originalName: input.fileName,
+      originalName: storedName,
       mimeType: input.mimeType,
-      extension: extensionFor(input.fileName, input.mimeType),
+      extension: extensionFor(storedName, input.mimeType),
       sizeBytes: input.sizeBytes,
       checksum: input.checksum ?? asset.checksum,
       metadata: { replacing: true, previousKey: oldKey },

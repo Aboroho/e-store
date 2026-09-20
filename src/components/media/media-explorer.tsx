@@ -72,7 +72,9 @@ import {
   kindLabel,
   mediaKindOf,
   previewKindOf,
+  selectIntentFrom,
   type ExplorerFolder,
+  type SelectIntent,
   type MimeFilter,
   type SortKey,
   type ViewMode,
@@ -183,6 +185,11 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
   /* Data state */
   const [assets, setAssets] = React.useState<MediaAssetView[]>(props.initialAssets);
+
+  // Assets uploaded in this session, merged into the current folder's rows the
+  // moment the server confirms them — the upload card becomes the real media
+  // item in place, without reloading the whole library.
+  const [uploadedAssets, setUploadedAssets] = React.useState<MediaAssetView[]>([]);
   const [folders, setFolders] = React.useState<ExplorerFolder[]>(props.initialFolders);
   const [total, setTotal] = React.useState(props.initialTotal);
   const [totalBytes, setTotalBytes] = React.useState(props.initialTotalBytes ?? 0);
@@ -228,10 +235,6 @@ export function MediaExplorer(props: MediaExplorerProps) {
   const replaceInputRef = React.useRef<HTMLInputElement>(null);
   const pendingReplaceRef = React.useRef<string | null>(null);
   const fetchSeq = React.useRef(0);
-
-  // Preview URLs for upload cards shown inline in the content area.
-  // Built from the raw File objects before they enter the upload queue.
-  const uploadPreviewMapRef = React.useRef(new Map<string, { url: string; file: File }>());
 
   const searching = search.trim().length > 0;
 
@@ -287,6 +290,12 @@ export function MediaExplorer(props: MediaExplorerProps) {
           return next;
         });
         setAssets(result.rows);
+        // The listing now carries these rows itself, so the local copies kept
+        // for freshly uploaded files can be dropped — no duplicates, no flicker.
+        setUploadedAssets((prev) => {
+          const next = prev.filter((asset) => !result.rows.some((row) => row.id === asset.id));
+          return next.length === prev.length ? prev : next;
+        });
         setTotal(result.total);
         setTotalBytes(result.totalBytes);
         setPage(result.page);
@@ -342,15 +351,29 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
   /* --------------------------------- uploads -------------------------------- */
 
+  const handleUploaded = React.useCallback(
+    (asset: MediaAssetView) => {
+      setViewCache((prev) => new Map(prev).set(asset.id, asset));
+      setUploadedAssets((prev) => [asset, ...prev.filter((entry) => entry.id !== asset.id)]);
+      // A finished upload is selected, so the user can act on exactly what they
+      // just added. Existing selections are left alone.
+      setSelectedAssetOrder((prev) => (prev.includes(asset.id) ? prev : [...prev, asset.id]));
+    },
+    [],
+  );
+
   const uploads = useUploadQueue({
     folderId,
     allowedTypes: props.allowedTypes,
     maxUploadBytes: props.maxUploadBytes,
     storageConfigured: props.storage.configured,
+    onUploaded: handleUploaded,
     onSettled: React.useCallback(
       (completed: number, failed: number) => {
         if (completed > 0) {
           toast.success(`Uploaded ${completed} file${completed === 1 ? "" : "s"}`);
+          // The rows are already on screen; this only re-syncs counts, folder
+          // sizes and the server's own ordering.
           refreshAll();
         }
         if (failed > 0) toast.error(`${failed} upload${failed === 1 ? "" : "s"} failed — see the queue for details`);
@@ -359,49 +382,61 @@ export function MediaExplorer(props: MediaExplorerProps) {
     ),
   });
 
-  // Wrap addFiles to capture File objects for inline preview cards.
-  const addFilesWithPreview = React.useCallback(
+  const { addFiles: enqueueFiles, forget: forgetUploads, items: uploadItems } = uploads;
+
+  const addFiles = React.useCallback(
     (files: File[], targetFolderId?: string | null) => {
-      for (const file of files) {
-        if (file.type.startsWith("image/")) {
-          const key = `${file.name}::${file.size}`;
-          if (!uploadPreviewMapRef.current.has(key)) {
-            uploadPreviewMapRef.current.set(key, { url: URL.createObjectURL(file), file });
-          }
-        }
+      if (files.length === 0) return;
+      const queued = enqueueFiles(files, targetFolderId);
+      // Uploading into another folder should not silently do nothing visible.
+      if (queued.length > 0 && targetFolderId !== undefined && (targetFolderId ?? null) !== (folderId ?? null)) {
+        const destination = targetFolderId ? folders.find((folder) => folder.id === targetFolderId)?.name : "Media Library";
+        toast.info(`Uploading ${queued.length} file${queued.length === 1 ? "" : "s"} into “${destination ?? "folder"}”`);
       }
-      uploads.addFiles(files, targetFolderId);
     },
-    [uploads.addFiles],
+    [enqueueFiles, folderId, folders],
   );
 
-  // Clean up preview URLs when upload items complete or are removed.
+  // A completed upload card is dropped as soon as its real media row is on
+  // screen, so nothing is ever shown twice. This talks to the upload queue (an
+  // external store), not to React state, so it belongs in an effect.
   React.useEffect(() => {
-    const activeKeys = new Set(
-      uploads.items
-        .filter((item) => item.status === "waiting" || item.status === "uploading" || item.status === "processing")
-        .map((item) => `${item.fileName}::${item.size}`),
-    );
-    for (const [key, { url }] of uploadPreviewMapRef.current) {
-      if (!activeKeys.has(key)) {
-        URL.revokeObjectURL(url);
-        uploadPreviewMapRef.current.delete(key);
-      }
-    }
-  }, [uploads.items]);
-
-  // Revoke all preview URLs on unmount.
-  React.useEffect(() => {
-    return () => {
-      for (const { url } of uploadPreviewMapRef.current.values()) {
-        URL.revokeObjectURL(url);
-      }
-    };
-  }, []);
+    const settled = uploadItems
+      .filter((item) => item.status === "completed" && item.asset && assets.some((asset) => asset.id === item.asset?.id))
+      .map((item) => item.id);
+    if (settled.length > 0) forgetUploads(settled);
+  }, [uploadItems, assets, forgetUploads]);
 
   /* --------------------------------- derived -------------------------------- */
 
-  const visibleAssets = React.useMemo(() => assets.filter((asset) => !excluded.has(asset.id)), [assets, excluded]);
+  // Rows from the server, plus this session's uploads that the current page has
+  // not caught up with yet. Freshly uploaded files therefore stay put — and stay
+  // selected — instead of blinking out until the next refresh lands.
+  const visibleAssets = React.useMemo(() => {
+    const known = new Set(assets.map((asset) => asset.id));
+    const pendingFromUploads = searching
+      ? []
+      : uploadedAssets.filter((asset) => !known.has(asset.id) && (asset.folderId ?? null) === (folderId ?? null));
+    return [...pendingFromUploads, ...assets].filter((asset) => !excluded.has(asset.id));
+  }, [assets, excluded, uploadedAssets, folderId, searching]);
+
+  /**
+   * Upload placeholders belonging to the folder on screen, in the order the
+   * user picked the files. The frontend owns this order: it is fixed when the
+   * selection is made, long before any server response.
+   */
+  const pendingUploads = React.useMemo(
+    () =>
+      uploads.items
+        .filter(
+          (item) =>
+            (item.folderId ?? null) === (folderId ?? null) &&
+            (item.status === "waiting" || item.status === "uploading" || item.status === "processing" || item.status === "failed"),
+        )
+        .sort((a, b) => a.order - b.order),
+    [uploads.items, folderId],
+  );
+
   const visibleFolders = React.useMemo(() => {
     if (searching) return [];
     return folders
@@ -428,12 +463,15 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
   const queryKey = viewKeyFor(searching, searching ? null : folderId, searching ? search.trim() : "", mimeFilter, sort, page, pageSize, reloadToken);
   const refreshing = loadedKey !== queryKey;
-  const loading = refreshing && assets.length === 0;
+  // Anything already on screen (server rows, in-flight uploads, or a file this
+  // session just uploaded) keeps the skeleton away: a refresh must never hide
+  // the upload the user is watching.
+  const loading = refreshing && visibleAssets.length === 0 && pendingUploads.length === 0;
   // Navigation (folder/search change) hides stale rows immediately and shows
   // the skeleton until the correct response lands. Same-view refreshes (sort,
   // filter, page, manual refresh) keep their rows with "Updating…" instead.
   const viewStale = displayedViewId !== viewId;
-  const showSkeleton = viewStale || loading;
+  const showSkeleton = (viewStale || loading) && pendingUploads.length === 0;
   const showErrorPanel = !viewStale && loadError !== null && assets.length === 0 && visibleFolders.length === 0;
 
   const crumbs = React.useMemo(() => breadcrumbsFor(folders, folderId), [folders, folderId]);
@@ -446,6 +484,23 @@ export function MediaExplorer(props: MediaExplorerProps) {
       ? (selectedViews[0] ?? null)
       : null;
   const previewAsset = previewAssetId ? (viewCache.get(previewAssetId) ?? null) : null;
+
+  /**
+   * The one item the toolbar can act on individually. Selecting a single folder
+   * is what surfaces Open / Rename for it — the same operations its context
+   * menu offers — so a single click is enough to reach every folder action.
+   */
+  const soleSelection = React.useMemo<
+    { type: "folder"; folder: ExplorerFolder } | { type: "asset"; asset: MediaAssetView } | null
+  >(() => {
+    if (selectionCount !== 1) return null;
+    if (selectedFolderIds.length === 1) {
+      const folder = folders.find((entry) => entry.id === selectedFolderIds[0]);
+      return folder ? { type: "folder", folder } : null;
+    }
+    const asset = selectedViews[0];
+    return asset ? { type: "asset", asset } : null;
+  }, [selectionCount, selectedFolderIds, folders, selectedViews]);
 
   const dialogOpen =
     createFolder.open || renameTarget !== null || moveDialog !== null || deleteDialog !== null || previewAssetId !== null;
@@ -461,10 +516,18 @@ export function MediaExplorer(props: MediaExplorerProps) {
     });
   };
 
-  const toggleAsset = (asset: MediaAssetView, rangeSelect = false, index?: number) => {
+  /**
+   * `range` (Shift) and `toggle` (Ctrl/Cmd, or the item checkbox) mirror what
+   * every file explorer does. A plain click in manage mode *replaces* the
+   * selection, so the toolbar always describes exactly one thing and a
+   * selected folder stays selected until another item is clicked. Picker mode
+   * keeps its long-standing additive click, because that is how users build a
+   * multi-file selection there.
+   */
+  const toggleAsset = (asset: MediaAssetView, intent: SelectIntent = {}, index?: number) => {
     cacheView(asset);
     const rangeAllowed = mode === "manage" || multiple;
-    if (rangeSelect && rangeAllowed) {
+    if (intent.range && rangeAllowed) {
       selectRange(asset, index);
       return;
     }
@@ -473,6 +536,18 @@ export function MediaExplorer(props: MediaExplorerProps) {
       setSelectedAssetOrder((prev) => (prev.includes(asset.id) ? [] : [asset.id]));
       return;
     }
+
+    const additive = mode === "pick" || intent.toggle === true;
+    if (!additive) {
+      anchorRef.current = index !== undefined ? { type: "asset", id: asset.id, index } : null;
+      // Clicking the only selected item again clears it, exactly like clicking
+      // empty space; anything else becomes the new single selection.
+      const onlyThis = selectedAssetOrder.length === 1 && selectedAssetOrder[0] === asset.id && selectedFolderIds.length === 0;
+      setSelectedAssetOrder(onlyThis ? [] : [asset.id]);
+      setSelectedFolderIds([]);
+      return;
+    }
+
     if (selectedAssets.has(asset.id)) {
       setSelectedAssetOrder((prev) => prev.filter((id) => id !== asset.id));
     } else {
@@ -521,9 +596,13 @@ export function MediaExplorer(props: MediaExplorerProps) {
     else setSelectedAssetOrder((prev) => [...prev, asset.id]);
   };
 
-  const toggleFolder = (folder: ExplorerFolder, rangeSelect = false, index?: number) => {
+  /**
+   * Select a folder. A single click selects it (and only it) so the toolbar can
+   * offer its rename / move / copy / delete actions; it never opens the folder.
+   */
+  const toggleFolder = (folder: ExplorerFolder, intent: SelectIntent = {}, index?: number) => {
     if (mode !== "manage") return;
-    if (rangeSelect && anchorRef.current) {
+    if (intent.range && anchorRef.current) {
       if (index === undefined) return;
       const anchor = anchorRef.current.index;
       const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
@@ -538,8 +617,17 @@ export function MediaExplorer(props: MediaExplorerProps) {
       setSelectedFolderIds((prev) => [...prev.filter((id) => !folderIds.includes(id)), ...folderIds]);
       return;
     }
+
     anchorRef.current = index !== undefined ? { type: "folder", id: folder.id, index } : null;
-    setSelectedFolderIds((prev) => (prev.includes(folder.id) ? prev.filter((id) => id !== folder.id) : [...prev, folder.id]));
+
+    if (intent.toggle) {
+      setSelectedFolderIds((prev) => (prev.includes(folder.id) ? prev.filter((id) => id !== folder.id) : [...prev, folder.id]));
+      return;
+    }
+
+    const onlyThis = selectedFolderIds.length === 1 && selectedFolderIds[0] === folder.id && selectedAssetOrder.length === 0;
+    setSelectedFolderIds(onlyThis ? [] : [folder.id]);
+    setSelectedAssetOrder([]);
   };
 
   const selectAllVisible = () => {
@@ -678,10 +766,18 @@ export function MediaExplorer(props: MediaExplorerProps) {
 
   /* --------------------------------- actions --------------------------------- */
 
+  /**
+   * Navigate into a folder (`null` is the library root).
+   *
+   * Opening the folder already on screen is a no-op, so the double-click
+   * sequence — and a double-click on the folder you are already in — can never
+   * fire a second listing request for the same view.
+   */
   const openFolder = (id: string | null) => {
+    setSidebarOpen(false);
+    if ((id ?? null) === (folderId ?? null)) return;
     setFolderId(id);
     setPage(1);
-    setSidebarOpen(false);
     anchorRef.current = null;
   };
 
@@ -800,8 +896,8 @@ export function MediaExplorer(props: MediaExplorerProps) {
           },
         },
         selectedAssets.has(asset.id)
-          ? { key: "deselect", label: "Deselect", icon: <X {...iconProps} />, onSelect: () => toggleAsset(asset) }
-          : { key: "select", label: "Select", icon: <Check {...iconProps} />, onSelect: () => toggleAsset(asset) },
+          ? { key: "deselect", label: "Deselect", icon: <X {...iconProps} />, onSelect: () => toggleAsset(asset, { toggle: true }) }
+          : { key: "select", label: "Select", icon: <Check {...iconProps} />, onSelect: () => toggleAsset(asset, { toggle: true }) },
       ]);
     }
 
@@ -857,8 +953,8 @@ export function MediaExplorer(props: MediaExplorerProps) {
         ...(mode === "manage"
           ? [
               selectedFolders.has(folder.id)
-                ? { key: "deselect", label: "Deselect", icon: <X {...iconProps} />, onSelect: () => toggleFolder(folder) }
-                : { key: "select", label: "Select", icon: <Check {...iconProps} />, onSelect: () => toggleFolder(folder) },
+                ? { key: "deselect", label: "Deselect", icon: <X {...iconProps} />, onSelect: () => toggleFolder(folder, { toggle: true }) }
+                : { key: "select", label: "Select", icon: <Check {...iconProps} />, onSelect: () => toggleFolder(folder, { toggle: true }) },
             ]
           : []),
       ],
@@ -920,18 +1016,30 @@ export function MediaExplorer(props: MediaExplorerProps) {
     if (!selectedAssets.has(asset.id)) {
       cacheView(asset);
       if (mode === "pick" && !multiple) setSelectedAssetOrder([asset.id]);
-      else if (!(mode === "pick" && selectedAssetOrder.length >= maxSelection)) {
-        setSelectedAssetOrder((prev) => [...prev, asset.id]);
+      else if (mode === "pick") {
+        if (selectedAssetOrder.length < maxSelection) setSelectedAssetOrder((prev) => [...prev, asset.id]);
+      } else {
+        // Manage mode mirrors a plain left click: the file becomes the selection.
+        setSelectedAssetOrder([asset.id]);
+        setSelectedFolderIds([]);
       }
     }
     openMenu({ x: event.clientX, y: event.clientY, kind: "asset", assetId: asset.id });
   };
 
+  /**
+   * Right-clicking a folder opens its own menu at the cursor. Standard explorer
+   * behaviour: an unselected folder becomes the selection first (so the menu
+   * and the toolbar act on the same thing), an already-selected one keeps the
+   * multi-selection intact. It never navigates.
+   */
   const handleFolderContextMenu = (event: React.MouseEvent, folder: ExplorerFolder) => {
     event.preventDefault();
     event.stopPropagation();
     if (mode === "manage" && !selectedFolders.has(folder.id)) {
-      setSelectedFolderIds((prev) => [...prev, folder.id]);
+      anchorRef.current = null;
+      setSelectedFolderIds([folder.id]);
+      setSelectedAssetOrder([]);
     }
     openMenu({ x: event.clientX, y: event.clientY, kind: "folder", folderId: folder.id });
   };
@@ -1003,10 +1111,10 @@ export function MediaExplorer(props: MediaExplorerProps) {
     setDragging(false);
     if (!uploadsAllowed) return;
     if (dropFolderId) {
-      addFilesWithPreview([...event.dataTransfer.files], dropFolderId);
+      addFiles([...event.dataTransfer.files], dropFolderId);
       setDropFolderId(null);
     } else {
-      addFilesWithPreview([...event.dataTransfer.files]);
+      addFiles([...event.dataTransfer.files]);
     }
   };
 
@@ -1239,6 +1347,26 @@ export function MediaExplorer(props: MediaExplorerProps) {
               {selectionCount} selected
               {mode === "pick" ? ` · ${selectedAssetOrder.length} file${selectedAssetOrder.length === 1 ? "" : "s"}` : null}
             </span>
+            {/* Single selection gets the per-item actions: open and rename. */}
+            {soleSelection?.type === "folder" ? (
+              <BarButton onClick={() => openFolder(soleSelection.folder.id)} title="Open this folder">
+                <FolderOpen className="h-3.5 w-3.5" /> Open
+              </BarButton>
+            ) : null}
+            {canManage && soleSelection ? (
+              <BarButton
+                onClick={() =>
+                  setRenameTarget(
+                    soleSelection.type === "folder"
+                      ? { type: "folder", id: soleSelection.folder.id, currentName: soleSelection.folder.name }
+                      : { type: "asset", id: soleSelection.asset.id, currentName: displayName(soleSelection.asset) },
+                  )
+                }
+                title={soleSelection.type === "folder" ? "Rename this folder" : "Rename this file"}
+              >
+                <Pencil className="h-3.5 w-3.5" /> Rename
+              </BarButton>
+            ) : null}
             {canManage ? (
               <>
                 <BarButton onClick={() => copySelection(selectedAssetOrder, selectedFolderIds)} title="Copy (Ctrl+C)">
@@ -1394,7 +1522,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
               <LoadingSkeleton viewMode={viewMode} />
             ) : showErrorPanel ? (
               <LoadErrorState message={loadError ?? "Unable to load the media library"} onRetry={refreshAll} />
-            ) : visibleAssets.length === 0 && visibleFolders.length === 0 ? (
+            ) : visibleAssets.length === 0 && visibleFolders.length === 0 && pendingUploads.length === 0 ? (
               <EmptyState
                 searching={searching}
                 search={search}
@@ -1409,17 +1537,16 @@ export function MediaExplorer(props: MediaExplorerProps) {
               />
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {/* Upload preview cards — shown inline while uploading */}
-                {uploads.items
-                  .filter((item) => item.status === "waiting" || item.status === "uploading" || item.status === "processing")
-                  .map((item) => (
-                    <UploadPreviewCard key={item.id} item={item} previewUrl={uploadPreviewMapRef.current.get(`${item.fileName}::${item.size}`)?.url} />
-                  ))}
-                {uploads.items
-                  .filter((item) => item.status === "failed")
-                  .map((item) => (
-                    <UploadPreviewCard key={item.id} item={item} previewUrl={uploadPreviewMapRef.current.get(`${item.fileName}::${item.size}`)?.url} onRetry={() => uploads.retry(item.id)} />
-                  ))}
+                {/* Upload cards — in the order the files were selected, from the moment they were selected */}
+                {pendingUploads.map((item) => (
+                  <UploadPreviewCard
+                    key={item.id}
+                    item={item}
+                    previewUrl={item.previewUrl}
+                    onRetry={item.status === "failed" ? () => uploads.retry(item.id) : undefined}
+                    onCancel={item.status === "failed" ? undefined : () => uploads.cancel(item.id)}
+                  />
+                ))}
                 {visibleFolders.map((folder, folderIndex) => (
                   <FolderCard
                     key={folder.id}
@@ -1430,7 +1557,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                     dropTarget={dropFolderId === folder.id}
                     uploadsAllowed={uploadsAllowed}
                     onOpen={() => openFolder(folder.id)}
-                    onSelect={(range) => toggleFolder(folder, range, folderIndex)}
+                    onSelect={(intent) => toggleFolder(folder, intent, folderIndex)}
                     onContextMenu={(event) => handleFolderContextMenu(event, folder)}
                     onMenuButton={(event) => {
                       if (mode === "manage" && !selectedFolders.has(folder.id)) toggleFolder(folder);
@@ -1452,7 +1579,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                       dragCounter.current = 0;
                       setDragging(false);
                       setDropFolderId(null);
-                      if (uploadsAllowed) addFilesWithPreview([...event.dataTransfer.files], folder.id);
+                      if (uploadsAllowed) addFiles([...event.dataTransfer.files], folder.id);
                     }}
                   />
                 ))}
@@ -1465,7 +1592,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                       showFolder={searching}
                       selected={selectedAssets.has(asset.id)}
                       cut={cutIds.has(asset.id)}
-                      onSelect={(range) => toggleAsset(asset, range, flatIndex)}
+                      onSelect={(intent) => toggleAsset(asset, intent, flatIndex)}
                       onPreview={() => {
                         cacheView(asset);
                         if (previewKindOf(asset.mimeType)) setPreviewAssetId(asset.id);
@@ -1506,12 +1633,15 @@ export function MediaExplorer(props: MediaExplorerProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {/* Upload preview rows */}
-                    {uploads.items
-                      .filter((item) => item.status === "waiting" || item.status === "uploading" || item.status === "processing" || item.status === "failed")
-                      .map((item) => (
-                        <UploadPreviewRow key={item.id} item={item} previewUrl={uploadPreviewMapRef.current.get(`${item.fileName}::${item.size}`)?.url} onRetry={item.status === "failed" ? () => uploads.retry(item.id) : undefined} />
-                      ))}
+                    {/* Upload rows — in the order the files were selected */}
+                    {pendingUploads.map((item) => (
+                      <UploadPreviewRow
+                        key={item.id}
+                        item={item}
+                        previewUrl={item.previewUrl}
+                        onRetry={item.status === "failed" ? () => uploads.retry(item.id) : undefined}
+                      />
+                    ))}
                     {visibleFolders.map((folder, folderIndex) => (
                       <FolderRow
                         key={folder.id}
@@ -1520,7 +1650,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                         selected={selectedFolders.has(folder.id)}
                         cut={cutIds.has(folder.id)}
                         onOpen={() => openFolder(folder.id)}
-                        onSelect={(range) => toggleFolder(folder, range, folderIndex)}
+                        onSelect={(intent) => toggleFolder(folder, intent, folderIndex)}
                         onContextMenu={(event) => handleFolderContextMenu(event, folder)}
                         onMenuButton={(event) => {
                           if (mode === "manage" && !selectedFolders.has(folder.id)) toggleFolder(folder);
@@ -1537,7 +1667,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
                           showFolder={searching}
                           selected={selectedAssets.has(asset.id)}
                           cut={cutIds.has(asset.id)}
-                          onSelect={(range) => toggleAsset(asset, range, flatIndex)}
+                          onSelect={(intent) => toggleAsset(asset, intent, flatIndex)}
                           onPreview={() => {
                             cacheView(asset);
                             if (previewKindOf(asset.mimeType)) setPreviewAssetId(asset.id);
@@ -1780,7 +1910,7 @@ export function MediaExplorer(props: MediaExplorerProps) {
         tabIndex={-1}
         accept={props.allowedTypes.length > 0 ? props.allowedTypes.join(",") : undefined}
         onChange={(event) => {
-          addFilesWithPreview([...(event.target.files ?? [])]);
+          addFiles([...(event.target.files ?? [])]);
           if (uploadInputRef.current) uploadInputRef.current.value = "";
         }}
       />
@@ -2144,14 +2274,33 @@ function UploadPreviewCard({
   item,
   previewUrl,
   onRetry,
+  onCancel,
 }: {
   item: UploadItem;
   previewUrl?: string;
   onRetry?: () => void;
+  onCancel?: () => void;
 }) {
   const isImage = item.mimeType.startsWith("image/");
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white">
+    <div
+      className={cn(
+        "group relative overflow-hidden rounded-xl border bg-white",
+        item.status === "failed" ? "border-red-300 ring-2 ring-red-200" : "border-brand-200 ring-2 ring-brand-100",
+      )}
+      aria-busy={item.status !== "failed"}
+    >
+      {onCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label={`Cancel upload of ${item.fileName}`}
+          title="Cancel this upload"
+          className="absolute right-1.5 top-1.5 z-10 rounded-md bg-white/90 p-1 text-slate-500 opacity-0 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-white hover:text-slate-800 focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
       {/* Thumbnail or file icon */}
       <div className="relative aspect-square w-full bg-slate-100">
         {isImage && previewUrl ? (
@@ -2191,8 +2340,11 @@ function UploadPreviewCard({
             </>
           ) : null}
           {item.status === "failed" ? (
-            <div className="flex flex-col items-center gap-1">
-              <span className="max-w-[90%] truncate text-xs font-medium text-red-200 drop-shadow-md" title={item.error}>
+            <div className="flex flex-col items-center gap-1 px-2 text-center" role="alert">
+              <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                Upload failed
+              </span>
+              <span className="max-w-[95%] truncate text-xs font-medium text-red-100 drop-shadow-md" title={item.error}>
                 {item.error ?? "Failed"}
               </span>
               {onRetry ? (
@@ -2209,7 +2361,12 @@ function UploadPreviewCard({
         <p className="truncate text-xs font-medium text-slate-800" title={item.fileName}>
           {item.fileName}
         </p>
-        <p className="mt-0.5 text-[10px] tabular-nums text-slate-500">{formatBytes(item.size)}</p>
+        <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-500">
+          <span className="tabular-nums">{formatBytes(item.size)}</span>
+          <span className={cn("font-medium", item.status === "failed" ? "text-red-600" : "text-brand-600")}>
+            {item.status === "failed" ? "Failed" : item.status === "processing" ? "Processing" : "Uploading"}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -2254,7 +2411,7 @@ function FolderCard({
   dropTarget: boolean;
   uploadsAllowed: boolean;
   onOpen: () => void;
-  onSelect: (range: boolean) => void;
+  onSelect: (intent: SelectIntent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
   onMenuButton: (event: React.MouseEvent) => void;
   onDragOver: (event: React.DragEvent) => void;
@@ -2279,7 +2436,7 @@ function FolderCard({
       <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5">
         {selectable ? (
           <span onClick={(event) => event.stopPropagation()}>
-            <Checkbox checked={selected} onCheckedChange={() => onSelect(false)} aria-label={`Select ${folder.name}`} className="bg-white" />
+            <Checkbox checked={selected} onCheckedChange={() => onSelect({ toggle: true })} aria-label={`Select ${folder.name}`} className="bg-white" />
           </span>
         ) : null}
         {cut ? <Badge variant="neutral" className="px-1.5 py-0 text-[9px]">Cut</Badge> : null}
@@ -2290,15 +2447,25 @@ function FolderCard({
       <button
         type="button"
         onClick={(event) => {
-          // Familiar explorer behaviour: mouse single-click selects, mouse
-          // double-click opens (its second click carries detail 2 and is
-          // ignored here). Keyboard activation (detail 0) opens, matching the
+          // File-explorer behaviour: a single mouse click only selects — it
+          // never navigates. The second click of a double-click arrives here
+          // with `detail === 2` and is ignored, so `onDoubleClick` is the only
+          // thing that opens the folder and the navigation happens exactly
+          // once. Keyboard activation (`detail === 0`) opens, matching the
           // button's primary action. In pick mode folders are navigation-only.
           if (!selectable) onOpen();
           else if (event.detail === 0) onOpen();
-          else if (event.detail === 1) onSelect(event.shiftKey);
+          else if (event.detail === 1) onSelect(selectIntentFrom(event));
         }}
-        onDoubleClick={selectable ? onOpen : undefined}
+        onDoubleClick={
+          selectable
+            ? (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpen();
+              }
+            : undefined
+        }
         className="block w-full cursor-pointer px-3 pb-2 pt-9 text-left"
         aria-label={selectable ? `${folder.name} — select, double-click to open` : `Open ${folder.name}`}
       >
@@ -2329,7 +2496,7 @@ function AssetCard({
   showFolder: boolean;
   selected: boolean;
   cut: boolean;
-  onSelect: (range: boolean) => void;
+  onSelect: (intent: SelectIntent) => void;
   onPreview: () => void;
   onDetails: () => void;
   onContextMenu: (event: React.MouseEvent) => void;
@@ -2351,9 +2518,9 @@ function AssetCard({
         <span onClick={(event) => event.stopPropagation()}>
           <Checkbox
             checked={selected}
-            onCheckedChange={() => onSelect(false)}
+            onCheckedChange={() => onSelect({ toggle: true })}
             onClick={(event) => {
-              if (event.shiftKey) onSelect(true);
+              if (event.shiftKey) onSelect({ range: true });
             }}
             aria-label={`Select ${displayName(asset)}`}
             className="bg-white"
@@ -2376,7 +2543,7 @@ function AssetCard({
         className="block aspect-square w-full cursor-pointer bg-slate-100"
         onClick={(event) => {
           if (event.detail === 2) onPreview();
-          else onSelect(event.shiftKey);
+          else onSelect(selectIntentFrom(event));
         }}
       >
         {isImage && asset.url ? (
@@ -2438,7 +2605,7 @@ function FolderRow({
   selected: boolean;
   cut: boolean;
   onOpen: () => void;
-  onSelect: (range: boolean) => void;
+  onSelect: (intent: SelectIntent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
   onMenuButton: (event: React.MouseEvent) => void;
 }) {
@@ -2448,10 +2615,14 @@ function FolderRow({
       onClick={(event) => {
         if (!selectable) return;
         if ((event.target as HTMLElement).closest("button, a, input")) return;
-        onSelect(event.shiftKey);
+        // Only the first click of a double-click selects; the second (detail 2)
+        // belongs to `onDoubleClick`, so selection is never toggled twice.
+        if (event.detail !== 1) return;
+        onSelect(selectIntentFrom(event));
       }}
       onDoubleClick={(event) => {
         if ((event.target as HTMLElement).closest("button, a, input")) return;
+        event.preventDefault();
         onOpen();
       }}
       className={cn(
@@ -2463,7 +2634,7 @@ function FolderRow({
       <td className="px-3 py-2">
         {selectable ? (
           <span onClick={(event) => event.stopPropagation()} className="flex">
-            <Checkbox checked={selected} onCheckedChange={() => onSelect(false)} aria-label={`Select ${folder.name}`} />
+            <Checkbox checked={selected} onCheckedChange={() => onSelect({ toggle: true })} aria-label={`Select ${folder.name}`} />
           </span>
         ) : null}
       </td>
@@ -2471,11 +2642,22 @@ function FolderRow({
         <button
           type="button"
           onClick={(event) => {
+            // The row already handles selection for a plain click; stopping the
+            // bubble here keeps it from being counted twice.
+            event.stopPropagation();
             if (!selectable) onOpen();
             else if (event.detail === 0) onOpen();
-            else if (event.detail === 1) onSelect(event.shiftKey);
+            else if (event.detail === 1) onSelect(selectIntentFrom(event));
           }}
-          onDoubleClick={selectable ? (event) => { event.stopPropagation(); onOpen(); } : undefined}
+          onDoubleClick={
+            selectable
+              ? (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpen();
+                }
+              : undefined
+          }
           className="flex w-full cursor-pointer items-center gap-2.5 text-left"
         >
           <Folder className={cn("h-5 w-5 shrink-0 transition-colors", selected ? "text-brand-500" : "text-slate-400 group-hover:text-brand-400")} />
@@ -2514,7 +2696,7 @@ function AssetRow({
   showFolder: boolean;
   selected: boolean;
   cut: boolean;
-  onSelect: (range: boolean) => void;
+  onSelect: (intent: SelectIntent) => void;
   onPreview: () => void;
   onDetails: () => void;
   onContextMenu: (event: React.MouseEvent) => void;
@@ -2526,7 +2708,7 @@ function AssetRow({
       onContextMenu={onContextMenu}
       onClick={(event) => {
         if ((event.target as HTMLElement).closest("button, a, input")) return;
-        onSelect(event.shiftKey);
+        onSelect(selectIntentFrom(event));
       }}
       onDoubleClick={(event) => {
         if ((event.target as HTMLElement).closest("button, a, input")) return;
@@ -2542,9 +2724,9 @@ function AssetRow({
         <span onClick={(event) => event.stopPropagation()} className="flex">
           <Checkbox
             checked={selected}
-            onCheckedChange={() => onSelect(false)}
+            onCheckedChange={() => onSelect({ toggle: true })}
             onClick={(event) => {
-              if (event.shiftKey) onSelect(true);
+              if (event.shiftKey) onSelect({ range: true });
             }}
             aria-label={`Select ${displayName(asset)}`}
           />
