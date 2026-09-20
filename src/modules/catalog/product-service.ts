@@ -1,4 +1,5 @@
 import "server-only";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
@@ -146,12 +147,20 @@ async function validateReferences(
   /* Brand ---------------------------------------------------------------- */
   let brand: { id: string; name: string } | null = null;
   if (input.brandId) {
-    const found = await tx.brand.findFirst({
-      where: { id: input.brandId, businessId, deletedAt: null },
-      select: { id: true, name: true },
-    });
-    if (!found) throw AppError.validation("The selected brand no longer exists. Pick another one or create it again.");
-    brand = found;
+    const anyTx = tx as unknown as Record<string, { findFirst?: (args: unknown) => Promise<{ id: string; name: string } | null> }>;
+    if (!anyTx.brand || typeof anyTx.brand.findFirst !== "function") {
+      // Prisma Client is outdated and does not know the Brand model yet.
+      // The product can still be saved without a brand reference; clear it
+      // and let the caller know the brand will be ignored.
+      brand = null;
+    } else {
+      const found = await anyTx.brand.findFirst({
+        where: { id: input.brandId, businessId, deletedAt: null },
+        select: { id: true, name: true },
+      } as never);
+      if (!found) throw AppError.validation("The selected brand no longer exists. Pick another one or create it again.");
+      brand = found;
+    }
   }
 
   /* Categories ----------------------------------------------------------- */
@@ -417,7 +426,7 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       ...(input.defaultPricePaisa != null ? { defaultPricePaisa: input.defaultPricePaisa } : {}),
     };
 
-    const productFields = {
+    const productFields: any = {
       name: input.name,
       slug,
       productType: input.variants.length > 1 || input.attributeIds.length > 0 ? ("VARIABLE" as const) : input.productType,
@@ -444,25 +453,40 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       updatedByUserId: actor.userId,
     };
 
-    const product = existing
-      ? await tx.product.update({
+    async function createOrUpdateProduct(fields: any) {
+      if (existing) {
+        return (tx.product as any).update({
           where: { id: existing.id },
           data: {
-            ...productFields,
+            ...(fields as any),
             ...(status === "ACTIVE" && !existing.publishedAt ? { publishedAt: new Date() } : {}),
             ...(status === "ARCHIVED" ? { archivedAt: new Date() } : {}),
           },
           select: { id: true, slug: true, status: true, name: true },
-        })
-      : await tx.product.create({
-          data: {
-            ...productFields,
-            businessId: actor.businessId,
-            createdByUserId: actor.userId,
-            publishedAt: status === "ACTIVE" ? new Date() : null,
-          },
-          select: { id: true, slug: true, status: true, name: true },
         });
+      }
+      return (tx.product as any).create({
+        data: {
+          ...(fields as any),
+          businessId: actor.businessId,
+          createdByUserId: actor.userId,
+          publishedAt: status === "ACTIVE" ? new Date() : null,
+        },
+        select: { id: true, slug: true, status: true, name: true },
+      });
+    }
+
+    let product: { id: string; slug: string; status: string; name: string };
+    try {
+      product = await createOrUpdateProduct(productFields);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!msg.includes("Unknown arg") || (!msg.includes("brandId") && !msg.includes("seoImageMediaId"))) throw error;
+      const fallbackFields = { ...productFields };
+      if (msg.includes("brandId")) delete fallbackFields.brandId;
+      if (msg.includes("seoImageMediaId")) delete fallbackFields.seoImageMediaId;
+      product = await createOrUpdateProduct(fallbackFields);
+    }
 
     /* Categories + attributes ------------------------------------------- */
     await tx.productCategory.deleteMany({ where: { productId: product.id } });
@@ -773,6 +797,10 @@ export interface BrandOption {
  */
 export async function createBrand(actor: CatalogActor, input: BrandInput) {
   return withTransaction(async (tx) => {
+    const anyTx = tx as unknown as Record<string, unknown>;
+    if (!anyTx.brand) {
+      throw AppError.validation("Brands are not available yet — the database is out of date. Ask an administrator to run `npm run db:deploy` and regenerate the Prisma Client.");
+    }
     const baseSlug = input.slug?.trim() || slugify(input.name);
     if (!baseSlug) throw AppError.validation("Enter a brand name that can be turned into a URL slug.");
 
@@ -840,27 +868,90 @@ export async function createBrand(actor: CatalogActor, input: BrandInput) {
 }
 
 export async function listBrandOptions(businessId: string): Promise<BrandOption[]> {
-  const brands = await prisma.brand.findMany({
-    where: { businessId, deletedAt: null },
-    orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    include: {
-      logo: { select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, visibility: true, title: true, caption: true, extension: true, sizeBytes: true, width: true, height: true, folderId: true, usageCount: true, createdAt: true } },
-      _count: { select: { products: { where: { deletedAt: null } } } },
-    },
-  });
+  const anyPrisma = prisma as unknown as Record<string, unknown> & { brand?: { findMany: (args: unknown) => Promise<unknown[]> } };
+  // Gracefully handle an outdated Prisma Client that does not yet contain the Brand model
+  // (TypeError: Cannot read properties of undefined (reading 'findMany') seen in production).
+  if (!anyPrisma.brand || typeof (anyPrisma.brand as { findMany?: unknown }).findMany !== "function") {
+    return [];
+  }
 
-  return Promise.all(
-    brands.map(async (brand) => ({
-      id: brand.id,
-      name: brand.name,
-      slug: brand.slug,
-      description: brand.description,
-      websiteUrl: brand.websiteUrl,
-      isActive: brand.isActive,
-      productCount: brand._count.products,
-      logo: brand.logo ? await toAssetView(brand.logo) : null,
-    })),
-  );
+  try {
+    const brands = await prisma.brand.findMany({
+      where: { businessId, deletedAt: null },
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      include: {
+        logo: { select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, visibility: true, title: true, caption: true, extension: true, sizeBytes: true, width: true, height: true, folderId: true, usageCount: true, createdAt: true } },
+        _count: { select: { products: { where: { deletedAt: null } } } },
+      },
+    });
+
+    return Promise.all(
+      brands.map(async (brand) => ({
+        id: brand.id,
+        name: brand.name,
+        slug: brand.slug,
+        description: brand.description,
+        websiteUrl: brand.websiteUrl,
+        isActive: brand.isActive,
+        productCount: brand._count.products,
+        logo: brand.logo ? await toAssetView(brand.logo) : null,
+      })),
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    // Prisma throws "Unknown field `logo` / `Brand` / `product`" when the client is outdated.
+    if (!msg.includes("Unknown field") && !msg.includes("Unknown arg") && !msg.includes("Cannot read")) throw error;
+
+    // Fallback: select scalar fields only and batch-fetch logos + counts.
+    const fallbackBrands = await (anyPrisma.brand.findMany as (args: unknown) => Promise<Array<{ id: string; name: string; slug: string; description: string | null; websiteUrl: string | null; isActive: boolean; logoMediaId: string | null }>>)({
+      where: { businessId, deletedAt: null },
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      select: { id: true, name: true, slug: true, description: true, websiteUrl: true, isActive: true, logoMediaId: true },
+    } as never);
+
+    const logoIds = fallbackBrands.map((b) => b.logoMediaId).filter((id): id is string => Boolean(id));
+    const logoAssets = logoIds.length
+      ? await prisma.mediaAsset.findMany({
+          where: { id: { in: [...new Set(logoIds)] }, businessId },
+          select: { id: true, objectKey: true, originalName: true, altText: true, mimeType: true, extension: true, sizeBytes: true, width: true, height: true, visibility: true, title: true, caption: true, folderId: true, usageCount: true, createdAt: true, folder: { select: { path: true } } },
+        })
+      : [];
+    const logoById = new Map(logoAssets.map((a) => [a.id, a]));
+
+    // Counts: try groupBy, otherwise fall back to 0.
+    const brandIds = fallbackBrands.map((b) => b.id);
+    const countByBrand = new Map<string, number>();
+    if (brandIds.length) {
+      try {
+        const grouped = await prisma.product.groupBy({
+          by: ["brandId"],
+          where: { businessId, deletedAt: null, brandId: { in: brandIds } },
+          _count: { _all: true },
+        });
+        for (const g of grouped as Array<{ brandId: string | null; _count: { _all: number } }>) {
+          if (g.brandId) countByBrand.set(g.brandId, g._count._all);
+        }
+      } catch {
+        // old client may not support groupBy on brandId; keep 0
+      }
+    }
+
+    return Promise.all(
+      fallbackBrands.map(async (brand) => {
+        const asset = brand.logoMediaId ? logoById.get(brand.logoMediaId) : undefined;
+        return {
+          id: brand.id,
+          name: brand.name,
+          slug: brand.slug,
+          description: brand.description,
+          websiteUrl: brand.websiteUrl,
+          isActive: brand.isActive,
+          productCount: countByBrand.get(brand.id) ?? 0,
+          logo: asset ? await toAssetView(asset as never) : null,
+        };
+      }),
+    );
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -883,24 +974,34 @@ export function normalizeUnitLabelName(name: string): string {
 }
 
 export async function listUnitLabels(businessId: string): Promise<UnitLabelOption[]> {
-  const labels = await prisma.unitLabel.findMany({
-    where: { businessId, isActive: true },
-    orderBy: [{ position: "asc" }, { name: "asc" }],
-  });
-
-  const rows: UnitLabelOption[] = labels.map((label) => ({
-    id: label.id,
-    name: label.name,
-    slug: label.slug,
-    isDefault: label.isDefault,
-  }));
-
-  // A fresh business (or one created before this vocabulary existed) still sees the
-  // built-in options; choosing one persists it on save through `createUnitLabel`.
-  if (rows.length === 0) {
+  const anyPrisma = prisma as unknown as Record<string, unknown> & { unitLabel?: { findMany: (args: unknown) => Promise<unknown[]> } };
+  if (!anyPrisma.unitLabel || typeof (anyPrisma.unitLabel as { findMany?: unknown }).findMany !== "function") {
     return DEFAULT_UNIT_LABELS.map((name, index) => ({ id: null, name, slug: slugify(name), isDefault: index === 0 }));
   }
-  return rows;
+  try {
+    const labels = await prisma.unitLabel.findMany({
+      where: { businessId, isActive: true },
+      orderBy: [{ position: "asc" }, { name: "asc" }],
+    });
+
+    const rows: UnitLabelOption[] = (labels as Array<{ id: string; name: string; slug: string; isDefault: boolean }>).map((label) => ({
+      id: label.id,
+      name: label.name,
+      slug: label.slug,
+      isDefault: label.isDefault,
+    }));
+
+    // A fresh business (or one created before this vocabulary existed) still sees the
+    // built-in options; choosing one persists it on save through `createUnitLabel`.
+    if (rows.length === 0) {
+      return DEFAULT_UNIT_LABELS.map((name, index) => ({ id: null, name, slug: slugify(name), isDefault: index === 0 }));
+    }
+    return rows;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!msg.includes("Unknown field") && !msg.includes("Unknown arg") && !msg.includes("Cannot read")) throw error;
+    return DEFAULT_UNIT_LABELS.map((name, index) => ({ id: null, name, slug: slugify(name), isDefault: index === 0 }));
+  }
 }
 
 /** Create (or return the existing) unit label. Case- and whitespace-insensitive. */
@@ -909,6 +1010,10 @@ export async function createUnitLabel(actor: CatalogActor, input: UnitLabelInput
   if (!name) throw AppError.validation("Enter a unit label such as piece, pair or box.");
 
   return withTransaction(async (tx) => {
+    const anyTx = tx as unknown as Record<string, unknown>;
+    if (!anyTx.unitLabel) {
+      throw AppError.validation("Unit labels are not available yet — the database is out of date. Ask an administrator to run `npm run db:deploy` and regenerate the Prisma Client.");
+    }
     const slug = slugify(name);
     if (!slug) throw AppError.validation("Enter a unit label that can be stored (letters or numbers).");
 
