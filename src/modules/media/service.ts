@@ -1098,6 +1098,60 @@ async function syncUsageCount(tx: Prisma.TransactionClient, mediaId: string) {
   await tx.mediaAsset.update({ where: { id: mediaId }, data: { usageCount: count } });
 }
 
+/**
+ * Recompute the denormalised usage counter for several assets.
+ *
+ * Exported because a feature that attaches or detaches usages in bulk (a product
+ * save rewrites every image association in one transaction) must not hand-roll
+ * the arithmetic: it calls this, inside its own transaction, and the counter that
+ * the media grid and the safe-delete check rely on stays correct.
+ */
+export async function syncMediaUsageCounts(tx: Prisma.TransactionClient, mediaIds: Iterable<string>): Promise<void> {
+  for (const mediaId of new Set(mediaIds)) {
+    await syncUsageCount(tx, mediaId);
+  }
+}
+
+/**
+ * Assert that every id belongs to a live asset of this business.
+ *
+ * Called by every feature that accepts media ids from a browser: a reference is
+ * only written when the asset exists, is not soft-deleted and is owned by the
+ * caller's business.
+ */
+export async function assertMediaAssetsAvailable(
+  tx: Prisma.TransactionClient,
+  businessId: string,
+  mediaIds: Iterable<string>,
+): Promise<Map<string, { id: string; mimeType: string; originalName: string }>> {
+  const ids = [...new Set(mediaIds)].filter(Boolean);
+  if (ids.length === 0) return new Map();
+
+  const assets = await tx.mediaAsset.findMany({
+    where: { id: { in: ids }, businessId, deletedAt: null },
+    select: { id: true, mimeType: true, originalName: true },
+  });
+  if (assets.length !== ids.length) {
+    const found = new Set(assets.map((asset) => asset.id));
+    const missing = ids.filter((id) => !found.has(id));
+    throw AppError.validation(
+      missing.length === 1
+        ? "The selected media file could not be found. Choose it from the media library again."
+        : `${missing.length} of the selected media files could not be found. If a file was just deleted, pick a replacement from the media library.`,
+    );
+  }
+  return new Map(assets.map((asset) => [asset.id, asset]));
+}
+
+/** Images only — used by fields that render a picture (product, variant, logo, SEO). */
+export function assertImageAssets(assets: Map<string, { id: string; mimeType: string; originalName: string }>): void {
+  for (const asset of assets.values()) {
+    if (!asset.mimeType.startsWith("image/")) {
+      throw AppError.validation(`"${asset.originalName}" is not an image. Choose an image file from the media library.`);
+    }
+  }
+}
+
 export async function listUsageTargets(businessId: string, assetId: string) {
   return prisma.mediaUsage.findMany({
     where: { mediaId: assetId, media: { businessId } },

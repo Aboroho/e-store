@@ -27,7 +27,7 @@ const [value, setValue] = useState<RichTextDocument>(() => parseRichText(product
 />
 ```
 
-`src/components/forms/product-description-editor.tsx` is the reference integration; it
+`src/components/forms/product-editor/sections.tsx` is the reference integration; it
 wires the product form to the media library through `src/components/media/media-upload.ts`.
 
 Render stored content anywhere (server components included) with

@@ -5,12 +5,10 @@ import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
 import { formatPaisa } from "@/lib/money";
 import { formatDateTime } from "@/lib/utils";
-import { getProductForEdit, listAttributes, listCategoryOptions, listPriceLists } from "@/modules/catalog/queries";
+import { getProductForEdit } from "@/modules/catalog/queries";
 import { variantReferenceCounts } from "@/modules/catalog/service";
 import { availableQuantity } from "@/modules/inventory/service";
 import { archiveProductAction, archiveVariantAction, restoreProductAction } from "@/modules/catalog/actions";
-import { toAssetView } from "@/modules/media/service";
-import { BulkVariantEditor, ProductForm } from "@/components/forms/product-form";
 import {
   Badge,
   Card,
@@ -36,15 +34,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   assertPermission(session, "product.view");
   const { id } = await params;
 
-  const [product, categories, attributes, priceLists] = await Promise.all([
-    getProductForEdit(session.businessId, id),
-    listCategoryOptions(session.businessId),
-    listAttributes(session.businessId),
-    listPriceLists(session.businessId),
-  ]);
+  const product = await getProductForEdit(session.businessId, id);
   if (!product) notFound();
-
-  const defaultPriceList = priceLists.find((list) => list.isDefault) ?? priceLists[0];
   const referenceCounts = new Map(
     (await Promise.all(
       product.variants.map(async (variant) => [variant.id, await variantReferenceCounts(variant.id)] as const),
@@ -166,78 +157,21 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       </Card>
 
       {canUpdate ? (
-        <BulkVariantEditor
-          productId={product.id}
-          variants={product.variants.map((variant) => ({
-            id: variant.id,
-            sku: variant.sku,
-            name: variant.name,
-            pricePaisa: variant.priceOverridePaisa,
-            costPaisa: variant.costPaisa,
-            compareAtPricePaisa: variant.compareAtPricePaisa,
-            status: variant.status,
-          }))}
-        />
+        <Card>
+          <CardHeader>
+            <CardTitle>Edit this product</CardTitle>
+            <p className="text-xs text-slate-500">
+              The editor changes the product, its variants, prices, images, categories, attributes and SEO in one place.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <Link href={`/admin/catalog/products/${product.id}/edit`} className={buttonVariants({})}>
+              Open the product editor
+            </Link>
+          </CardContent>
+        </Card>
       ) : null}
 
-      {canUpdate ? (
-        <ProductForm
-          categories={categories.map((category) => ({ id: category.id, name: category.name, path: category.path }))}
-          attributes={attributes.map((attribute) => ({
-            id: attribute.id,
-            name: attribute.name,
-            type: attribute.type,
-            values: attribute.values.map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex })),
-          }))}
-          defaultPriceListName={defaultPriceList?.name ?? "the default price list"}
-          product={{
-            id: product.id,
-            name: product.name,
-            slug: product.slug,
-            productType: product.productType,
-            status: product.status,
-            shortDescription: product.shortDescription,
-            description: product.description,
-            brand: product.brand,
-            sku: product.sku,
-            barcode: product.barcode,
-            unitLabel: product.unitLabel,
-            weightGrams: product.weightGrams,
-            requiresShipping: product.requiresShipping,
-            isFeatured: product.isFeatured,
-            isPreorderEnabled: product.isPreorderEnabled,
-            preorderNote: product.preorderNote,
-            taxRateBps: product.taxRateBps,
-            packagingCostPaisa: product.packagingCostPaisa,
-            seoTitle: product.seoTitle,
-            seoDescription: product.seoDescription,
-            categoryIds: product.categories.map((entry) => entry.categoryId),
-            primaryCategoryId: product.categories.find((entry) => entry.isPrimary)?.categoryId ?? null,
-            attributeIds: product.attributes.map((entry) => entry.attributeId),
-            images: await Promise.all(
-              (product.images ?? []).map(async (img) => {
-                const view = await toAssetView({
-                  ...img.media,
-                  folder: null,
-                });
-                return view;
-              }),
-            ),
-            variants: product.variants.map((variant) => ({
-              id: variant.id,
-              name: variant.name,
-              sku: variant.sku,
-              barcode: variant.barcode,
-              priceOverridePaisa: variant.priceOverridePaisa,
-              compareAtPricePaisa: variant.compareAtPricePaisa,
-              costPaisa: variant.costPaisa,
-              weightGrams: variant.weightGrams,
-              isPreorderEnabled: variant.isPreorderEnabled,
-              attributeValueIds: variant.attributeValues.map((entry) => entry.attributeValueId),
-            })),
-          }}
-        />
-      ) : null}
     </div>
   );
 }

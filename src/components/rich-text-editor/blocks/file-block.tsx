@@ -17,6 +17,8 @@ export interface FileAttachmentAttributes {
   name: string;
   size?: number | null;
   mimeType?: string | null;
+  /** Stable id of the shared media asset this attachment came from. */
+  mediaId?: string | null;
 }
 
 declare module "@tiptap/core" {
@@ -33,6 +35,23 @@ function FileBlockView({ node, selected, editor, deleteNode }: NodeViewProps) {
   const name = typeof node.attrs.name === "string" && node.attrs.name ? node.attrs.name : "File";
   const size = typeof node.attrs.size === "number" ? node.attrs.size : null;
   const mimeType = typeof node.attrs.mimeType === "string" ? node.attrs.mimeType : null;
+  const isVideo = Boolean(mimeType && mimeType.startsWith("video/") && href);
+
+  // Uploaded video plays inline. External iframes are deliberately not supported:
+  // media always comes from the shared library, so nothing arbitrary is embedded.
+  if (isVideo) {
+    return (
+      <NodeViewWrapper className="rte-file" data-selected={selected ? "true" : undefined} data-drag-handle>
+        <span className="min-w-0 flex-1">
+          <video src={href ?? undefined} controls preload="metadata" className="w-full rounded-lg" />
+          <span className="rte-file-meta mt-1 block">{name}</span>
+        </span>
+        {editor.isEditable && selected ? (
+          <ToolbarButton label="Remove video" icon={Trash2} tooltipSide="bottom" className="hover:text-red-600" onClick={() => deleteNode()} />
+        ) : null}
+      </NodeViewWrapper>
+    );
+  }
 
   return (
     <NodeViewWrapper className="rte-file" data-selected={selected ? "true" : undefined} data-drag-handle>
@@ -73,6 +92,7 @@ export const FileBlock = Node.create({
       name: { default: null },
       size: { default: null },
       mimeType: { default: null },
+      mediaId: { default: null },
     };
   },
 
@@ -85,13 +105,14 @@ export const FileBlock = Node.create({
           name: element.getAttribute("data-name") ?? element.textContent,
           size: element.getAttribute("data-size") ? Number(element.getAttribute("data-size")) : null,
           mimeType: element.getAttribute("data-mime-type"),
+          mediaId: element.getAttribute("data-media-id"),
         }),
       },
     ];
   },
 
   renderHTML({ node, HTMLAttributes }) {
-    const { href, name, size, mimeType } = node.attrs as FileAttachmentAttributes;
+    const { href, name, size, mimeType, mediaId } = node.attrs as FileAttachmentAttributes;
     return [
       "a",
       mergeAttributes(HTMLAttributes, {
@@ -100,6 +121,7 @@ export const FileBlock = Node.create({
         "data-name": name,
         "data-size": size ?? undefined,
         "data-mime-type": mimeType ?? undefined,
+        "data-media-id": mediaId ?? undefined,
         target: "_blank",
         rel: "noopener noreferrer nofollow",
       }),

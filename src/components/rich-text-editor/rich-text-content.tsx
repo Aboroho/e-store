@@ -3,6 +3,7 @@ import { FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "./internal/format";
 import { isExternalHref, safeHref, safeSrc } from "./internal/url";
+import { isInlineVideoMimeType } from "@/lib/rich-text-document";
 import { isRichTextEmpty } from "./serialization";
 import type { RichTextContentProps, RichTextMark, RichTextNode } from "./types";
 import "./rich-text-editor.css";
@@ -122,6 +123,15 @@ function renderNode(node: RichTextNode): React.ReactNode {
       if (!href) return null;
       const name = attr<string>(node.attrs, "name", "string") || "Download file";
       const size = attr<number>(node.attrs, "size", "number");
+      const mimeType = attr<string>(node.attrs, "mimeType", "string") ?? "";
+      if (isInlineVideoMimeType(mimeType)) {
+        return (
+          <span className="rte-file" data-type="fileAttachment">
+            <video src={href} controls preload="metadata" className="w-full rounded-lg" />
+            <span className="rte-file-meta">{name}</span>
+          </span>
+        );
+      }
       return (
         <a data-type="fileAttachment" href={href} target="_blank" rel="noopener noreferrer nofollow" download>
           <span className="rte-file-icon" aria-hidden="true">
