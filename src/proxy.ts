@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { staffLoginPath } from "@/lib/auth/paths";
 
 /**
  * Edge proxy (the file was called `middleware.ts` before Next.js 16).
@@ -32,15 +33,12 @@ export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   if (pathname.startsWith("/admin") && !isPublicPath(pathname) && !request.cookies.has(SESSION_COOKIE)) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.search = "";
-    const target = `${pathname}${search}`;
-    if (target && target !== "/admin") {
-      url.searchParams.set("next", target);
-    }
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(new URL(staffLoginPath({ redirectTo: `${pathname}${search}` }), request.url));
   }
+
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", pathname);
+  requestHeaders.set("x-search", search);
 
   const isStorefrontPath = pathname === "/" || STOREFRONT_PATHS.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
   if (isStorefrontPath) {
@@ -49,13 +47,13 @@ export function proxy(request: NextRequest) {
       const url = request.nextUrl.clone();
       url.pathname = `/s/${host}${pathname === "/" ? "" : pathname}`;
       url.search = search;
-      return NextResponse.rewrite(url);
+      return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
     }
   }
 
-  return NextResponse.next();
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/login", "/", "/products/:path*", "/pages/:path*", "/cart", "/search/:path*"],
+  matcher: ["/admin", "/admin/:path*", "/login", "/", "/products/:path*", "/pages/:path*", "/cart", "/search/:path*"],
 };

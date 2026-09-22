@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { prisma } from "@/lib/db/client";
-import { requireSession } from "@/lib/auth/session";
+import { requirePageSession } from "@/lib/auth/session";
 import { can } from "@/lib/permissions";
 import { ADMIN_NAV, type NavSection } from "@/components/layout/nav-config";
 import { AdminShell } from "@/components/layout/admin-shell";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 const CURRENT_STAGE = 4;
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const session = await requireSession();
+  const session = await requirePageSession();
 
   // Filter the navigation by the permissions the signed-in user actually holds.
   const sections: NavSection[] = ADMIN_NAV.map((section) => ({

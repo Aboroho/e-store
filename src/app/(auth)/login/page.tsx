@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { getSession } from "@/lib/auth/session";
+import { safeRedirectPath } from "@/lib/auth/paths";
 import { LoginForm } from "@/components/forms/login-form";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -12,9 +13,9 @@ export default async function LoginPage({
 }) {
   const session = await getSession();
   const params = await searchParams;
+  const redirectTo = safeRedirectPath(typeof params.redirectTo === "string" ? params.redirectTo : params.next);
   if (session) {
-    const target = typeof params.redirectTo === "string" ? params.redirectTo : "/admin";
-    redirect(target.startsWith("/") && !target.startsWith("//") ? target : "/admin");
+    redirect(redirectTo);
   }
 
   const notice =
@@ -28,7 +29,7 @@ export default async function LoginPage({
 
   return (
     <LoginForm
-      redirectTo={typeof params.redirectTo === "string" ? params.redirectTo : undefined}
+      redirectTo={redirectTo === "/admin" ? undefined : redirectTo}
       notice={notice}
     />
   );
