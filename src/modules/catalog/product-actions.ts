@@ -432,7 +432,7 @@ export async function saveProductDraftAction(input: {
   revision?: number | null;
   name?: string;
   payload: Record<string, unknown>;
-}): Promise<ActionResult<{ draftId: string; revision: number; updatedAt: string }>> {
+}): Promise<ActionResult<{ draftId: string; revision: number; updatedAt: string; productId: string | null; createdProduct: boolean }>> {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const result = await saveProductDraft(actor, input);

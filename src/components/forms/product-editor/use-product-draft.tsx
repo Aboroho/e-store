@@ -49,6 +49,8 @@ export interface UseProductDraftOptions {
 }
 
 export interface ProductDraftApi extends DraftState {
+  /** Product id created by autosave when authoring a new product. */
+  productId: string | null;
   saveNow: () => void;
   retry: () => void;
   resume: () => void;
@@ -66,6 +68,10 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState(Boolean(initialDraft));
   const [attempt, setAttempt] = React.useState(0);
+  const [persistedProductId, setPersistedProductId] = React.useState<string | null>(productId);
+  React.useEffect(() => {
+    if (productId) setPersistedProductId(productId);
+  }, [productId]);
 
   // Refs keep the debounce effect from re-arming on every keystroke while still
   // reading the newest values when the timer fires. They are written from an
@@ -104,6 +110,7 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
       setDraftId(result.data.draftId);
       setRevision(result.data.revision);
       setLastSavedAt(result.data.updatedAt);
+      if (result.data.productId) setPersistedProductId(result.data.productId);
       setStatus("saved");
       setPending(false);
     } catch {
@@ -172,6 +179,7 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
     lastSavedAt,
     error,
     pending,
+    productId: persistedProductId ?? productId,
     saveNow,
     retry,
     resume,

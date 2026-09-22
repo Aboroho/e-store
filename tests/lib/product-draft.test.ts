@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyLocalBulkAction,
   buildCombinations,
   combinationKey,
   describeBulkTarget,
@@ -276,6 +277,39 @@ describe("bulk targeting", () => {
     expect(describeBulkTarget({ kind: "selected" }, { attributes: [], selectedCount: 2, totalCount: 3 })).toBe(
       "2 selected variant(s)",
     );
+  });
+});
+
+describe("local bulk apply", () => {
+  const rows = [
+    variant({ key: "black-s", attributeValueIds: ["v-black", "v-s"] }),
+    variant({ key: "black-m", attributeValueIds: ["v-black", "v-m"] }),
+    variant({ key: "white-s", attributeValueIds: ["v-white", "v-s"] }),
+  ];
+
+  it("applies a local bulk price to selected rows without touching the others", () => {
+    const next = applyLocalBulkAction(rows, [rows[0]!, rows[1]!], {
+      action: "set-price",
+      currentPrice: "19.99",
+      discountType: "NONE",
+    });
+    expect(next[0]!.currentPrice).toBe("19.99");
+    expect(next[1]!.currentPrice).toBe("19.99");
+    expect(next[2]!.currentPrice).toBeUndefined();
+  });
+
+  it("preserves a variant image override unless replaceOverrides is on", () => {
+    const withOverride = [
+      variant({ key: "black-s", imageMediaId: "keep-me", attributeValueIds: ["v-black", "v-s"] }),
+      variant({ key: "black-m", imageMediaId: null, attributeValueIds: ["v-black", "v-m"] }),
+    ];
+    const kept = applyLocalBulkAction(withOverride, withOverride, {
+      action: "set-primary-image",
+      mediaId: "new-image",
+      replaceOverrides: false,
+    });
+    expect(kept[0]!.imageMediaId).toBe("keep-me");
+    expect(kept[1]!.imageMediaId).toBe("new-image");
   });
 });
 

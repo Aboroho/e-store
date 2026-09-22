@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Alert, Badge, Button } from "@/components/ui/primitives";
 import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { cn } from "@/lib/utils";
-import { CollapsibleGroup } from "@/components/ui/collapsible";
+import { CollapsibleGroup, CollapsibleSection } from "@/components/ui/collapsible";
 import {
   checkProductSkusAction,
   checkProductSlugAction,
@@ -93,7 +93,7 @@ const SECTIONS = [
   { id: "information", label: "Product information" },
   { id: "organization", label: "Organisation" },
   { id: "images", label: "Images" },
-  { id: "variants", label: "Attributes & variations" },
+  { id: "variants", label: "Attributes, variations & bulk" },
   { id: "description", label: "Description" },
   { id: "seo", label: "SEO" },
 ] as const;
@@ -544,7 +544,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       <ResumeDraftBanner draft={draft} onResume={draft.resume} onDiscard={draft.discard} />
 
       <CollapsibleGroup
-        defaultOpen={["information", "organization"]}
+        defaultOpen={["information", "organization", "variants", "pricing"]}
         header={
           <div className="mr-auto flex flex-wrap items-center gap-2 text-xs">
             <Badge variant={completedCount === visibleSections.length ? "success" : "neutral"}>
@@ -675,7 +675,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
         {state.productType === "VARIABLE" ? (
           <AttributesVariationsSection
-            productId={product?.id ?? null}
+            productId={product?.id ?? draft.productId ?? null}
             attributes={attributes}
             state={state}
             plan={plan}
@@ -706,8 +706,22 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
             onAddVariant={editor.addVariant}
             onRemoveVariant={editor.removeVariant}
             onSelectionChange={setSelection}
+            onLocalApply={(variants) => patch({ variants })}
           />
-        ) : null}
+        ) : (
+          <CollapsibleSection
+            id="variants"
+            title="Attributes, variations and bulk edit"
+            description="Switch to a variable product to generate combinations and bulk-edit variants."
+            defaultOpen
+          >
+            <p className="text-sm text-slate-600">
+              This is a single product, so there is one variant and no option matrix. Choose <strong>Variable</strong> under product
+              information to add attributes, generate combinations, then bulk-edit selected rows or every variant matching an attribute
+              filter.
+            </p>
+          </CollapsibleSection>
+        )}
 
         <ProductDescriptionSection
           shortDescription={state.shortDescription}

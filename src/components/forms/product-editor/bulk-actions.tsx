@@ -15,6 +15,7 @@ import { describeOverrideTarget } from "@/modules/catalog/inheritance";
 import {
   DEFAULT_WEIGHT_UNIT,
   WEIGHT_UNITS,
+  applyLocalBulkAction,
   describeBulkTarget,
   imageActionImpact,
   resolveBulkTarget,
@@ -160,6 +161,7 @@ export function VariantBulkActions({
   productImage,
   canViewCost,
   onApplied,
+  onLocalApply,
 }: {
   productId: string | null;
   rows: DraftVariant[];
@@ -168,6 +170,8 @@ export function VariantBulkActions({
   productImage: MediaAssetView | null;
   canViewCost: boolean;
   onApplied: () => void;
+  /** Apply the change to in-memory rows when the product has not been saved yet. */
+  onLocalApply?: (next: DraftVariant[]) => void;
 }) {
   const [action, setAction] = React.useState<BulkAction>("set-primary-image");
   const [targetKind, setTargetKind] = React.useState<BulkTarget["kind"]>(selectedKeys.length > 0 ? "selected" : "all");
@@ -242,12 +246,32 @@ export function VariantBulkActions({
     (targetKind === "attribute" && criteria.every((criterion) => criterion.valueIds.length === 0));
 
   const apply = async () => {
-    if (!productId) {
-      toast.error("Save the product once before applying bulk changes.");
-      return;
-    }
     setApplying(true);
     setError(null);
+
+    if (!productId) {
+      const next = applyLocalBulkAction(rows, matched, {
+        action,
+        mediaId: media?.id ?? null,
+        currentPrice: currentPrice.trim() || undefined,
+        discountType,
+        discountValue: discountValue.trim() || undefined,
+        compareAt: compareAt.trim() || undefined,
+        cost: cost.trim() || undefined,
+        weight: weight.trim() || undefined,
+        weightUnit,
+        isPreorderEnabled: preorder,
+        replaceOverrides,
+      });
+      onLocalApply?.(next);
+      setApplying(false);
+      setPreviewOpen(false);
+      toast.success(`${matched.length} variant(s) updated in this form`, {
+        description: "Save the product to persist the change.",
+      });
+      onApplied();
+      return;
+    }
 
     // Only the inputs this action actually consumes are sent, so an unrelated field
     // can never be written by accident.
@@ -289,9 +313,10 @@ export function VariantBulkActions({
       <div className="flex items-start gap-2">
         <Wand2 className="mt-0.5 h-4 w-4 text-brand-600" aria-hidden="true" />
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Bulk actions</h3>
+          <h3 className="text-sm font-semibold text-slate-900">Bulk edit</h3>
           <p className="text-xs text-slate-600">
-            Apply one change to many variants at once. Nothing is written until you review the preview and confirm.
+            Apply one change to selected variants or to every variant matching an attribute filter. Fields change with the action you pick. Nothing is written until you preview and confirm.
+            {!productId ? " Changes stay in this form until the product is saved." : null}
           </p>
         </div>
       </div>
@@ -435,17 +460,19 @@ export function VariantBulkActions({
             <NativeSelect
               id="bulk-override-target"
               className="h-9 w-full max-w-md"
-              value={overrideTarget}
+              value={productId ? overrideTarget : "variant"}
               onChange={(event) => {
                 setOverrideTarget(event.target.value as "variant" | "attribute" | "product" | "clear");
                 invalidateConfirmation();
               }}
             >
               <option value="variant">Variant override (only the target variants)</option>
-              <option value="attribute" disabled={targetKind !== "attribute"}>
+              <option value="attribute" disabled={!productId || targetKind !== "attribute"}>
                 Attribute-level override (needs an attribute filter)
               </option>
-              <option value="product">Product default (variants without an override follow it)</option>
+              <option value="product" disabled={!productId}>
+                Product default (variants without an override follow it)
+              </option>
               <option value="clear">Clear the override and restore inheritance</option>
             </NativeSelect>
           </div>

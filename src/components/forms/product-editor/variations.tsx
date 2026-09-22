@@ -45,6 +45,7 @@ export function AttributesVariationsSection({
   onAddVariant,
   onRemoveVariant,
   onSelectionChange,
+  onLocalApply,
 }: {
   productId: string | null;
   attributes: EditorAttribute[];
@@ -69,6 +70,7 @@ export function AttributesVariationsSection({
   onAddVariant: () => void;
   onRemoveVariant: (key: string) => void;
   onSelectionChange: (keys: string[]) => void;
+  onLocalApply?: (next: DraftVariant[]) => void;
 }) {
   const draftAttributes: DraftAttribute[] = React.useMemo(
     () =>
@@ -93,10 +95,11 @@ export function AttributesVariationsSection({
   return (
     <CollapsibleSection
       id="variants"
-      title="Attributes and variants"
-      description="Choose the options, generate the combinations, then edit the rows — individually or in bulk."
+      title="Attributes, variations and bulk edit"
+      description="Choose the options, generate the combinations, then bulk-edit selected rows or every variant matching an attribute filter."
       icon={<Sparkles className="h-4 w-4" />}
-      badge={state.variants.length > 0 ? `${state.variants.length} variant(s)` : `${plannedCombinations} combination(s) planned`}
+      defaultOpen
+      badge={state.variants.length > 0 ? `${state.variants.length} variant(s) · bulk edit` : `${plannedCombinations} combination(s) planned`}
       badgeTone={state.variants.length > 0 ? "success" : "neutral"}
     >
       <div className="space-y-5">
@@ -167,6 +170,17 @@ export function AttributesVariationsSection({
           {errors.variants ? <p className="text-xs text-red-600">{errors.variants[0]}</p> : null}
         </div>
 
+        <VariantBulkActions
+          productId={productId}
+          rows={state.variants}
+          attributes={draftAttributes}
+          selectedKeys={selection}
+          productImage={productImage}
+          canViewCost={canViewCost}
+          onApplied={onApplied}
+          onLocalApply={onLocalApply}
+        />
+
         <VariantTable
           rows={state.variants}
           attributes={draftAttributes}
@@ -180,26 +194,6 @@ export function AttributesVariationsSection({
           onRemove={onRemoveVariant}
           canViewCost={canViewCost}
         />
-
-        {productId ? (
-          <VariantBulkActions
-            productId={productId}
-            rows={state.variants}
-            attributes={draftAttributes}
-            selectedKeys={selection}
-            productImage={productImage}
-            canViewCost={canViewCost}
-            onApplied={onApplied}
-          />
-        ) : (
-          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-sm text-slate-700">
-              Bulk actions run on saved variants, so the preview can never disagree with the update. Create the product first — you can then
-              apply a change to every variant, to the selected rows, or only to the rows matching an attribute value such as Colour: Black.
-            </p>
-            <Badge variant="neutral">{state.variants.length} variant(s) waiting</Badge>
-          </div>
-        )}
       </div>
     </CollapsibleSection>
   );

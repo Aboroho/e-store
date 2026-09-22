@@ -438,6 +438,74 @@ export interface ImageActionImpact {
   unchanged: number;
 }
 
+/** Apply a bulk action to in-memory draft rows (used before the product exists). */
+export function applyLocalBulkAction(
+  rows: DraftVariant[],
+  matched: DraftVariant[],
+  input: {
+    action: string;
+    mediaId?: string | null;
+    currentPrice?: string;
+    discountType?: DiscountType;
+    discountValue?: string;
+    compareAt?: string;
+    cost?: string;
+    weight?: string;
+    weightUnit?: WeightUnit;
+    isPreorderEnabled?: boolean;
+    replaceOverrides?: boolean;
+  },
+): DraftVariant[] {
+  const keys = new Set(matched.map((row) => row.key));
+  return rows.map((row) => {
+    if (!keys.has(row.key)) return row;
+    switch (input.action) {
+      case "set-primary-image":
+        if (row.imageMediaId && !input.replaceOverrides) return row;
+        return { ...row, imageMediaId: input.mediaId ?? null, clearImageOverride: !input.mediaId, touched: true };
+      case "add-gallery-image":
+        if (!input.mediaId || row.galleryMediaIds.includes(input.mediaId)) return row;
+        return { ...row, galleryMediaIds: [...row.galleryMediaIds, input.mediaId], touched: true };
+      case "set-price":
+        return {
+          ...row,
+          currentPrice: input.currentPrice ?? "",
+          discountType: input.discountType ?? "NONE",
+          discountValue: input.discountValue ?? "",
+          clearPriceOverride: false,
+          touched: true,
+        };
+      case "set-compare-at":
+        return { ...row, compareAt: input.compareAt ?? "", touched: true };
+      case "set-cost":
+        return { ...row, cost: input.cost ?? "", clearCostOverride: false, touched: true };
+      case "set-weight":
+        return { ...row, weight: input.weight ?? "", weightUnit: input.weightUnit ?? row.weightUnit, clearWeightOverride: false, touched: true };
+      case "set-preorder":
+        return { ...row, isPreorderEnabled: input.isPreorderEnabled, clearPreorderOverride: false, touched: true };
+      case "reset-image":
+      case "clear-image-override":
+        if (!row.imageMediaId) return row;
+        return { ...row, imageMediaId: null, clearImageOverride: true, touched: true };
+      case "clear-gallery":
+        if (row.galleryMediaIds.length === 0) return row;
+        return { ...row, galleryMediaIds: [], touched: true };
+      case "clear-price-override":
+        return clearVariantPropertyOverride(row, "price");
+      case "clear-cost-override":
+        return clearVariantPropertyOverride(row, "cost");
+      case "clear-weight-override":
+        return clearVariantPropertyOverride(row, "weight");
+      case "clear-preorder-override":
+        return clearVariantPropertyOverride(row, "preorder");
+      case "clear-packaging-cost-override":
+        return clearVariantPropertyOverride(row, "packagingCost");
+      default:
+        return row;
+    }
+  });
+}
+
 export function imageActionImpact(
   target: DraftVariant[],
   context: { mediaId: string; productImageMediaId: string | null; attributes: DraftAttribute[] },
