@@ -1950,15 +1950,13 @@ Implement and test the following end-to-end workflows.
 
 ## Workflow A: Catalog creation & product authoring
 
-1. Admin creates a product (specifying Title/Name, Product SKU/Code, Barcode, and Descriptions).
-2. Admin sets Pricing Defaults (Current Price, Discount Type & Value, Calculated Sell Price, Unit Label).
-3. Admin configures Product Organization (Brand, Categories, Tax Rate Presets, Packaging Cost Templates, Shipping/Weight).
-4. Admin configures Attributes & generates Variant combinations (optionally assigning attribute-level pricing or default images).
-5. Admin reviews Variant Overrides and applies Bulk Actions (editing prices, costs, or clearing overrides to restore inheritance).
-6. Admin assigns Product Images and Gallery Media (with automatic fallback to attribute or product primary media).
-7. Admin configures Settings, SEO, and Preorder rules, then saves as Draft or Publishes.
-8. Stock is never created during product creation; stock is received solely through purchasing or authorized adjustments.
-9. Product and variants appear on the appropriate storefront with server-side price resolution and inventory checks.
+1. Admin creates a product (name, product type, product SKU/code, barcode) and sets product-level pricing (current price, % or flat discount; sell price calculated on the server).
+2. Admin configures Organisation (brand, categories, labels with inline create, unit, shipping/weight, tax, packaging).
+3. Admin assigns one primary image and additional gallery images through the Media Manager. The primary image is independent of the gallery.
+4. For VARIABLE products, admin selects attributes and values (without assigning images during selection), generates combinations, then reviews overrides and bulk-edits selected or filter-targeted variants. SIMPLE products keep one variant and skip the matrix.
+5. Admin writes the product description, then SEO last, and saves as Draft or Publishes.
+6. Stock is never created during product creation; stock is received solely through purchasing or authorized adjustments.
+7. Product and variants appear on the appropriate storefront with server-side price resolution and inventory checks.
 
 ## Workflow B: Purchase and stock receiving
 

@@ -134,7 +134,7 @@ export function AttributesVariationsSection({
                     marked “Not in matrix”, and are archived only if you remove them.
                   </li>
                 ) : null}
-                {plan.kept.length > 0 ? <li>{plan.kept.length} existing variant(s) keep their prices, stock and images.</li> : null}
+                {plan.kept.length > 0 ? <li>{plan.kept.length} existing variant(s) keep their prices and images.</li> : null}
               </ul>
             </Alert>
           ) : null}

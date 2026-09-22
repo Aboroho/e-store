@@ -24,9 +24,8 @@ import type { RichTextDocument } from "@/components/rich-text-editor/types";
  * A save is **one transaction**: the product, its categories and attributes, every
  * image association, every variant (with its attribute values, images and price
  * list entry), the attribute-value default images and the media usages all commit
- * together or not at all. The only deliberate exception is opening stock, which uses
- * the inventory ledger engine inside the same transaction but with an explicit
- * opt-in, and never silently creates stock by saving a product.
+ * together or not at all. Saving a product never creates stock: balances are
+ * zeroed so the inventory module has a row to move later.
  *
  * What the browser sends is never trusted: brands, categories, attributes, variants
  * combinations, media ids, documents and money are all re-read or re-validated here.
@@ -360,7 +359,7 @@ async function assertSkusAvailable(
  *   2. validate SKUs, media types and rich-text documents;
  *   3. write the product, its images, variants, variant images and price entries;
  *   4. record media usages so the shared library knows what is in use;
- *   5. optionally record opening stock through the inventory ledger.
+ *   5. ensure a zero inventory balance for each variant (no stock is created).
  */
 export async function saveProduct(actor: CatalogActor, input: ProductDraftInput): Promise<SaveProductResult> {
   if (input.slug && !isValidSlug(input.slug)) {
@@ -1335,6 +1334,7 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
       imageMediaId: row.imageMediaId,
       galleryMediaIds: row.images.map((image) => image.mediaId),
       attributeValueIds: row.attributeValues.map((value) => value.attributeValueId),
+      packagingCost: row.packagingCostPaisa != null ? String(row.packagingCostPaisa / 100) : undefined,
     }));
 
     const selection = new Set(input.target.variantIds ?? []);

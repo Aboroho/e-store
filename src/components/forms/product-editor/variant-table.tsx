@@ -486,10 +486,10 @@ function VariantImageCell({ row, attributes, assets, productImageId, onUpdate }:
               variant="ghost"
               size="sm"
               className="h-7 px-1.5 text-[11px]"
-              title="Drop the variant image so the attribute or product image is inherited again"
+              title="Drop the variant image so the attribute or product image is used again"
               onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
             >
-              Inherit
+              Use default
             </Button>
           ) : null}
         </div>
@@ -529,7 +529,7 @@ function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowShar
           aria-label={`Override price for ${row.name}`}
           className="h-9 w-24"
           inputMode="decimal"
-          placeholder="Inherit"
+          placeholder="Default"
           value={row.currentPrice ?? ""}
           onChange={(event) =>
             onUpdate(row.key, { currentPrice: event.target.value, clearPriceOverride: false, price: "" }, { touched: true })
@@ -576,7 +576,7 @@ function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowShar
               )
             }
           >
-            Inherit
+            Use default
           </button>
         ) : null}
       </div>
@@ -628,7 +628,7 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
             aria-label={`Cost for ${row.name}`}
             className="h-9 w-24"
             inputMode="decimal"
-            placeholder="Inherit"
+            placeholder="Default"
             value={row.cost ?? ""}
             onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
           />
@@ -640,7 +640,7 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
             aria-label={`Weight for ${row.name}`}
             className="h-9 w-20"
             inputMode="decimal"
-            placeholder="Inherit"
+            placeholder="Default"
             value={row.weight ?? ""}
             onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
           />
@@ -662,19 +662,19 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
         <NativeSelect
           aria-label={`Preorder for ${row.name}`}
           className="h-9 w-28"
-          value={row.isPreorderEnabled === undefined ? "INHERIT" : row.isPreorderEnabled ? "ON" : "OFF"}
+          value={row.isPreorderEnabled === undefined ? "" : row.isPreorderEnabled ? "ON" : "OFF"}
           onChange={(event) =>
             onUpdate(
               row.key,
               {
-                isPreorderEnabled: event.target.value === "INHERIT" ? undefined : event.target.value === "ON",
-                clearPreorderOverride: event.target.value === "INHERIT",
+                isPreorderEnabled: event.target.value === "" ? undefined : event.target.value === "ON",
+                clearPreorderOverride: event.target.value === "",
               },
               { touched: true },
             )
           }
         >
-          <option value="INHERIT">Inherit</option>
+          <option value="">Use product setting</option>
           <option value="ON">Allowed</option>
           <option value="OFF">Not allowed</option>
         </NativeSelect>
@@ -739,7 +739,7 @@ const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
           <Input
             aria-label={`Cost for ${row.name}`}
             inputMode="decimal"
-            placeholder="Cost (inherit)"
+            placeholder="Cost (default)"
             value={row.cost ?? ""}
             onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
           />
@@ -770,19 +770,19 @@ const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
         <NativeSelect
           aria-label={`Preorder for ${row.name}`}
           className="h-9 w-32"
-          value={row.isPreorderEnabled === undefined ? "INHERIT" : row.isPreorderEnabled ? "ON" : "OFF"}
+          value={row.isPreorderEnabled === undefined ? "" : row.isPreorderEnabled ? "ON" : "OFF"}
           onChange={(event) =>
             onUpdate(
               row.key,
               {
-                isPreorderEnabled: event.target.value === "INHERIT" ? undefined : event.target.value === "ON",
-                clearPreorderOverride: event.target.value === "INHERIT",
+                isPreorderEnabled: event.target.value === "" ? undefined : event.target.value === "ON",
+                clearPreorderOverride: event.target.value === "",
               },
               { touched: true },
             )
           }
         >
-          <option value="INHERIT">Preorder: inherit</option>
+          <option value="">Preorder: product setting</option>
           <option value="ON">Preorder: allowed</option>
           <option value="OFF">Preorder: off</option>
         </NativeSelect>

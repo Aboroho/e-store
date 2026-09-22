@@ -53,7 +53,6 @@ export interface EditorCategory {
 
 export interface EditorVariant {
   id: string;
-  sku: string;
   barcode: string | null;
   name: string;
   position: number;
@@ -478,7 +477,6 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
       const price = priceByVariant.get(variant.id);
       return {
         id: variant.id,
-        sku: variant.product?.sku,
         barcode: variant.barcode,
         name: variant.name,
         position: variant.position,

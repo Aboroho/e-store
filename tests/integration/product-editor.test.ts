@@ -18,7 +18,7 @@ import { createTestBusiness, databaseReachable, destroyTestBusiness, type TestCo
 /**
  * End-to-end coverage for the Create/Edit Product flow against the real database:
  * transactions, unique-code and slug rules, media-library references, the three
- * image inheritance levels, bulk actions (Black-only vs White), opening stock and
+ * image inheritance levels, bulk actions (Black-only vs White), and
  * the optimistic-concurrency guard. Every payload goes through the same schema the
  * server action parses with, so the tests exercise the exact write path.
  */

@@ -85,9 +85,9 @@ function toLabelChoice(label: ProductEditorData["labels"][number]): LabelChoice 
 type ErrorMap = Record<string, string[]>;
 
 /**
- * The order of the form follows the order a merchandiser works in: describe the
- * product, price it, file it, build the variants, dress it with images, then
- * decide how it ships, how it is found and whether it is live.
+ * Named section chips, in this order: Information, Organisation, Images,
+ * Attributes & variations (variable products only), Description, SEO.
+ * Pricing sits after Information and is not a chip.
  */
 const SECTIONS = [
   { id: "information", label: "Product information" },
@@ -292,7 +292,8 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     } satisfies Record<(typeof SECTIONS)[number]["id"], boolean>;
   }, [state, effectivePaisa]);
 
-  const completedCount = SECTIONS.filter((section) => completion[section.id]).length;
+  const visibleSections = state.productType === "SIMPLE" ? SECTIONS.filter((section) => section.id !== "variants") : SECTIONS;
+  const completedCount = visibleSections.filter((section) => completion[section.id]).length;
 
   const productPricing: PricingLevelInput = React.useMemo(
     () => ({
@@ -388,9 +389,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   };
 
   const buildPayload = (saveAsDraft: boolean) => {
-    const variantDefining = state.attributeIds.filter(
-      (id) => attributes.find((attribute) => attribute.id === id)?.isVariantDefining !== false,
-    );
     return {
       productId: product?.id,
       expectedUpdatedAt: product?.updatedAt,
@@ -549,11 +547,11 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         defaultOpen={["information", "organization"]}
         header={
           <div className="mr-auto flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant={completedCount === SECTIONS.length ? "success" : "neutral"}>
-              {completedCount}/{SECTIONS.length} sections complete
+            <Badge variant={completedCount === visibleSections.length ? "success" : "neutral"}>
+              {completedCount}/{visibleSections.length} sections complete
             </Badge>
             <span className="flex flex-wrap items-center gap-1.5">
-              {SECTIONS.map((section) => (
+              {visibleSections.map((section) => (
                 <a
                   key={section.id}
                   href={`#${section.id}`}
@@ -600,6 +598,19 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
             }
             patch(value);
           }}
+        />
+
+        <PricingSection
+          currentPrice={state.currentPrice}
+          discountType={state.discountType}
+          discountValue={state.discountValue}
+          defaultCost={state.defaultCost}
+          variantCount={state.variants.length}
+          overrideCount={overrideCount}
+          unpricedCount={unpricedCount}
+          canViewCost={data.canViewCost}
+          errors={errors}
+          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
         />
 
         <OrganizationSection
@@ -662,52 +673,41 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           }
         />
 
-        <AttributesVariationsSection
-          productId={product?.id ?? null}
-          attributes={attributes}
-          state={state}
-          plan={plan}
-          errors={errors}
-          rowErrors={variantErrors}
-          selection={selection}
-          productImage={productImage}
-          productPricing={productPricing}
-          canViewCost={data.canViewCost}
-          onApplied={() => router.refresh()}
-          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
-          onAttributeCreated={(attribute) => setAttributes((current) => (current.some((entry) => entry.id === attribute.id) ? current : [...current, attribute]))}
-          onValueAdded={(attributeId, value) =>
-            setAttributes((current) =>
-              current.map((attribute) =>
-                attribute.id === attributeId
-                  ? {
-                      ...attribute,
-                      values: attribute.values.some((entry) => entry.id === value.id) ? attribute.values : [...attribute.values, { ...value, image: null }],
-                    }
-                  : attribute,
-              ),
-            )
-          }
-          onSetValueImage={setAttributeValueImage}
-          onGenerateMatrix={() => editor.generateMatrix({ keepOrphans: true })}
-          onUpdateVariant={editor.updateVariant}
-          onAddVariant={editor.addVariant}
-          onRemoveVariant={editor.removeVariant}
-          onSelectionChange={setSelection}
-        />
-
-        <PricingSection
-          currentPrice={state.currentPrice}
-          discountType={state.discountType}
-          discountValue={state.discountValue}
-          defaultCost={state.defaultCost}
-          variantCount={state.variants.length}
-          overrideCount={overrideCount}
-          unpricedCount={unpricedCount}
-          canViewCost={data.canViewCost}
-          errors={errors}
-          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
-        />
+        {state.productType === "VARIABLE" ? (
+          <AttributesVariationsSection
+            productId={product?.id ?? null}
+            attributes={attributes}
+            state={state}
+            plan={plan}
+            errors={errors}
+            rowErrors={variantErrors}
+            selection={selection}
+            productImage={productImage}
+            productPricing={productPricing}
+            canViewCost={data.canViewCost}
+            onApplied={() => router.refresh()}
+            onPatch={(value) => patch(value as Partial<ProductEditorState>)}
+            onAttributeCreated={(attribute) => setAttributes((current) => (current.some((entry) => entry.id === attribute.id) ? current : [...current, attribute]))}
+            onValueAdded={(attributeId, value) =>
+              setAttributes((current) =>
+                current.map((attribute) =>
+                  attribute.id === attributeId
+                    ? {
+                        ...attribute,
+                        values: attribute.values.some((entry) => entry.id === value.id) ? attribute.values : [...attribute.values, { ...value, image: null }],
+                      }
+                    : attribute,
+                ),
+              )
+            }
+            onSetValueImage={setAttributeValueImage}
+            onGenerateMatrix={() => editor.generateMatrix({ keepOrphans: true })}
+            onUpdateVariant={editor.updateVariant}
+            onAddVariant={editor.addVariant}
+            onRemoveVariant={editor.removeVariant}
+            onSelectionChange={setSelection}
+          />
+        ) : null}
 
         <ProductDescriptionSection
           shortDescription={state.shortDescription}
