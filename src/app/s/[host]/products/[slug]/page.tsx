@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { resolveStorefrontByHost, storefrontProduct, productReviews, reviewSummary } from "@/modules/storefront/queries";
-import { AddToCartButton } from "@/components/storefront/cart";
-import { TrackViewContent } from "@/components/storefront/marketing-events";
+import { VariantPicker } from "@/components/storefront/variant-picker";
 import { ReviewForm } from "@/components/storefront/review-form";
 import { RichTextContent, parseRichText } from "@/components/rich-text-editor";
 import { reviewImageLimits } from "@/modules/reviews/service";
@@ -47,8 +46,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     // The limit shown here is the same server-side setting the review action enforces.
     reviewImageLimits(storefront.businessId),
   ]);
-  // The cheapest variant is what the pixel reports as the viewed item.
-  const viewableVariant = [...product.variants].sort((left, right) => left.pricePaisa - right.pricePaisa)[0];
   const canReview = storefront.status === "ACTIVE" && storefront.businessId ? true : false;
 
   // Structured data helps search engines show price and availability.
@@ -60,12 +57,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     image: product.images.map((image) => image.url).filter(Boolean),
     brand: product.brand ?? undefined,
     offers: product.variants
-      .filter((variant) => variant.available > 0)
+      .filter((variant) => variant.available > 0 || variant.isPreorderEnabled)
       .map((variant) => ({
         "@type": "Offer",
         price: (variant.pricePaisa / 100).toFixed(2),
         priceCurrency: "BDT",
-        availability: "https://schema.org/InStock",
+        availability: variant.available > 0 ? "https://schema.org/InStock" : "https://schema.org/PreOrder",
       })),
     ...(summary.average
       ? { aggregateRating: { "@type": "AggregateRating", ratingValue: summary.average, reviewCount: summary.total } }
@@ -95,29 +92,18 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       </nav>
 
       <div className="grid gap-8 lg:grid-cols-2">
-        <div className="space-y-3">
-          <div className="aspect-square overflow-hidden rounded-xl bg-slate-100">
-            {product.images[0]?.url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={product.images[0].url} alt={product.images[0].alt} className="h-full w-full object-cover" />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">No image</div>
-            )}
-          </div>
-          {product.images.length > 1 ? (
-            <div className="grid grid-cols-4 gap-2">
-              {product.images.slice(1, 5).map((image, index) =>
-                image.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img key={index} src={image.url} alt={image.alt} className="aspect-square w-full rounded-md object-cover" loading="lazy" />
-                ) : null,
-              )}
-            </div>
-          ) : null}
-        </div>
+        <VariantPicker
+          productName={product.name}
+          productSlug={product.slug}
+          sku={product.variants[0]?.sku ?? ""}
+          options={product.options}
+          variants={product.variants}
+          gallery={product.images}
+          preorderNote={product.preorderNote}
+          unitLabel={product.unitLabel}
+        />
 
         <div className="space-y-4">
-          {viewableVariant ? <TrackViewContent variantId={viewableVariant.id} valuePaisa={viewableVariant.pricePaisa} /> : null}
           <div>
             <h1 className="text-2xl font-semibold">{product.name}</h1>
             {product.brand ? <p className="text-sm text-slate-500">{product.brand}</p> : null}
@@ -132,51 +118,28 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
           {product.shortDescription ? <p className="text-sm text-slate-600">{product.shortDescription}</p> : null}
 
-          <div className="space-y-3 rounded-lg border p-4">
-            {product.variants.length === 0 ? (
-              <p className="text-sm text-slate-500">This product has no purchasable variants.</p>
-            ) : (
-              product.variants.map((variant) => {
-                const inStock = variant.available > 0;
-                const purchasable = inStock || variant.isPreorderEnabled;
-                return (
-                  <div key={variant.id} className="flex flex-wrap items-center justify-between gap-3 border-b pb-3 last:border-0 last:pb-0">
-                    <div>
-                      <p className="text-sm font-medium">{variant.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {variant.sku}
-                        {variant.attributes.length > 0 ? ` · ${variant.attributes.map((attribute) => `${attribute.name}: ${attribute.value}`).join(", ")}` : ""}
-                      </p>
-                      <p className="mt-1 text-sm font-semibold">
-                        {taka(variant.pricePaisa)}
-                        {variant.compareAtPricePaisa && variant.compareAtPricePaisa > variant.pricePaisa ? (
-                          <span className="ml-2 text-xs font-normal text-slate-400 line-through">{taka(variant.compareAtPricePaisa)}</span>
-                        ) : null}
-                      </p>
-                      <p className="text-xs">
-                        {inStock ? (
-                          <span className="text-emerald-600">{variant.available} in stock</span>
-                        ) : variant.isPreorderEnabled ? (
-                          <span className="text-amber-600">Preorder — ships when restocked{product.preorderNote ? `: ${product.preorderNote}` : ""}</span>
-                        ) : (
-                          <span className="text-rose-600">Out of stock</span>
-                        )}
-                      </p>
-                    </div>
-                    <AddToCartButton
-                      line={{ variantId: variant.id, quantity: 1, name: `${product.name} · ${variant.name}`, pricePaisa: variant.pricePaisa, slug: product.slug }}
-                      disabled={!purchasable}
-                      showQuantity
-                      label={inStock ? "Add to cart" : "Preorder"}
-                    />
-                  </div>
-                );
-              })
-            )}
-            <p className="text-xs text-slate-500">
-              Cash on delivery {storefront.codEnabled ? "is available" : "is not available"} for this storefront. Prices are recalculated on the server when
-              you order.
+          <div className="rounded-lg border p-4 text-xs text-slate-500">
+            <p>
+              Cash on delivery {storefront.codEnabled ? "is available" : "is not available"} for this storefront. Prices are recalculated on
+              the server when you order.
             </p>
+            {product.variants.length > 1 ? (
+              <ul className="mt-3 space-y-1">
+                {product.variants.slice(0, 12).map((variant) => (
+                  <li key={variant.id} className="flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      {variant.attributes.length > 0
+                        ? variant.attributes.map((attribute) => `${attribute.name}: ${attribute.value}`).join(" · ")
+                        : variant.name}
+                    </span>
+                    <span className={variant.available > 0 ? "text-emerald-600" : variant.isPreorderEnabled ? "text-amber-600" : "text-rose-600"}>
+                      {taka(variant.pricePaisa)}
+                      {variant.available > 0 ? ` · ${variant.available} in stock` : variant.isPreorderEnabled ? " · preorder" : " · out of stock"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
 
           {product.description ? (

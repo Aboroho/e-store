@@ -108,6 +108,23 @@ const VARIANT_PRICING_SELECT = {
 } satisfies Prisma.VariantSelect;
 
 /** Load one variant with everything the inheritance model needs. */
+/** Load every variant of a product with everything the inheritance model needs. */
+export async function loadProductVariantRows(
+  client: Prisma.TransactionClient | typeof prisma,
+  input: { productId: string; activeOnly?: boolean },
+): Promise<VariantPricingRow[]> {
+  const rows = await client.variant.findMany({
+    where: {
+      productId: input.productId,
+      deletedAt: null,
+      ...(input.activeOnly === false ? {} : { status: "ACTIVE" as const }),
+    },
+    orderBy: { position: "asc" },
+    select: VARIANT_PRICING_SELECT,
+  });
+  return rows as unknown as VariantPricingRow[];
+}
+
 export async function loadVariantPricingRow(
   client: Prisma.TransactionClient | typeof prisma,
   variantId: string,
