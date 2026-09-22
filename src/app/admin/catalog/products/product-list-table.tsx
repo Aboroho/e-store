@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Edit3, ExternalLink, Package, Layers, Undo2, Check } from "lucide-react";
+import { ChevronDown, ChevronRight, Edit3, Layers, Check } from "lucide-react";
 import { formatPaisa } from "@/lib/money";
 import type { ProductListRow, ProductListVariantRow } from "@/modules/catalog/queries";
 import { updateSingleVariantAction } from "@/modules/catalog/product-actions";
@@ -135,8 +135,6 @@ export function ProductListTable({
             <TableHead>Status</TableHead>
             <TableHead className="text-center">Variants</TableHead>
             <TableHead className="text-right">Price</TableHead>
-            <TableHead className="text-right">On hand</TableHead>
-            <TableHead className="text-right">Available</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -211,22 +209,23 @@ export function ProductListTable({
                       <span className="text-slate-400 text-xs">Unpriced</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-right text-sm">
-                    {product.onHand} {product.unitLabel}
-                  </TableCell>
-                  <TableCell className="text-right text-sm font-medium">
-                    <span className={product.available > 0 ? "text-emerald-700" : "text-amber-700"}>
-                      {product.available}
-                    </span>
-                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
-                      <Link
-                        href={`/admin/catalog/products/${product.id}`}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-md transition-colors"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" /> Edit Product
-                      </Link>
+                      {canEdit ? (
+                        <Link
+                          href={`/admin/catalog/products/${product.id}/edit`}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-md transition-colors"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" /> Edit
+                        </Link>
+                      ) : (
+                        <Link
+                          href={`/admin/catalog/products/${product.id}`}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800 px-2.5 py-1.5 rounded-md"
+                        >
+                          View
+                        </Link>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -234,7 +233,7 @@ export function ProductListTable({
                 {/* Collapsible Nested Variant Rows */}
                 {isExpanded && (
                   <TableRow className="bg-slate-50/50 hover:bg-slate-50/50">
-                    <TableCell colSpan={8} className="p-0 border-t border-slate-200/80">
+                    <TableCell colSpan={6} className="p-0 border-t border-slate-200/80">
                       <div className="py-3 px-6 bg-slate-50/60 border-l-4 border-l-brand-500">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
@@ -250,13 +249,10 @@ export function ProductListTable({
                           <table className="w-full text-xs">
                             <thead className="bg-slate-50 text-slate-500 uppercase font-medium border-b border-slate-200">
                               <tr>
-                                <th className="px-3 py-2 text-left">Variant Option</th>
-                                <th className="px-3 py-2 text-left">Variant SKU</th>
+                                <th className="px-3 py-2 text-left">Variant</th>
                                 <th className="px-3 py-2 text-right">Price</th>
                                 {canViewCost && <th className="px-3 py-2 text-right">Cost</th>}
                                 <th className="px-3 py-2 text-center">Preorder</th>
-                                <th className="px-3 py-2 text-right">On Hand</th>
-                                <th className="px-3 py-2 text-right">Available</th>
                                 <th className="px-3 py-2 text-right">Action</th>
                               </tr>
                             </thead>
@@ -266,10 +262,7 @@ export function ProductListTable({
                                 return (
                                   <tr key={variant.id} className="hover:bg-slate-50/80 transition-colors">
                                     <td className="px-3 py-2 font-medium text-slate-900">
-                                      {variant.name || "Default Variant"}
-                                    </td>
-                                    <td className="px-3 py-2 font-mono text-slate-600">
-                                      {variant.sku || <span className="text-slate-400 italic">None</span>}
+                                      {variant.name || "Default"}
                                     </td>
                                     <td className="px-3 py-2 text-right font-medium">
                                       <div className="inline-flex items-center gap-1 justify-end">
@@ -300,14 +293,6 @@ export function ProductListTable({
                                       ) : (
                                         <span className="text-slate-400 text-[11px]">Disabled</span>
                                       )}
-                                    </td>
-                                    <td className="px-3 py-2 text-right text-slate-700">
-                                      {variant.onHand}
-                                    </td>
-                                    <td className="px-3 py-2 text-right font-medium">
-                                      <span className={variant.available > 0 ? "text-emerald-700" : "text-amber-700"}>
-                                        {variant.available}
-                                      </span>
                                     </td>
                                     <td className="px-3 py-2 text-right">
                                       {canEdit && (

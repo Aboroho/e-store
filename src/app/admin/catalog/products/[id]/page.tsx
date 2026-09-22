@@ -6,9 +6,7 @@ import { assertPermission, can } from "@/lib/permissions";
 import { formatPaisa } from "@/lib/money";
 import { formatDateTime } from "@/lib/utils";
 import { getProductForEdit } from "@/modules/catalog/queries";
-import { variantReferenceCounts } from "@/modules/catalog/service";
-import { availableQuantity } from "@/modules/inventory/service";
-import { archiveProductAction, archiveVariantAction, restoreProductAction } from "@/modules/catalog/actions";
+import { archiveProductAction, restoreProductAction } from "@/modules/catalog/actions";
 import {
   Badge,
   Card,
@@ -36,11 +34,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   const product = await getProductForEdit(session.businessId, id);
   if (!product) notFound();
-  const referenceCounts = new Map(
-    (await Promise.all(
-      product.variants.map(async (variant) => [variant.id, await variantReferenceCounts(variant.id)] as const),
-    )).map(([variantId, counts]) => [variantId, counts]),
-  );
   const canUpdate = can(session, "product.update");
   const canArchive = can(session, "product.archive");
   const archiveProduct = archiveProductAction.bind(null, product.id);
@@ -52,9 +45,16 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         title={product.name}
         description={`${product.productType.toLowerCase()} product · ${product.variants.length} variant(s) · /${product.slug}`}
         actions={
-          <Link href="/admin/catalog/products" className={buttonVariants({ variant: "secondary" })}>
-            Back to products
-          </Link>
+          <div className="flex items-center gap-2">
+            {canUpdate ? (
+              <Link href={`/admin/catalog/products/${product.id}/edit`} className={buttonVariants({})}>
+                Edit product
+              </Link>
+            ) : null}
+            <Link href="/admin/catalog/products" className={buttonVariants({ variant: "secondary" })}>
+              Back to products
+            </Link>
+          </div>
         }
       />
 
@@ -62,6 +62,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         <Badge variant={product.status === "ACTIVE" ? "success" : product.status === "DRAFT" ? "warning" : "neutral"}>
           {product.status.toLowerCase()}
         </Badge>
+        {product.sku ? <span className="font-mono text-xs text-slate-600">SKU {product.sku}</span> : null}
         <span className="text-slate-500">Updated {formatDateTime(product.updatedAt)}</span>
         {canArchive ? (
           product.deletedAt ? (
@@ -76,7 +77,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 variant="outline"
                 size="sm"
                 pendingLabel="Archiving…"
-                confirm="Archive this product? It will no longer be sellable."
+                confirmTitle="Archive this product?"
+                confirm="It will no longer be sellable. Restore it from the bin if you change your mind."
               >
                 Archive product
               </SubmitButton>
@@ -87,9 +89,9 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
       <Card>
         <CardHeader>
-          <CardTitle>Stock by variant</CardTitle>
+          <CardTitle>Variants</CardTitle>
           <p className="text-xs text-slate-500">
-            Available = on hand − reserved − damaged − inspection. Preorder backlog is tracked separately.
+            This page is view-only. Stock lives in Inventory, not on the product record.
           </p>
         </CardHeader>
         <CardContent className="px-0 py-0">
@@ -97,60 +99,24 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <TableHeader>
               <TableRow>
                 <TableHead>Variant</TableHead>
-                <TableHead>SKU</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="text-right">Cost</TableHead>
-                <TableHead className="text-right">On hand</TableHead>
-                <TableHead className="text-right">Reserved</TableHead>
-                <TableHead className="text-right">Available</TableHead>
-                <TableHead className="text-right">Avg cost</TableHead>
-                <TableHead className="text-right">History</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {product.variants.map((variant) => {
-                const balance = variant.inventory[0];
-                const references = referenceCounts.get(variant.id) ?? { orderItems: 0, purchaseItems: 0, exchangeItems: 0, movements: 0, total: 0 };
-                return (
-                  <TableRow key={variant.id}>
-                    <TableCell>
-                      <Link href={`/admin/inventory/${variant.id}`} className="font-medium text-brand-600 hover:underline">
-                        {variant.name}
-                      </Link>
-                      <p className="text-xs text-slate-500">
-                        {variant.attributeValues
-                          .map((entry) => `${entry.attributeId.slice(0, 4)}…`)
-                          .join(" ") || "default"}
-                      </p>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{variant.sku}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {variant.priceOverridePaisa != null ? formatPaisa(variant.priceOverridePaisa) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{variant.costPaisa != null ? formatPaisa(variant.costPaisa) : "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{balance?.onHand ?? 0}</TableCell>
-                    <TableCell className="text-right tabular-nums">{balance?.reserved ?? 0}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      <span className={balance && availableQuantity(balance) <= 0 ? "font-medium text-red-600" : undefined}>
-                        {balance ? availableQuantity(balance) : 0}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {balance ? formatPaisa(balance.averageCostPaisa) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right text-xs text-slate-500">
-                      {references.total} change(s)
-                      {canArchive && variant.status === "ACTIVE" && references.total === 0 ? (
-                        <form action={archiveVariantAction.bind(null, variant.id, product.id)} className="mt-1">
-                          <SubmitButton variant="ghost" size="sm" pendingLabel="…">
-                            Archive
-                          </SubmitButton>
-                        </form>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+              {product.variants.map((variant) => (
+                <TableRow key={variant.id}>
+                  <TableCell>
+                    <span className="font-medium text-slate-900">{variant.name}</span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {variant.priceOverridePaisa != null ? formatPaisa(variant.priceOverridePaisa) : "—"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {variant.costPaisa != null ? formatPaisa(variant.costPaisa) : "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </CardContent>
@@ -171,7 +137,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </CardContent>
         </Card>
       ) : null}
-
     </div>
   );
 }

@@ -14,7 +14,7 @@ import type { BulkTarget, DraftVariant } from "@/modules/catalog/product-draft";
 import { calculatePricing, normalizeDiscount, validateDiscount, type DiscountType } from "@/modules/catalog/pricing-rules";
 import { pricingFromLevel, resolvePricing, type PricingLevelInput } from "@/modules/catalog/inheritance";
 import { syncVariantPriceListItem } from "@/modules/catalog/variant-pricing";
-import type { BulkVariantActionInput, BrandInput, ProductDraftInput, SingleVariantUpdateInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
+import type { BulkVariantActionInput, BrandInput, LabelInput, ProductDraftInput, SingleVariantUpdateInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
 import type { CatalogActor } from "@/modules/catalog/service";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
 
@@ -72,7 +72,7 @@ async function attachAssociation(
   tx: Prisma.TransactionClient,
   input: {
     mediaId: string;
-    entityType: "PRODUCT" | "VARIANT" | "ATTRIBUTE_VALUE" | "BRAND" | "CATEGORY";
+    entityType: "PRODUCT" | "VARIANT" | "ATTRIBUTE_VALUE" | "BRAND" | "CATEGORY" | "LABEL";
     entityId: string;
     field: string;
     productId?: string;
@@ -153,7 +153,7 @@ interface ValidatedContext {
       discountValue?: number | null;
     }
   >;
-  variantsById: Map<string, { id: string; sku: string | null; optionKey: string; productId: string }>;
+  variantsById: Map<string, { id: string; optionKey: string; productId: string }>;
   brand: { id: string; name: string } | null;
   priceListId: string;
 }
@@ -199,11 +199,22 @@ async function validateReferences(
   /* Attributes ----------------------------------------------------------- */
   if (input.attributeIds.length > 0) {
     const attributes = await tx.attribute.findMany({
-      where: { id: { in: input.attributeIds }, businessId },
+      where: { id: { in: input.attributeIds }, businessId, deletedAt: null },
       select: { id: true },
     });
     if (attributes.length !== new Set(input.attributeIds).size) {
       throw AppError.validation("One or more selected attributes no longer exist. Refresh the list and try again.");
+    }
+  }
+
+  /* Labels --------------------------------------------------------------- */
+  if (input.labelIds.length > 0) {
+    const labels = await tx.label.findMany({
+      where: { id: { in: input.labelIds }, businessId, deletedAt: null },
+      select: { id: true },
+    });
+    if (labels.length !== new Set(input.labelIds).size) {
+      throw AppError.validation("One or more selected labels no longer exist. Refresh the list and try again.");
     }
   }
 
@@ -240,12 +251,12 @@ async function validateReferences(
 
   /* Variant identity and combinations ------------------------------------ */
   const variantIds = input.variants.map((variant) => variant.id).filter((id): id is string => Boolean(id));
-  const variantsById = new Map<string, { id: string; sku: string | null; optionKey: string; productId: string }>();
+  const variantsById = new Map<string, { id: string; optionKey: string; productId: string }>();
   if (variantIds.length > 0) {
     if (!input.productId) throw AppError.validation("Variant ids can only be sent when editing an existing product.");
     const rows = await tx.variant.findMany({
       where: { id: { in: variantIds }, product: { businessId } },
-      select: { id: true, sku: true, optionKey: true, productId: true },
+      select: { id: true, optionKey: true, productId: true },
     });
     if (rows.length !== variantIds.length) {
       throw AppError.validation("One or more variants belong to a different product. Reload the page and try again.");
@@ -309,53 +320,18 @@ async function assertSkusAvailable(
   input: ProductDraftInput,
   context: ValidatedContext,
 ): Promise<void> {
-  // 1. No duplicate variant codes inside this submission (if provided)
-  const seenSkus = new Map<string, number>();
-  for (const variant of input.variants) {
-    const sku = normalizeSku(variant.sku);
-    if (sku) {
-      seenSkus.set(sku, (seenSkus.get(sku) ?? 0) + 1);
-    }
-  }
-  const duplicateSkus = [...seenSkus.entries()].filter(([, count]) => count > 1).map(([sku]) => sku);
-  if (duplicateSkus.length > 0) {
-    throw AppError.validation(`These variant codes are used more than once in this product: ${duplicateSkus.join(", ")}`);
-  }
-
-  // Check duplicate option combinations
+  // Duplicate option combinations are the variant identity — variants never own a SKU.
   if (input.variants.length > 1) {
     const seenOptionKeys = new Set<string>();
     for (const variant of input.variants) {
       const optKey = optionKeyFor(variant.attributeValueIds, context.attributeValues) || "default";
       if (seenOptionKeys.has(optKey)) {
-        throw AppError.validation(`These variant codes are used more than once in this product: duplicate combination ${optKey}`);
+        throw AppError.validation(`Two variants share the same option combination (${optKey}).`);
       }
       seenOptionKeys.add(optKey);
     }
   }
 
-  // 2. Variant SKUs that are explicitly provided: check clashes across the platform
-  const payloadSkus = input.variants.map((v) => normalizeSku(v.sku)).filter(Boolean);
-  const unchanged = new Set(
-    input.variants
-      .map((variant) => (variant.id ? context.variantsById.get(variant.id)?.sku : undefined))
-      .filter((sku): sku is string => Boolean(sku))
-      .map((sku) => normalizeSku(sku)),
-  );
-  const toCheck = payloadSkus.filter((sku) => !unchanged.has(sku));
-  if (toCheck.length > 0) {
-    const clashes = await tx.variant.findMany({
-      where: { sku: { in: toCheck } },
-      select: { sku: true, product: { select: { id: true, name: true } } },
-    });
-    const realClashes = clashes.filter((c) => c.product.id !== input.productId);
-    if (realClashes.length > 0) {
-      const first = realClashes[0]!;
-      throw AppError.validation(`Variant code ${first.sku} is already used by another product (${first.product.name}). Product codes are unique across the platform.`);
-    }
-  }
-
-  // 3. Parent product code (SKU) belongs to the main product and must be unique inside the business
   const productSku = normalizeSku(input.productCode);
   if (productSku) {
     const clash = await tx.product.findFirst({
@@ -490,7 +466,8 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
     const productFields: any = {
       name: input.name,
       slug,
-      productType: input.variants.length > 1 || input.attributeIds.length > 0 ? ("VARIABLE" as const) : input.productType,
+      productType: input.productType,
+      primaryImageMediaId: input.primaryImage?.mediaId ?? null,
       status,
       shortDescription: serializeDocument(documents.shortDescription),
       description: serializeDocument(documents.description),
@@ -580,7 +557,17 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       });
     }
 
-    /* Product images ----------------------------------------------------- */
+    await tx.productLabel.deleteMany({ where: { productId: product.id } });
+    if (input.labelIds.length > 0) {
+      await tx.productLabel.createMany({
+        data: input.labelIds.map((labelId, index) => ({ productId: product.id, labelId, position: index })),
+        skipDuplicates: true,
+      });
+    }
+
+    /* Product images -----------------------------------------------------
+       Primary image is a first-class field on Product. Additional images live
+       only in ProductImage. Changing one never rewrites the other. */
     const previousProductMedia = await collectAssociationUsages(tx, "PRODUCT", product.id, [
       "primary-image",
       "gallery-image",
@@ -591,11 +578,18 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       where: { entityType: "PRODUCT", entityId: product.id, field: { in: ["primary-image", "gallery-image", "seo-image"] } },
     });
 
-    const orderedImages = [
-      ...(input.primaryImage ? [input.primaryImage] : []),
-      ...input.images.filter((image) => image.mediaId !== input.primaryImage?.mediaId),
-    ];
-    for (const [index, image] of orderedImages.entries()) {
+    if (input.primaryImage?.mediaId) {
+      await attachAssociation(tx, {
+        mediaId: input.primaryImage.mediaId,
+        entityType: "PRODUCT",
+        entityId: product.id,
+        field: "primary-image",
+        productId: product.id,
+      });
+    }
+
+    const additionalImages = input.images.filter((image) => image.mediaId !== input.primaryImage?.mediaId);
+    for (const [index, image] of additionalImages.entries()) {
       await tx.productImage.create({
         data: { productId: product.id, mediaId: image.mediaId, position: index, altText: image.altText ?? null },
       });
@@ -603,7 +597,7 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
         mediaId: image.mediaId,
         entityType: "PRODUCT",
         entityId: product.id,
-        field: index === 0 ? "primary-image" : "gallery-image",
+        field: "gallery-image",
         productId: product.id,
       });
     }
@@ -714,9 +708,6 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
 
       const variantData = {
         name: variant.name,
-        // SKU belongs to the product. A variant only keeps an optional legacy
-        // internal code; the workflow never generates or requires one.
-        ...(existingVariant ? {} : { sku: normalizeSku(variant.sku) || null }),
         barcode: variant.barcode ?? null,
         optionKey,
         position,
@@ -821,7 +812,7 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
        carry order lines, movements and historical prices. */
     const removed = await tx.variant.findMany({
       where: { productId: product.id, id: { notIn: [...keptVariantIds] }, status: { not: "ARCHIVED" } },
-      select: { id: true, sku: true, name: true },
+      select: { id: true, name: true },
     });
     if (removed.length > 0) {
       await tx.variant.updateMany({ where: { id: { in: removed.map((variant) => variant.id) } }, data: { status: "ARCHIVED" } });
@@ -1314,7 +1305,6 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
       orderBy: { position: "asc" },
       select: {
         id: true,
-        sku: true,
         name: true,
         currentPricePaisa: true,
         discountType: true,
@@ -1341,7 +1331,6 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
     const draftRows = variantRows.map<DraftVariant>((row) => ({
       key: row.id,
       id: row.id,
-      sku: row.sku ?? "",
       name: row.name,
       imageMediaId: row.imageMediaId,
       galleryMediaIds: row.images.map((image) => image.mediaId),
@@ -1825,9 +1814,27 @@ export async function updateSingleVariant(
 export async function saveProductDraft(
   actor: CatalogActor,
   input: { productId?: string | null; draftId?: string | null; revision?: number | null; name?: string; payload: Record<string, unknown> },
-): Promise<{ draftId: string; revision: number; updatedAt: string }> {
-  const name = input.name?.trim() || (input.payload.name as string) || "Untitled draft";
+): Promise<{ draftId: string; revision: number; updatedAt: string; productId: string | null; createdProduct: boolean }> {
+  const name = input.name?.trim() || (typeof input.payload.name === "string" ? input.payload.name.trim() : "") || "Untitled draft";
   const payload = input.payload as Prisma.InputJsonValue;
+
+  let productId = input.productId ?? null;
+  let createdProduct = false;
+
+  if (!productId) {
+    const created = await createAutosaveProduct(actor, name, input.payload);
+    productId = created.id;
+    createdProduct = true;
+  } else {
+    const product = await prisma.product.findFirst({
+      where: { id: productId, businessId: actor.businessId },
+      select: { id: true, status: true, publishedAt: true, deletedAt: true },
+    });
+    if (!product || product.deletedAt) throw AppError.notFound("Product not found");
+    if (product.status === "DRAFT" && !product.publishedAt) {
+      await updateAutosaveProduct(actor, product.id, name, input.payload);
+    }
+  }
 
   if (input.draftId) {
     const existing = await prisma.productDraft.findFirst({
@@ -1842,16 +1849,16 @@ export async function saveProductDraft(
     }
     const saved = await prisma.productDraft.update({
       where: { id: existing.id },
-      data: { name, payload, revision: { increment: 1 } },
+      data: { name, payload, productId, revision: { increment: 1 } },
       select: { id: true, revision: true, updatedAt: true },
     });
-    return { draftId: saved.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString() };
+    return { draftId: saved.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString(), productId, createdProduct };
   }
 
   const existing = await prisma.productDraft.findFirst({
     where: {
       businessId: actor.businessId,
-      ...(input.productId ? { productId: input.productId } : { productId: null, userId: actor.userId ?? null }),
+      ...(productId ? { productId } : { productId: null, userId: actor.userId ?? null }),
     },
     orderBy: { updatedAt: "desc" },
     select: { id: true },
@@ -1860,23 +1867,76 @@ export async function saveProductDraft(
   if (existing) {
     const saved = await prisma.productDraft.update({
       where: { id: existing.id },
-      data: { name, payload, revision: { increment: 1 }, ...(actor.userId ? { userId: actor.userId } : {}) },
+      data: { name, payload, productId, revision: { increment: 1 }, ...(actor.userId ? { userId: actor.userId } : {}) },
       select: { id: true, revision: true, updatedAt: true },
     });
-    return { draftId: saved.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString() };
+    return { draftId: saved.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString(), productId, createdProduct };
   }
 
   const created = await prisma.productDraft.create({
     data: {
       businessId: actor.businessId,
-      productId: input.productId ?? null,
+      productId,
       userId: actor.userId ?? null,
       name,
       payload,
     },
     select: { id: true, revision: true, updatedAt: true },
   });
-  return { draftId: created.id, revision: created.revision, updatedAt: created.updatedAt.toISOString() };
+  return { draftId: created.id, revision: created.revision, updatedAt: created.updatedAt.toISOString(), productId, createdProduct };
+}
+
+async function uniqueDraftSlug(businessId: string, desired: string): Promise<string> {
+  const base = desired || "untitled-draft";
+  let candidate = base;
+  for (let suffix = 2; suffix <= 200; suffix += 1) {
+    const clash = await prisma.product.findFirst({ where: { businessId, slug: candidate }, select: { id: true } });
+    if (!clash) return candidate;
+    candidate = `${base}-${suffix}`;
+  }
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+async function createAutosaveProduct(actor: CatalogActor, name: string, payload: Record<string, unknown>) {
+  const slug = await uniqueDraftSlug(actor.businessId, suggestSlug(name) || "untitled-draft");
+  const productType = payload.productType === "VARIABLE" ? "VARIABLE" : "SIMPLE";
+  const product = await prisma.product.create({
+    data: {
+      businessId: actor.businessId,
+      name,
+      slug,
+      productType,
+      status: "DRAFT",
+      unitLabel: typeof payload.unitLabel === "string" && payload.unitLabel.trim() ? payload.unitLabel.trim() : "piece",
+      sku: typeof payload.productCode === "string" ? normalizeSku(payload.productCode) || null : null,
+      createdByUserId: actor.userId,
+      updatedByUserId: actor.userId,
+      variants: {
+        create: [{ name: "Default", optionKey: "default", position: 0, status: "ACTIVE" }],
+      },
+    },
+    select: { id: true },
+  });
+  const locationId = await defaultLocationId(actor.businessId);
+  const variant = await prisma.variant.findFirst({ where: { productId: product.id }, select: { id: true } });
+  if (variant) {
+    await withTransaction(async (tx) => {
+      await ensureBalance(tx, { locationId, variantId: variant.id });
+    });
+  }
+  return product;
+}
+
+async function updateAutosaveProduct(actor: CatalogActor, productId: string, name: string, payload: Record<string, unknown>) {
+  const sku = typeof payload.productCode === "string" ? normalizeSku(payload.productCode) || null : undefined;
+  await prisma.product.update({
+    where: { id: productId },
+    data: {
+      name,
+      ...(sku !== undefined ? { sku } : {}),
+      updatedByUserId: actor.userId,
+    },
+  });
 }
 
 export interface ProductDraftSummary {
@@ -1945,13 +2005,34 @@ export async function discardProductDraft(
   options: { productId?: string | null; draftId?: string | null; userId?: string | null },
 ): Promise<boolean> {
   if (!options.draftId && !options.productId && !options.userId) return false;
-  const result = await prisma.productDraft.deleteMany({
+
+  const drafts = await prisma.productDraft.findMany({
     where: {
       businessId,
       ...(options.draftId ? { id: options.draftId } : {}),
       ...(options.productId ? { productId: options.productId } : {}),
       ...(options.userId && !options.productId && !options.draftId ? { userId: options.userId } : {}),
     },
+    select: { id: true, productId: true },
+  });
+  if (drafts.length === 0) return false;
+
+  const productIds = [...new Set(drafts.map((draft) => draft.productId).filter((id): id is string => Boolean(id)))];
+  if (productIds.length > 0) {
+    await prisma.product.updateMany({
+      where: {
+        businessId,
+        id: { in: productIds },
+        status: "DRAFT",
+        publishedAt: null,
+        deletedAt: null,
+      },
+      data: { deletedAt: new Date(), archivedAt: new Date() },
+    });
+  }
+
+  const result = await prisma.productDraft.deleteMany({
+    where: { id: { in: drafts.map((draft) => draft.id) } },
   });
   return result.count > 0;
 }
@@ -1967,16 +2048,173 @@ async function recordBulkAudit(
 ): Promise<void> {
   await recordAudit(
     {
-    businessId: actor.businessId,
-    actorUserId: actor.userId,
-    actorLabel: actor.actorLabel,
-    action: `variant.bulk_${input.action.replace(/-/g, "_")}`,
-    entityType: "Product",
-    entityId: productId,
-    summary: `Bulk ${input.action} on ${targetDescription} (${affected} changed, ${skipped} preserved)`,
-    after: { action: input.action, target: input.target, affected, skipped, replaceOverrides: input.replaceOverrides },
-    changedFields: ["variants"],
-  },
+      businessId: actor.businessId,
+      actorUserId: actor.userId,
+      actorLabel: actor.actorLabel,
+      action: `variant.bulk_${input.action.replace(/-/g, "_")}`,
+      entityType: "Product",
+      entityId: productId,
+      summary: `Bulk ${input.action} on ${targetDescription} (${affected} changed, ${skipped} preserved)`,
+      after: { action: input.action, target: input.target, affected, skipped, replaceOverrides: input.replaceOverrides },
+      changedFields: ["variants"],
+    },
     tx,
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Labels (inline create, same pattern as brands)                             */
+/* -------------------------------------------------------------------------- */
+
+export interface LabelOption {
+  id: string;
+  name: string;
+  slug: string;
+  colorHex: string | null;
+  productCount: number;
+  image: { id: string; url: string | null; originalName: string; altText: string | null } | null;
+}
+
+export async function createLabel(actor: CatalogActor, input: LabelInput) {
+  return withTransaction(async (tx) => {
+    const baseSlug = input.slug?.trim() || slugify(input.name);
+    if (!baseSlug) throw AppError.validation("Enter a label name that can be turned into a URL slug.");
+
+    let slug = baseSlug;
+    for (let suffix = 2; suffix <= 100; suffix += 1) {
+      const clash = await tx.label.findFirst({ where: { businessId: actor.businessId, slug }, select: { id: true } });
+      if (!clash) break;
+      slug = `${baseSlug}-${suffix}`;
+    }
+
+    const existingByName = await tx.label.findFirst({
+      where: { businessId: actor.businessId, name: { equals: input.name, mode: "insensitive" }, deletedAt: null },
+      select: { id: true, name: true, slug: true },
+    });
+    if (existingByName) {
+      throw AppError.conflict(`A label named "${existingByName.name}" already exists. Select it instead of creating a duplicate.`);
+    }
+
+    if (input.imageMediaId) {
+      const assets = await assertMediaAssetsAvailable(tx, actor.businessId, [input.imageMediaId]);
+      assertImageAssets(assets);
+    }
+
+    const label = await tx.label.create({
+      data: {
+        businessId: actor.businessId,
+        name: input.name.trim(),
+        slug,
+        description: input.description?.trim() || null,
+        colorHex: input.colorHex || null,
+        imageMediaId: input.imageMediaId ?? null,
+        isActive: input.isActive ?? true,
+      },
+      select: { id: true, name: true, slug: true },
+    });
+
+    if (input.imageMediaId) {
+      await attachAssociation(tx, {
+        mediaId: input.imageMediaId,
+        entityType: "LABEL",
+        entityId: label.id,
+        field: "image",
+      });
+      await syncMediaUsageCounts(tx, [input.imageMediaId]);
+    }
+
+    await recordAudit(
+      {
+        businessId: actor.businessId,
+        actorUserId: actor.userId,
+        actorLabel: actor.actorLabel,
+        action: "label.created",
+        entityType: "Label",
+        entityId: label.id,
+        summary: `Created label ${label.name}`,
+        changedFields: ["label"],
+      },
+      tx,
+    );
+
+    return label;
+  });
+}
+
+export async function listLabelOptions(businessId: string): Promise<LabelOption[]> {
+  const labels = await prisma.label.findMany({
+    where: { businessId, deletedAt: null },
+    orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    include: {
+      image: {
+        select: {
+          id: true,
+          objectKey: true,
+          originalName: true,
+          altText: true,
+          mimeType: true,
+          visibility: true,
+          title: true,
+          caption: true,
+          extension: true,
+          sizeBytes: true,
+          width: true,
+          height: true,
+          folderId: true,
+          usageCount: true,
+          createdAt: true,
+        },
+      },
+      _count: { select: { products: { where: { product: { deletedAt: null } } } } },
+    },
+  });
+
+  return Promise.all(
+    labels.map(async (label) => ({
+      id: label.id,
+      name: label.name,
+      slug: label.slug,
+      colorHex: label.colorHex,
+      productCount: label._count.products,
+      image: label.image ? await toAssetView(label.image) : null,
+    })),
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Bin: restore / permanently delete                                          */
+/* -------------------------------------------------------------------------- */
+
+export async function listBinnedProducts(businessId: string) {
+  return prisma.product.findMany({
+    where: { businessId, OR: [{ deletedAt: { not: null } }, { status: "ARCHIVED" }] },
+    orderBy: { updatedAt: "desc" },
+    take: 200,
+    select: { id: true, name: true, sku: true, slug: true, status: true, deletedAt: true, archivedAt: true, updatedAt: true },
+  });
+}
+
+export async function restoreBinnedProduct(actor: CatalogActor, productId: string) {
+  const product = await prisma.product.findFirst({
+    where: { id: productId, businessId: actor.businessId },
+    select: { id: true, name: true, deletedAt: true, status: true },
+  });
+  if (!product) throw AppError.notFound("Product not found");
+  return prisma.product.update({
+    where: { id: product.id },
+    data: { deletedAt: null, archivedAt: null, status: "DRAFT" },
+  });
+}
+
+export async function permanentlyDeleteProduct(actor: CatalogActor, productId: string) {
+  const product = await prisma.product.findFirst({
+    where: { id: productId, businessId: actor.businessId },
+    select: { id: true, name: true, deletedAt: true, status: true },
+  });
+  if (!product) throw AppError.notFound("Product not found");
+  if (!product.deletedAt && product.status !== "ARCHIVED") {
+    throw AppError.invalidState("Move the product to the bin before permanently deleting it.");
+  }
+  await prisma.product.delete({ where: { id: product.id } });
+  return { deleted: true as const };
 }

@@ -10,11 +10,15 @@ import { addAttributeValue as addAttributeValueService, createAttribute as creat
 import {
   bulkApplyVariantAction,
   createBrand,
+  createLabel,
   createUnitLabel,
   discardProductDraft,
   listBrandOptions,
+  listLabelOptions,
   listProductDrafts,
   loadProductDraft,
+  permanentlyDeleteProduct,
+  restoreBinnedProduct,
   saveProduct,
   saveProductDraft,
   setAttributeValueImage,
@@ -22,14 +26,17 @@ import {
 } from "@/modules/catalog/product-service";
 import {
   createBrandPreset,
+  createLabelPreset,
   createPackagingCostTemplate,
   createTaxRate,
   createUnitLabelPreset,
   deleteBrandPreset,
+  deleteLabelPreset,
   deletePackagingCostTemplate,
   deleteTaxRate,
   deleteUnitLabelPreset,
   updateBrandPreset,
+  updateLabelPreset,
   updatePackagingCostTemplate,
   updateTaxRate,
   updateUnitLabelPreset,
@@ -43,6 +50,7 @@ import {
   attributeValueInputSchema,
   brandInputSchema,
   bulkVariantActionSchema,
+  labelInputSchema,
   packagingCostTemplateInputSchema,
   productDraftSchema,
   singleVariantUpdateSchema,
@@ -168,8 +176,6 @@ export interface SkuCheckResult {
 export async function checkProductSkusAction(input: {
   productId?: string;
   productCode?: string;
-  /** Legacy: variants no longer carry their own code, so this is usually empty. */
-  variantSkus?: Array<{ key: string; sku: string }>;
 }): Promise<ActionResult<SkuCheckResult>> {
   try {
     const session = await requireSession();
@@ -177,42 +183,15 @@ export async function checkProductSkusAction(input: {
     const parsed = skuCheckSchema.parse(input);
 
     const variants: Record<string, SkuCheckEntry> = {};
-    const seen = new Map<string, string[]>();
-    for (const entry of parsed.variantSkus) {
-      const sku = entry.sku.trim().toUpperCase();
-      if (!sku) continue;
-      seen.set(sku, [...(seen.get(sku) ?? []), entry.key]);
-    }
-
-    const codes = [...seen.keys()];
-    const clashes = codes.length > 0 ? await prisma.variant.findMany({ where: { sku: { in: codes } }, select: { sku: true, productId: true } }) : [];
-    const clashMap = new Map(clashes.map((row) => [row.sku, row.productId]));
-
-    for (const [sku, keys] of seen) {
-      if (keys.length > 1) {
-        for (const key of keys) variants[key] = { available: false, message: `${sku} is used by more than one variant in this product.` };
-        continue;
-      }
-      const owner = clashMap.get(sku);
-      const entry: SkuCheckEntry =
-        owner && owner !== parsed.productId
-          ? { available: false, message: `${sku} is already used by another product.` }
-          : { available: true };
-      for (const key of keys) variants[key] = entry;
-    }
 
     let productCode: SkuCheckEntry = { available: true };
     const code = parsed.productSku?.trim().toUpperCase();
     if (code) {
-      const [productClash, variantClash] = await Promise.all([
-        prisma.product.findFirst({
-          where: { businessId: session.businessId, sku: { equals: code, mode: "insensitive" }, ...(parsed.productId ? { id: { not: parsed.productId } } : {}) },
-          select: { name: true },
-        }),
-        prisma.variant.findFirst({ where: { sku: code }, select: { id: true } }),
-      ]);
+      const productClash = await prisma.product.findFirst({
+        where: { businessId: session.businessId, sku: { equals: code, mode: "insensitive" }, ...(parsed.productId ? { id: { not: parsed.productId } } : {}) },
+        select: { name: true },
+      });
       if (productClash) productCode = { available: false, message: `Already used by "${productClash.name}".` };
-      else if (variantClash) productCode = { available: false, message: "Already used by a variant." };
     }
 
     return { ok: true, data: { productCode, variants } };
@@ -244,6 +223,29 @@ export async function listBrandsAction(): Promise<ActionResult<Awaited<ReturnTyp
     return { ok: true, data: await listBrandOptions(session.businessId) };
   } catch (error) {
     return failure(error, "Unable to load brands.");
+  }
+}
+
+export async function createLabelAction(input: unknown): Promise<ActionResult<{ id: string; name: string; slug: string }>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = labelInputSchema.parse(input);
+    const label = await createLabel(actor, parsed);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/catalog/labels");
+    return { ok: true, data: label };
+  } catch (error) {
+    return failure(error, "Unable to create the label.");
+  }
+}
+
+export async function listLabelsAction(): Promise<ActionResult<Awaited<ReturnType<typeof listLabelOptions>>>> {
+  try {
+    const session = await requireSession();
+    assertPermission(session, "product.view");
+    return { ok: true, data: await listLabelOptions(session.businessId) };
+  } catch (error) {
+    return failure(error, "Unable to load labels.");
   }
 }
 
@@ -644,5 +646,75 @@ export async function deleteBrandPresetAction(id: string): Promise<ActionResult<
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to delete brand.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presets: Labels                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function createLabelPresetAction(input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = labelInputSchema.parse(input);
+    const result = await createLabelPreset(actor, parsed);
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to create label.");
+  }
+}
+
+export async function updateLabelPresetAction(id: string, input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = labelInputSchema.parse(input);
+    const result = await updateLabelPreset(actor, id, parsed);
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update label.");
+  }
+}
+
+export async function deleteLabelPresetAction(id: string): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await deleteLabelPreset(actor, id);
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to delete label.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Bin                                                                        */
+/* -------------------------------------------------------------------------- */
+
+export async function restoreBinnedProductAction(productId: string): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.archive"]);
+    const result = await restoreBinnedProduct(actor, productId);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error, "Unable to restore the product.");
+  }
+}
+
+export async function permanentlyDeleteProductAction(productId: string): Promise<ActionResult<{ deleted: true }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.archive"]);
+    const result = await permanentlyDeleteProduct(actor, productId);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to permanently delete the product.");
   }
 }

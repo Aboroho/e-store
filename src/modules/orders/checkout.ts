@@ -87,13 +87,13 @@ export async function checkoutCatalog(storefront: CheckoutStorefront, limit = 60
     select: {
       id: true,
       name: true,
+      sku: true,
       isPreorderEnabled: true,
       variants: {
         where: { status: "ACTIVE" },
         orderBy: { position: "asc" },
         select: {
           id: true,
-          sku: true,
           name: true,
           priceOverridePaisa: true,
           compareAtPricePaisa: true,
@@ -131,7 +131,7 @@ export async function checkoutCatalog(storefront: CheckoutStorefront, limit = 60
       const pricePaisa = priceItem?.pricePaisa ?? variant.priceOverridePaisa ?? 0;
       return {
         variantId: variant.id,
-        sku: variant.sku ?? "",
+        sku: product.sku ?? "",
         variantName: variant.name,
         productId: product.id,
         productName: product.name,

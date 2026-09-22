@@ -45,8 +45,10 @@ export interface ProductEditorState {
   /** The product's SKU — the only SKU in the workflow. */
   productCode: string;
   barcode: string;
+  productType: "SIMPLE" | "VARIABLE";
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   brandId: string | null;
+  labelIds: string[];
   unitLabel: string;
   unitLabelId: string | null;
   weightValue: string;
@@ -59,6 +61,8 @@ export interface ProductEditorState {
   selectedValueIds: string[];
   shortDescription: RichTextDocument;
   description: RichTextDocument;
+  /** Independent of `images`. Never stored as additional-image row 0. */
+  primaryImage: EditorImageItem | null;
   images: EditorImageItem[];
   seoImage: MediaAssetView | null;
   attributeValueImages: Record<string, string | null>;
@@ -128,6 +132,9 @@ function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
     asset: image,
     altText: image.altText ?? null,
   }));
+  const primaryImage: EditorImageItem | null = product?.primaryImage
+    ? { mediaId: product.primaryImage.id, asset: product.primaryImage, altText: product.primaryImage.altText ?? null }
+    : null;
 
   return {
     name: product?.name ?? "",
@@ -135,8 +142,10 @@ function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
     slugTouched: Boolean(product),
     productCode: product?.productCode ?? "",
     barcode: product?.barcode ?? "",
+    productType: product?.productType === "VARIABLE" ? "VARIABLE" : "SIMPLE",
     status: (product?.status as ProductEditorState["status"]) ?? "DRAFT",
     brandId: product?.brandId ?? null,
+    labelIds: product?.labelIds ?? [],
     unitLabel: product?.unitLabel ?? initial.unitLabels.find((label) => label.isDefault)?.name ?? "piece",
     unitLabelId: product?.unitLabelId ?? null,
     weightValue: product?.weightGrams != null ? fromWeightGrams(product.weightGrams, isWeightUnit(product.weightUnit) ? product.weightUnit : DEFAULT_WEIGHT_UNIT) : "",
@@ -147,6 +156,7 @@ function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
     selectedValueIds: product ? [...new Set(product.variants.flatMap((variant) => variant.attributeValueIds))] : [],
     shortDescription: parseRichText(product?.shortDescription),
     description: parseRichText(product?.description),
+    primaryImage,
     images,
     seoImage: product?.seoImage ?? null,
     attributeValueImages: defaultAttributeValueImages(initial.attributes),

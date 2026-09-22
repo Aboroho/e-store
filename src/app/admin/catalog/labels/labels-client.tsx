@@ -4,12 +4,11 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, Edit2 } from "lucide-react";
 import {
-  createBrandPresetAction,
-  updateBrandPresetAction,
-  deleteBrandPresetAction,
+  createLabelPresetAction,
+  updateLabelPresetAction,
+  deleteLabelPresetAction,
 } from "@/modules/catalog/product-actions";
 import {
-  Badge,
   Button,
   Card,
   CardContent,
@@ -25,50 +24,48 @@ import {
 } from "@/components/ui/primitives";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/interactive";
 
-interface BrandItem {
+interface LabelItem {
   id: string;
   name: string;
   slug: string;
   description: string | null;
-  websiteUrl: string | null;
+  colorHex: string | null;
   productCount?: number;
-  _count?: { products: number };
 }
 
-export function BrandsManager({
+export function LabelsManager({
   initialItems,
   canManage,
 }: {
-  initialItems: BrandItem[];
+  initialItems: LabelItem[];
   canManage: boolean;
 }) {
   const router = useRouter();
-  const [items, setItems] = React.useState<BrandItem[]>(initialItems);
   const [createOpen, setCreateOpen] = React.useState(false);
-  const [editItem, setEditItem] = React.useState<BrandItem | null>(null);
-  const [deleteItem, setDeleteItem] = React.useState<BrandItem | null>(null);
+  const [editItem, setEditItem] = React.useState<LabelItem | null>(null);
+  const [deleteItem, setDeleteItem] = React.useState<LabelItem | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
-  const [websiteUrl, setWebsiteUrl] = React.useState("");
+  const [colorHex, setColorHex] = React.useState("");
 
   const resetForm = () => {
     setName("");
     setSlug("");
     setDescription("");
-    setWebsiteUrl("");
+    setColorHex("");
     setError(null);
   };
 
-  const handleOpenEdit = (item: BrandItem) => {
+  const handleOpenEdit = (item: LabelItem) => {
     setEditItem(item);
     setName(item.name);
     setSlug(item.slug);
     setDescription(item.description ?? "");
-    setWebsiteUrl(item.websiteUrl ?? "");
+    setColorHex(item.colorHex ?? "");
     setError(null);
   };
 
@@ -76,11 +73,11 @@ export function BrandsManager({
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const result = await createBrandPresetAction({
+    const result = await createLabelPresetAction({
       name,
       slug: slug.trim() || undefined,
       description: description.trim() || undefined,
-      websiteUrl: websiteUrl.trim() || undefined,
+      colorHex: colorHex.trim() || undefined,
     });
     setLoading(false);
     if (result.ok) {
@@ -97,11 +94,11 @@ export function BrandsManager({
     if (!editItem) return;
     setError(null);
     setLoading(true);
-    const result = await updateBrandPresetAction(editItem.id, {
+    const result = await updateLabelPresetAction(editItem.id, {
       name,
       slug: slug.trim() || undefined,
       description: description.trim() || undefined,
-      websiteUrl: websiteUrl.trim() || undefined,
+      colorHex: colorHex.trim() || undefined,
     });
     setLoading(false);
     if (result.ok) {
@@ -116,10 +113,10 @@ export function BrandsManager({
   const handleDelete = async () => {
     if (!deleteItem) return;
     setLoading(true);
-    const res = await deleteBrandPresetAction(deleteItem.id);
+    setError(null);
+    const res = await deleteLabelPresetAction(deleteItem.id);
     setLoading(false);
     if (res.ok) {
-      setItems((prev) => prev.filter((i) => i.id !== deleteItem.id));
       setDeleteItem(null);
       router.refresh();
     } else {
@@ -130,58 +127,35 @@ export function BrandsManager({
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <p className="text-sm text-slate-500">
-          Brands and manufacturers associated with your product catalog.
-        </p>
+        <p className="text-sm text-slate-500">Labels group products for merchandising and filters, the same way brands and categories do.</p>
         {canManage ? (
           <Dialog open={createOpen} onOpenChange={(o) => { setCreateOpen(o); if (!o) resetForm(); }}>
             <DialogTrigger asChild>
               <Button size="sm">
-                <Plus className="mr-1 h-4 w-4" /> Add Brand
+                <Plus className="mr-1 h-4 w-4" /> Add label
               </Button>
             </DialogTrigger>
-            <DialogContent title="Add Brand" className="max-w-md">
+            <DialogContent title="Add label" className="max-w-md">
               <form onSubmit={handleCreate} className="space-y-4">
                 {error && <p className="text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p>}
-                <FormField label="Brand Name" htmlFor="brand-name">
-                  <Input
-                    id="brand-name"
-                    required
-                    placeholder="e.g. Acme Wear"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
+                <FormField label="Label name" htmlFor="label-name">
+                  <Input id="label-name" required placeholder="e.g. New arrival" value={name} onChange={(e) => setName(e.target.value)} />
                 </FormField>
-                <FormField label="Slug (optional)" htmlFor="brand-slug">
-                  <Input
-                    id="brand-slug"
-                    placeholder="e.g. acme-wear (auto-generated if empty)"
-                    value={slug}
-                    onChange={(e) => setSlug(e.target.value)}
-                  />
+                <FormField label="Slug (optional)" htmlFor="label-slug">
+                  <Input id="label-slug" placeholder="auto-generated if empty" value={slug} onChange={(e) => setSlug(e.target.value)} />
                 </FormField>
-                <FormField label="Website URL (optional)" htmlFor="brand-url">
-                  <Input
-                    id="brand-url"
-                    placeholder="https://example.com"
-                    value={websiteUrl}
-                    onChange={(e) => setWebsiteUrl(e.target.value)}
-                  />
+                <FormField label="Colour (optional)" htmlFor="label-color">
+                  <Input id="label-color" placeholder="#ef4444" value={colorHex} onChange={(e) => setColorHex(e.target.value)} />
                 </FormField>
-                <FormField label="Description (optional)" htmlFor="brand-desc">
-                  <Input
-                    id="brand-desc"
-                    placeholder="Brief description of the brand"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
+                <FormField label="Description (optional)" htmlFor="label-desc">
+                  <Input id="label-desc" placeholder="When to use this label" value={description} onChange={(e) => setDescription(e.target.value)} />
                 </FormField>
                 <div className="flex justify-end gap-2 pt-2">
                   <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
                     Cancel
                   </Button>
                   <Button type="submit" disabled={loading}>
-                    {loading ? "Saving…" : "Save Brand"}
+                    {loading ? "Saving…" : "Save label"}
                   </Button>
                 </div>
               </form>
@@ -192,44 +166,27 @@ export function BrandsManager({
 
       {editItem && (
         <Dialog open={Boolean(editItem)} onOpenChange={(o) => { if (!o) { setEditItem(null); resetForm(); } }}>
-          <DialogContent title="Edit Brand" className="max-w-md">
+          <DialogContent title="Edit label" className="max-w-md">
             <form onSubmit={handleUpdate} className="space-y-4">
               {error && <p className="text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p>}
-              <FormField label="Brand Name" htmlFor="edit-brand-name">
-                <Input
-                  id="edit-brand-name"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
+              <FormField label="Label name" htmlFor="edit-label-name">
+                <Input id="edit-label-name" required value={name} onChange={(e) => setName(e.target.value)} />
               </FormField>
-              <FormField label="Slug" htmlFor="edit-brand-slug">
-                <Input
-                  id="edit-brand-slug"
-                  value={slug}
-                  onChange={(e) => setSlug(e.target.value)}
-                />
+              <FormField label="Slug" htmlFor="edit-label-slug">
+                <Input id="edit-label-slug" value={slug} onChange={(e) => setSlug(e.target.value)} />
               </FormField>
-              <FormField label="Website URL (optional)" htmlFor="edit-brand-url">
-                <Input
-                  id="edit-brand-url"
-                  value={websiteUrl}
-                  onChange={(e) => setWebsiteUrl(e.target.value)}
-                />
+              <FormField label="Colour (optional)" htmlFor="edit-label-color">
+                <Input id="edit-label-color" value={colorHex} onChange={(e) => setColorHex(e.target.value)} />
               </FormField>
-              <FormField label="Description (optional)" htmlFor="edit-brand-desc">
-                <Input
-                  id="edit-brand-desc"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
+              <FormField label="Description (optional)" htmlFor="edit-label-desc">
+                <Input id="edit-label-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
               </FormField>
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="outline" onClick={() => { setEditItem(null); resetForm(); }}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={loading}>
-                  {loading ? "Saving…" : "Update Brand"}
+                  {loading ? "Saving…" : "Update label"}
                 </Button>
               </div>
             </form>
@@ -239,8 +196,8 @@ export function BrandsManager({
 
       {deleteItem ? (
         <Dialog open={Boolean(deleteItem)} onOpenChange={(open) => { if (!open) setDeleteItem(null); }}>
-          <DialogContent title="Delete this brand?" description="Products keep their other organisation. The brand is archived, not hard-deleted." className="max-w-md">
-            {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
+          <DialogContent title="Delete this label?" description="Products keep their other organisation. The label is archived, not hard-deleted." className="max-w-md">
+            {error && <p className="text-sm text-rose-600 bg-rose-50 p-2 rounded mb-3">{error}</p>}
             <p className="text-sm text-slate-600">
               Delete <span className="font-medium text-slate-900">{deleteItem.name}</span>?
             </p>
@@ -249,7 +206,7 @@ export function BrandsManager({
                 Cancel
               </Button>
               <Button type="button" variant="destructive" disabled={loading} onClick={handleDelete}>
-                {loading ? "Deleting…" : "Delete brand"}
+                {loading ? "Deleting…" : "Delete label"}
               </Button>
             </div>
           </DialogContent>
@@ -259,10 +216,7 @@ export function BrandsManager({
       {initialItems.length === 0 ? (
         <Card>
           <CardContent>
-            <EmptyState
-              title="No brands configured"
-              description="Add brands and manufacturers to organise products and enhance customer search."
-            />
+            <EmptyState title="No labels yet" description="Add labels to tag products for merchandising and storefront filters." />
           </CardContent>
         </Card>
       ) : (
@@ -270,53 +224,35 @@ export function BrandsManager({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Brand Name</TableHead>
+                <TableHead>Label</TableHead>
                 <TableHead>Slug</TableHead>
                 <TableHead className="text-center">Products</TableHead>
-                <TableHead>Website</TableHead>
                 {canManage && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {initialItems.map((brand) => (
-                <TableRow key={brand.id}>
+              {initialItems.map((label) => (
+                <TableRow key={label.id}>
                   <TableCell>
-                    <span className="font-medium text-slate-900">{brand.name}</span>
-                    {brand.description && (
-                      <p className="text-xs text-slate-500 mt-0.5">{brand.description}</p>
-                    )}
+                    <span className="font-medium text-slate-900 inline-flex items-center gap-2">
+                      {label.colorHex ? <span className="h-3 w-3 rounded-full border border-slate-200" style={{ backgroundColor: label.colorHex }} /> : null}
+                      {label.name}
+                    </span>
+                    {label.description ? <p className="text-xs text-slate-500 mt-0.5">{label.description}</p> : null}
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-slate-500">
-                    {brand.slug}
-                  </TableCell>
-                  <TableCell className="text-center text-sm text-slate-600">
-                    {brand.productCount ?? brand._count?.products ?? 0}
-                  </TableCell>
-                  <TableCell className="text-xs text-slate-600">
-                    {brand.websiteUrl ? (
-                      <a href={brand.websiteUrl} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
-                        {brand.websiteUrl}
-                      </a>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </TableCell>
+                  <TableCell className="font-mono text-xs text-slate-500">{label.slug}</TableCell>
+                  <TableCell className="text-center text-sm text-slate-600">{label.productCount ?? 0}</TableCell>
                   {canManage && (
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleOpenEdit(brand)}
-                          title="Edit"
-                        >
+                        <Button size="sm" variant="ghost" onClick={() => handleOpenEdit(label)} title="Edit">
                           <Edit2 className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                          onClick={() => { setError(null); setDeleteItem(brand); }}
+                          onClick={() => { setError(null); setDeleteItem(label); }}
                           title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

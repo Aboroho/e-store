@@ -82,7 +82,7 @@ export async function updateVariantAction(_prev: ActionState, formData: FormData
     const raw = formDataToObject(formData);
     const variantId = String(raw.variantId ?? "");
     const parsed = parseInput(
-      variantInputSchema.partial({ name: true, sku: true, pricePaisa: true }),
+      variantInputSchema.partial({ name: true, pricePaisa: true }),
       {
         ...raw,
         pricePaisa: bdtToPaisa(raw.pricePaisa),

@@ -2,7 +2,7 @@ import "server-only";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { slugify } from "@/lib/utils";
-import type { BrandInput, PackagingCostTemplateInput, TaxRateInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
+import type { BrandInput, LabelInput, PackagingCostTemplateInput, TaxRateInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
 import type { CatalogActor } from "@/modules/catalog/service";
 
 /* -------------------------------------------------------------------------- */
@@ -251,7 +251,7 @@ export async function deleteUnitLabelPreset(actor: CatalogActor, id: string) {
 
 export async function listBrandsWithCounts(businessId: string) {
   const brands = await prisma.brand.findMany({
-    where: { businessId },
+    where: { businessId, deletedAt: null },
     include: {
       _count: { select: { products: true } },
       logo: { select: { id: true, objectKey: true, visibility: true, originalName: true, extension: true } },
@@ -333,14 +333,106 @@ export async function updateBrandPreset(actor: CatalogActor, id: string, input: 
 
 export async function deleteBrandPreset(actor: CatalogActor, id: string) {
   const current = await prisma.brand.findFirst({
-    where: { id, businessId: actor.businessId },
+    where: { id, businessId: actor.businessId, deletedAt: null },
   });
   if (!current) throw AppError.notFound("Brand not found");
 
-  await prisma.product.updateMany({
-    where: { brandId: id },
-    data: { brandId: null, brand: null },
+  return prisma.brand.update({
+    where: { id },
+    data: { deletedAt: new Date(), isActive: false },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Labels                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export async function listLabelsWithCounts(businessId: string) {
+  const labels = await prisma.label.findMany({
+    where: { businessId, deletedAt: null },
+    include: {
+      _count: { select: { products: true } },
+      image: { select: { id: true, objectKey: true, visibility: true, originalName: true, extension: true } },
+    },
+    orderBy: [{ name: "asc" }],
   });
 
-  return prisma.brand.delete({ where: { id } });
+  return labels.map((label) => ({
+    id: label.id,
+    name: label.name,
+    slug: label.slug,
+    description: label.description,
+    colorHex: label.colorHex,
+    isActive: label.isActive,
+    productCount: label._count.products,
+    imageMediaId: label.imageMediaId,
+    image: label.image,
+    createdAt: label.createdAt,
+    updatedAt: label.updatedAt,
+  }));
+}
+
+export { listLabelsWithCounts as listLabels };
+
+export async function createLabelPreset(actor: CatalogActor, input: LabelInput) {
+  return withTransaction(async (tx) => {
+    const slug = slugify(input.slug ?? input.name);
+    const clash = await tx.label.findFirst({
+      where: { businessId: actor.businessId, slug, deletedAt: null },
+    });
+    if (clash) throw AppError.conflict(`A label with the handle "${slug}" already exists`);
+
+    return tx.label.create({
+      data: {
+        businessId: actor.businessId,
+        name: input.name.trim(),
+        slug,
+        description: input.description ?? null,
+        colorHex: input.colorHex || null,
+        imageMediaId: input.imageMediaId ?? null,
+        isActive: input.isActive ?? true,
+      },
+    });
+  });
+}
+
+export async function updateLabelPreset(actor: CatalogActor, id: string, input: Partial<LabelInput>) {
+  return withTransaction(async (tx) => {
+    const current = await tx.label.findFirst({
+      where: { id, businessId: actor.businessId, deletedAt: null },
+    });
+    if (!current) throw AppError.notFound("Label not found");
+
+    const slug = input.slug ? slugify(input.slug) : undefined;
+    if (slug && slug !== current.slug) {
+      const clash = await tx.label.findFirst({
+        where: { businessId: actor.businessId, slug, id: { not: id }, deletedAt: null },
+      });
+      if (clash) throw AppError.conflict(`A label with the handle "${slug}" already exists`);
+    }
+
+    return tx.label.update({
+      where: { id },
+      data: {
+        name: input.name !== undefined ? input.name.trim() : undefined,
+        slug,
+        description: input.description !== undefined ? input.description : undefined,
+        colorHex: input.colorHex !== undefined ? input.colorHex || null : undefined,
+        imageMediaId: input.imageMediaId !== undefined ? input.imageMediaId : undefined,
+        isActive: input.isActive !== undefined ? input.isActive : undefined,
+      },
+    });
+  });
+}
+
+export async function deleteLabelPreset(actor: CatalogActor, id: string) {
+  const current = await prisma.label.findFirst({
+    where: { id, businessId: actor.businessId, deletedAt: null },
+  });
+  if (!current) throw AppError.notFound("Label not found");
+
+  return prisma.label.update({
+    where: { id },
+    data: { deletedAt: new Date(), isActive: false },
+  });
 }

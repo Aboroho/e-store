@@ -110,7 +110,6 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
 
     // Validate the combinations before writing anything.
     const seenOptionKeys = new Set<string>();
-    const seenSkus = new Set<string>();
     for (const variant of input.variants) {
       const key = optionKeyFor(
         variant.attributeValueIds.map((id) => {
@@ -122,9 +121,6 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
         throw AppError.validation(`Two variants share the same option combination (${key.replace(/\|/g, " + ")})`);
       }
       if (key) seenOptionKeys.add(key);
-      const sku = variant.sku.toUpperCase();
-      if (seenSkus.has(sku)) throw AppError.validation(`Duplicate SKU in this product: ${sku}`);
-      seenSkus.add(sku);
     }
 
     const product = await tx.product.create({
@@ -180,7 +176,6 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
       const variant = await tx.variant.create({
         data: {
           productId: product.id,
-          sku: variantInput.sku.toUpperCase(),
           barcode: variantInput.barcode ?? null,
           name: variantInput.name,
           optionKey: optionKey || "default",
@@ -207,7 +202,7 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
               }
             : undefined,
         },
-        select: { id: true, sku: true, name: true },
+        select: { id: true, name: true },
       });
 
       await tx.priceListItem.create({
@@ -252,7 +247,7 @@ export async function createProduct(actor: CatalogActor, input: ProductInput) {
         entityType: "Product",
         entityId: product.id,
         summary: `Created product ${product.name} with ${input.variants.length} variant(s)`,
-        after: { name: product.name, slug: product.slug, status: product.status, variants: input.variants.map((v) => v.sku) },
+        after: { name: product.name, slug: product.slug, status: product.status, variants: input.variants.map((v) => v.name) },
         changedFields: ["product"],
       },
     });
@@ -447,23 +442,14 @@ export async function updateVariant(actor: CatalogActor, variantId: string, inpu
   return withTransaction(async (tx) => {
     const variant = await tx.variant.findFirst({
       where: { id: variantId, product: { businessId: actor.businessId } },
-      select: { id: true, sku: true, name: true, priceOverridePaisa: true, costPaisa: true, productId: true },
+      select: { id: true, name: true, priceOverridePaisa: true, costPaisa: true, productId: true },
     });
     if (!variant) throw AppError.notFound("Variant not found");
-
-    if (input.sku && input.sku.toUpperCase() !== variant.sku) {
-      const clash = await tx.variant.findFirst({
-        where: { sku: input.sku.toUpperCase(), id: { not: variantId } },
-        select: { id: true },
-      });
-      if (clash) throw AppError.conflict(`SKU ${input.sku.toUpperCase()} is already used by another variant`);
-    }
 
     const updated = await tx.variant.update({
       where: { id: variantId },
       data: {
         name: input.name ?? undefined,
-        sku: input.sku ? input.sku.toUpperCase() : undefined,
         barcode: input.barcode !== undefined ? input.barcode || null : undefined,
         priceOverridePaisa: input.pricePaisa ?? undefined,
         compareAtPricePaisa: input.compareAtPricePaisa !== undefined ? input.compareAtPricePaisa : undefined,
@@ -471,7 +457,7 @@ export async function updateVariant(actor: CatalogActor, variantId: string, inpu
         weightGrams: input.weightGrams !== undefined ? input.weightGrams : undefined,
         isPreorderEnabled: input.isPreorderEnabled ?? undefined,
       },
-      select: { id: true, sku: true, name: true, priceOverridePaisa: true, costPaisa: true },
+      select: { id: true, name: true, priceOverridePaisa: true, costPaisa: true },
     });
 
     if (input.pricePaisa !== undefined) {
@@ -497,7 +483,7 @@ export async function updateVariant(actor: CatalogActor, variantId: string, inpu
         action: "variant.updated",
         entityType: "Variant",
         entityId: variantId,
-        summary: `Updated variant ${updated.sku}`,
+        summary: `Updated variant ${updated.name}`,
         before: { pricePaisa: variant.priceOverridePaisa, costPaisa: variant.costPaisa, name: variant.name },
         after: { pricePaisa: updated.priceOverridePaisa, costPaisa: updated.costPaisa, name: updated.name },
         changedFields: Object.keys(input),
@@ -519,9 +505,9 @@ export async function bulkUpdateVariants(
   return withTransaction(async (tx) => {
     const variants = await tx.variant.findMany({
       where: { productId, product: { businessId: actor.businessId } },
-      select: { id: true, sku: true },
+      select: { id: true, name: true },
     });
-    const validIds = new Map(variants.map((variant) => [variant.id, variant.sku]));
+    const validIds = new Map(variants.map((variant) => [variant.id, variant.name]));
     const priceList = await loadDefaultPriceList(tx, actor.businessId);
     let updatedCount = 0;
 
@@ -577,7 +563,7 @@ export async function archiveVariant(actor: CatalogActor, variantId: string, rea
   await withTransaction(async (tx) => {
     const variant = await tx.variant.findFirst({
       where: { id: variantId, product: { businessId: actor.businessId } },
-      select: { id: true, sku: true, productId: true },
+      select: { id: true, name: true, productId: true },
     });
     if (!variant) throw AppError.notFound("Variant not found");
 
@@ -596,7 +582,7 @@ export async function archiveVariant(actor: CatalogActor, variantId: string, rea
         action: "variant.archived",
         entityType: "Variant",
         entityId: variantId,
-        summary: `Archived variant ${variant.sku}`,
+        summary: `Archived variant ${variant.name}`,
         reason: reason ?? null,
         changedFields: ["status"],
       },

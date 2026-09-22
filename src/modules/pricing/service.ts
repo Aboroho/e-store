@@ -188,7 +188,7 @@ export async function setPriceListItem(
 
     const variant = await tx.variant.findFirst({
       where: { id: input.variantId, product: { businessId: actor.businessId } },
-      select: { id: true, sku: true, productId: true, priceOverridePaisa: true },
+      select: { id: true, productId: true, priceOverridePaisa: true, name: true, product: { select: { sku: true, name: true } } },
     });
     if (!variant) throw AppError.notFound("Variant not found");
 
@@ -225,7 +225,7 @@ export async function setPriceListItem(
         action: "price_list.item_set",
         entityType: "PriceList",
         entityId: input.priceListId,
-        summary: `Set price of ${variant.sku} to ${input.pricePaisa} paisa${minQuantity > 1 ? ` from ${minQuantity} units` : ""} in ${priceList.name}`,
+        summary: `Set price of ${variant.product?.sku ?? variant.name} to ${input.pricePaisa} paisa${minQuantity > 1 ? ` from ${minQuantity} units` : ""} in ${priceList.name}`,
         before: { pricePaisa: variant.priceOverridePaisa },
         after: { pricePaisa: input.pricePaisa, compareAtPricePaisa: input.compareAtPricePaisa ?? null },
         changedFields: ["pricePaisa"],

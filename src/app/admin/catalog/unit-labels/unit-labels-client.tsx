@@ -44,6 +44,7 @@ export function UnitLabelsManager({
   const [items, setItems] = React.useState<UnitLabelItem[]>(initialItems);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editItem, setEditItem] = React.useState<UnitLabelItem | null>(null);
+  const [deleteItem, setDeleteItem] = React.useState<UnitLabelItem | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -100,16 +101,18 @@ export function UnitLabelsManager({
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this unit label?")) return;
+  const handleDelete = async () => {
+    if (!deleteItem) return;
     setLoading(true);
-    const res = await deleteUnitLabelPresetAction(id);
+    setError(null);
+    const res = await deleteUnitLabelPresetAction(deleteItem.id);
     setLoading(false);
     if (res.ok) {
-      setItems((prev) => prev.filter((i) => i.id !== id));
+      setItems((prev) => prev.filter((i) => i.id !== deleteItem.id));
+      setDeleteItem(null);
       router.refresh();
     } else {
-      alert(res.message);
+      setError(res.message);
     }
   };
 
@@ -160,6 +163,25 @@ export function UnitLabelsManager({
           </Dialog>
         ) : null}
       </div>
+
+      {deleteItem ? (
+        <Dialog open={Boolean(deleteItem)} onOpenChange={(open) => { if (!open) setDeleteItem(null); }}>
+          <DialogContent title="Delete this unit label?" description="Products that used this unit keep their existing label text. The preset is removed from the list." className="max-w-md">
+            {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
+            <p className="text-sm text-slate-600">
+              Delete <span className="font-medium text-slate-900">{deleteItem.name}</span>?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setDeleteItem(null)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" disabled={loading} onClick={handleDelete}>
+                {loading ? "Deleting…" : "Delete unit label"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       {editItem && (
         <Dialog open={Boolean(editItem)} onOpenChange={(o) => { if (!o) { setEditItem(null); resetForm(); } }}>
@@ -247,7 +269,7 @@ export function UnitLabelsManager({
                           size="sm"
                           variant="ghost"
                           className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                          onClick={() => handleDelete(unit.id)}
+                          onClick={() => { setError(null); setDeleteItem(unit); }}
                           title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

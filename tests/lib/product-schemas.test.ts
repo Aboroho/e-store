@@ -21,7 +21,6 @@ const uuid = () => randomUUID();
 
 const validVariant = {
   name: "Default variant",
-  sku: "TEE-1",
   pricePaisa: 12_000,
 };
 
@@ -62,7 +61,7 @@ describe("product draft: basic information", () => {
     expect(productDraftSchema.safeParse(payload({ slug: "a".repeat(80) })).success).toBe(true);
   });
 
-  it("requires a product code distinct from variant codes, 2–64 chars, safe alphabet", () => {
+  it("requires a product code of 2–64 chars with a safe alphabet", () => {
     expect(productDraftSchema.safeParse(payload({ productCode: "T" })).success).toBe(false);
     expect(productDraftSchema.safeParse(payload({ productCode: "BAD CODE!" })).success).toBe(false);
     expect(productDraftSchema.safeParse(payload({ productCode: "X".repeat(65) })).success).toBe(false);
@@ -127,10 +126,10 @@ describe("product draft: pricing and weight — money stays integer paisa", () =
 describe("product draft: variants and preorder", () => {
   it("requires 1–500 variants", () => {
     expect(productDraftSchema.safeParse(payload({ variants: [] })).success).toBe(false);
-    const many = Array.from({ length: 500 }, (_, index) => ({ ...validVariant, sku: `TEE-${index}` }));
+    const many = Array.from({ length: 500 }, (_, index) => ({ ...validVariant, name: `Variant ${index}` }));
     expect(productDraftSchema.safeParse(payload({ variants: many })).success).toBe(true);
     expect(
-      productDraftSchema.safeParse(payload({ variants: [...many, { ...validVariant, sku: "TEE-500" }] })).success,
+      productDraftSchema.safeParse(payload({ variants: [...many, { ...validVariant, name: "Variant 500" }] })).success,
     ).toBe(false);
   });
 
@@ -237,9 +236,7 @@ describe("bulk action schema", () => {
 describe("availability check payloads", () => {
   it("bounds slug and sku check requests", () => {
     expect(slugCheckSchema.safeParse({ slug: "scarf" }).success).toBe(true);
-    expect(skuCheckSchema.safeParse({ productSku: "TEE", variantSkus: [{ key: "row-1", sku: "TEE-1" }] }).success).toBe(true);
-    expect(
-      skuCheckSchema.safeParse({ variantSkus: Array.from({ length: 501 }, (_, i) => ({ key: `k${i}`, sku: `S-${i}` })) }).success,
-    ).toBe(false);
+    expect(skuCheckSchema.safeParse({ productSku: "TEE" }).success).toBe(true);
+    expect(skuCheckSchema.safeParse({ productSku: "X".repeat(65) }).success).toBe(false);
   });
 });

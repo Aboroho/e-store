@@ -104,13 +104,11 @@ export function AttributesVariationsSection({
           attributes={attributes}
           selectedAttributeIds={state.attributeIds}
           selectedValueIds={state.selectedValueIds}
-          attributeValueImages={state.attributeValueImages}
           attributesSummary={`${variantDefining.length} of them create variants.`}
           errors={errors}
           onPatch={onPatch}
           onAttributeCreated={onAttributeCreated}
           onValueAdded={onValueAdded}
-          onSetValueImage={onSetValueImage}
         />
 
         <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">

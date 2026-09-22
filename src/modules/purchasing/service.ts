@@ -91,7 +91,7 @@ export async function createPurchaseOrder(actor: PurchasingActor, input: Purchas
     const variantIds = input.items.map((item) => item.variantId);
     const variants = await tx.variant.findMany({
       where: { id: { in: variantIds }, product: { businessId: actor.businessId } },
-      select: { id: true, sku: true, name: true, costPaisa: true, product: { select: { name: true } } },
+      select: { id: true, name: true, costPaisa: true, product: { select: { name: true, sku: true } } },
     });
     if (variants.length !== new Set(variantIds).size) {
       throw AppError.validation("One or more variants do not exist");
@@ -125,7 +125,7 @@ export async function createPurchaseOrder(actor: PurchasingActor, input: Purchas
             const variant = variantById.get(item.variantId)!;
             return {
               variantId: item.variantId,
-              sku: variant.sku ?? "",
+              sku: variant.product?.sku ?? "",
               productName: variant.product.name,
               variantName: variant.name,
               orderedQuantity: item.orderedQuantity,

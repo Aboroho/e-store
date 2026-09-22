@@ -33,9 +33,16 @@ export const ADMIN_NAV: NavSection[] = [
     ],
   },
   {
-    title: "Catalog",
+    title: "Product",
     items: [
       { label: "Products", href: "/admin/catalog/products", permission: "product.view", icon: "Package", stage: 2 },
+      { label: "Labels", href: "/admin/catalog/labels", permission: "product.view", icon: "Tags", stage: 2 },
+      { label: "Bin", href: "/admin/bin", permission: "product.view", icon: "Trash2", stage: 2 },
+    ],
+  },
+  {
+    title: "Catalog",
+    items: [
       { label: "Categories", href: "/admin/catalog/categories", permission: "product.view", icon: "FolderTree", stage: 2 },
       { label: "Attributes", href: "/admin/catalog/attributes", permission: "product.view", icon: "Palette", stage: 2 },
       { label: "Brands", href: "/admin/catalog/brands", permission: "product.view", icon: "Bookmark", stage: 2 },

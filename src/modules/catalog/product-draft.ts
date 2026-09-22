@@ -219,18 +219,18 @@ export interface MatrixPlan {
  * Plan a regeneration without destroying anything.
  *
  * - A combination that already has a row keeps that row (and every value typed
- *   into it: SKU, price, images, overrides).
+ *   into it: price, images, overrides).
  * - A new combination becomes a row.
  * - A row whose combination is no longer selected is returned as an **orphan**
  *   rather than deleted, so a merchandiser who unticks a value by accident does
- *   not lose the SKU and price they already filled in. The UI lists those rows and
+ *   not lose the price they already filled in. The UI lists those rows and
  *   asks explicitly before removing them.
  */
 export function planMatrix(
   attributes: DraftAttribute[],
   selectedValueIds: string[],
   existing: DraftVariant[],
-  options: { skuPrefix?: string; keepOrphans?: boolean } = {},
+  options: { keepOrphans?: boolean } = {},
 ): MatrixPlan {
   const combinations = buildCombinations(attributes, selectedValueIds);
   const existingByKey = new Map(existing.map((row) => [combinationKey(row.attributeValueIds), row]));

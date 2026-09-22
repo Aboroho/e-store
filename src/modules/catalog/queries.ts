@@ -57,7 +57,7 @@ export async function listProducts(
             { name: { contains: query.search, mode: "insensitive" as const } },
             { brand: { contains: query.search, mode: "insensitive" as const } },
             { sku: { contains: query.search, mode: "insensitive" as const } },
-            { variants: { some: { sku: { contains: query.search, mode: "insensitive" as const } } } },
+            { variants: { some: { name: { contains: query.search, mode: "insensitive" as const } } } },
           ],
         }
       : {}),
@@ -82,7 +82,6 @@ export async function listProducts(
           select: {
             id: true,
             name: true,
-            sku: true,
             status: true,
             optionKey: true,
             priceOverridePaisa: true,
@@ -116,7 +115,7 @@ export async function listProducts(
       return {
         id: variant.id,
         name: variant.name,
-        sku: variant.sku,
+        sku: product.sku,
         optionKey: variant.optionKey,
         status: variant.status,
         pricePaisa: effectivePrice,
@@ -235,10 +234,9 @@ export async function getPriceListWithItems(businessId: string, priceListId: str
     take: 200,
     select: {
       id: true,
-      sku: true,
       name: true,
       priceOverridePaisa: true,
-      product: { select: { id: true, name: true } },
+      product: { select: { id: true, name: true, sku: true } },
       priceItems: { where: { priceListId }, select: { pricePaisa: true, compareAtPricePaisa: true } },
     },
   });

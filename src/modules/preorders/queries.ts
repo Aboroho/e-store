@@ -28,7 +28,7 @@ export async function listPreorderCommitments(
       skip: query.skip,
       take: query.take,
       include: {
-        variant: { select: { id: true, sku: true, name: true, product: { select: { id: true, name: true } } } },
+        variant: { select: { id: true, name: true, product: { select: { id: true, name: true, sku: true } } } },
         order: { select: { id: true, orderNumber: true, customerName: true, status: true } },
         allocations: { select: { quantity: true, createdAt: true } },
       },
@@ -53,7 +53,7 @@ export async function preorderBacklog(businessId: string) {
       variantId: true,
       quantity: true,
       allocatedQuantity: true,
-      variant: { select: { sku: true, name: true, product: { select: { name: true } } } },
+      variant: { select: { name: true, product: { select: { name: true, sku: true } } } },
     },
   });
 
@@ -66,7 +66,7 @@ export async function preorderBacklog(businessId: string) {
     if (outstanding <= 0) continue;
     const entry = byVariant.get(row.variantId) ?? {
       variantId: row.variantId,
-      sku: row.variant.sku ?? "",
+      sku: row.variant.product?.sku ?? "",
       variantName: row.variant.name,
       productName: row.variant.product.name,
       outstanding: 0,

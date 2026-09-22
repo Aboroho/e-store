@@ -57,7 +57,7 @@ export default async function PurchaseOrderDetailPage({ params }: { params: Prom
     .filter((item) => item.orderedQuantity - item.receivedQuantity > 0)
     .map((item) => ({
       id: item.id,
-      sku: item.variant.sku ?? "",
+      sku: item.variant.product?.sku ?? "",
       productName: `${item.variant.product.name} — ${item.variant.name}`,
       outstanding: item.orderedQuantity - item.receivedQuantity,
       unitCostPaisa: item.unitCostPaisa,
@@ -122,7 +122,7 @@ export default async function PurchaseOrderDetailPage({ params }: { params: Prom
                       {item.variant.product.name}
                     </Link>
                     <p className="text-xs text-slate-500">
-                      {item.variant.name} · <span className="font-mono">{item.variant.sku}</span>
+                      {item.variant.name} · <span className="font-mono">{item.variant.product?.sku}</span>
                     </p>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{item.orderedQuantity}</TableCell>

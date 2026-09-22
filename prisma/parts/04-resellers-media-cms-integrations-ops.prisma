@@ -435,9 +435,11 @@ model MediaAsset {
   reviewImages  ReviewImage[]
   pagesAsOgImage Page[]     @relation("PageOgImage")
   brandLogos Brand[]        @relation("BrandLogo")
+  labelImages Label[]       @relation("LabelImage")
   attributeValues AttributeValue[] @relation("AttributeValueImage")
   categories Category[]     @relation("CategoryImage")
   productsAsSeoImage Product[] @relation("ProductSeoImage")
+  productsAsPrimaryImage Product[] @relation("ProductPrimaryImage")
 
   @@index([businessId, createdAt])
   @@index([businessId, folderId])

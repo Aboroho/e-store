@@ -21,7 +21,7 @@ import { MediaPicker } from "@/components/media/media-picker";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { assetToRichTextAsset, uploadToMediaLibrary } from "@/components/media/media-upload";
 import { Combobox, FieldWithTip } from "./combobox";
-import { AddAttributeValueInline, CreateAttributeDialog, CreateBrandDialog, CreateCategoryDialog } from "./product-dialogs";
+import { AddAttributeValueInline, CreateAttributeDialog, CreateBrandDialog, CreateCategoryDialog, CreateLabelDialog } from "./product-dialogs";
 import { slugPreview } from "./product-url";
 import { WEIGHT_UNITS, type WeightUnit } from "@/modules/catalog/product-draft";
 import { formatPaisa } from "@/lib/money";
@@ -48,17 +48,14 @@ export function BasicInformationSection({
   onSlugChange,
   onRegenerateSlug,
   onPatch,
-  shortDescription,
-  description,
-  onShortDescriptionChange,
-  onDescriptionChange,
-  canUpload,
+  productType,
 }: {
   name: string;
   slug: string;
   slugTouched: boolean;
   productCode: string;
   barcode: string;
+  productType: "SIMPLE" | "VARIABLE";
   productUrlPrefix: string | null;
   slugState: { checking: boolean; available: boolean | null; suggestion: string | null };
   skuState: { checking: boolean; message?: string };
@@ -66,13 +63,7 @@ export function BasicInformationSection({
   onNameChange: (value: string) => void;
   onSlugChange: (value: string, options?: { manual?: boolean }) => void;
   onRegenerateSlug: () => void;
-  onPatch: (patch: { barcode?: string; productCode?: string }) => void;
-  /** Rich-text documents live with the product information, not with the settings. */
-  shortDescription?: RichTextDocument;
-  description?: RichTextDocument;
-  onShortDescriptionChange?: (value: RichTextDocument) => void;
-  onDescriptionChange?: (value: RichTextDocument) => void;
-  canUpload?: boolean;
+  onPatch: (patch: { barcode?: string; productCode?: string; productType?: "SIMPLE" | "VARIABLE" }) => void;
 }) {
   return (
     <CollapsibleSection
@@ -213,62 +204,118 @@ export function BasicInformationSection({
           </div>
           <Input id="product-barcode" value={barcode} maxLength={64} onChange={(event) => onPatch({ barcode: event.target.value })} />
         </div>
-      </div>
 
-      {onShortDescriptionChange || onDescriptionChange ? (
-        <div className="mt-5 space-y-6 border-t border-slate-200 pt-5">
-          {onShortDescriptionChange ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <Label className="text-slate-800">Short description</Label>
-                <InfoTip>
-                  One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the
-                  fallback meta description.
-                </InfoTip>
-              </div>
-              <RichTextEditor
-                value={shortDescription}
-                onChange={onShortDescriptionChange}
-                aria-label="Short description"
-                expandedTitle="Short description"
-                placeholder="Lightweight leather shoes for everyday wear."
-                minHeight={140}
-                maxHeight={260}
-                features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
-                toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
-                onUpload={canUpload ? uploadToMediaLibrary : undefined}
-                renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
-              />
-            </div>
-          ) : null}
-          {onDescriptionChange ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <Label className="text-slate-800">Long description</Label>
-                <InfoTip>
-                  The full product story on the product page. Images and video are picked from the shared media library, so the same asset
-                  is never uploaded twice and never deleted while a description uses it.
-                </InfoTip>
-              </div>
-              <RichTextEditor
-                value={description}
-                onChange={onDescriptionChange}
-                aria-label="Long description"
-                expandedTitle="Long description"
-                placeholder="Describe the materials, sizing, care instructions… Press / for headings, lists, images and video."
-                minHeight={260}
-                expandable
-                onUpload={canUpload ? uploadToMediaLibrary : undefined}
-                renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
-              />
-              <p className="text-xs text-slate-500">
-                Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting
-                is rejected on save.
-              </p>
-            </div>
-          ) : null}
+        <div className="space-y-1.5 lg:col-span-2">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-slate-800">
+              Product type <span className="text-red-500">*</span>
+            </Label>
+            <InfoTip>
+              Single products sell as one item. Variable products have options such as colour and size; each combination is a variant that
+              inherits the product price until you override it.
+            </InfoTip>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { value: "SIMPLE", label: "Single", help: "One sellable item, no option matrix." },
+                { value: "VARIABLE", label: "Variable", help: "Options generate variants." },
+              ] as const
+            ).map((choice) => (
+              <label
+                key={choice.value}
+                className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+                  productType === choice.value ? "border-brand-300 bg-brand-50 text-brand-800" : "border-slate-200 text-slate-700"
+                }`}
+              >
+                <input
+                  type="radio"
+                  className="mt-0.5"
+                  name="product-type"
+                  checked={productType === choice.value}
+                  onChange={() => onPatch({ productType: choice.value })}
+                />
+                <span>
+                  <span className="font-medium">{choice.label}</span>
+                  <span className="block text-xs text-slate-500">{choice.help}</span>
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
-      ) : null}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+export function ProductDescriptionSection({
+  shortDescription,
+  description,
+  onShortDescriptionChange,
+  onDescriptionChange,
+  canUpload,
+}: {
+  shortDescription: RichTextDocument;
+  description: RichTextDocument;
+  onShortDescriptionChange: (value: RichTextDocument) => void;
+  onDescriptionChange: (value: RichTextDocument) => void;
+  canUpload?: boolean;
+}) {
+  return (
+    <CollapsibleSection
+      id="description"
+      title="Product description"
+      description="What shoppers read on listings and on the product page. Images come from the shared media library."
+      icon={<ClipboardList className="h-4 w-4" />}
+    >
+      <div className="space-y-6">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-slate-800">Short description</Label>
+            <InfoTip>
+              One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the fallback
+              meta description.
+            </InfoTip>
+          </div>
+          <RichTextEditor
+            value={shortDescription}
+            onChange={onShortDescriptionChange}
+            aria-label="Short description"
+            expandedTitle="Short description"
+            placeholder="Lightweight leather shoes for everyday wear."
+            minHeight={140}
+            maxHeight={260}
+            features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
+            toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
+            onUpload={canUpload ? uploadToMediaLibrary : undefined}
+            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-slate-800">Long description</Label>
+            <InfoTip>
+              The full product story on the product page. Images and video are picked from the shared media library, so the same asset is
+              never uploaded twice and never deleted while a description uses it.
+            </InfoTip>
+          </div>
+          <RichTextEditor
+            value={description}
+            onChange={onDescriptionChange}
+            aria-label="Long description"
+            expandedTitle="Long description"
+            placeholder="Describe the materials, sizing, care instructions… Press / for headings, lists, images and video."
+            minHeight={260}
+            expandable
+            onUpload={canUpload ? uploadToMediaLibrary : undefined}
+            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+          />
+          <p className="text-xs text-slate-500">
+            Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting is
+            rejected on save.
+          </p>
+        </div>
+      </div>
     </CollapsibleSection>
   );
 }
@@ -299,6 +346,8 @@ function MediaLibraryTrigger({ kind, onSelect }: { kind: "image" | "file"; onSel
 export function OrganizationSection({
   brandId,
   brands,
+  labels,
+  selectedLabelIds,
   categories,
   attributeCount,
   selectedCategoryIds,
@@ -311,11 +360,14 @@ export function OrganizationSection({
   errors,
   onPatch,
   onBrandCreated,
+  onLabelCreated,
   onCategoryCreated,
   onUnitLabelCreated,
 }: {
   brandId: string | null;
   brands: Array<{ id: string; name: string; slug: string; productCount: number; logo: { url: string | null } | null }>;
+  labels: Array<{ id: string; name: string; slug: string; productCount: number; colorHex: string | null; image: { url: string | null } | null }>;
+  selectedLabelIds: string[];
   categories: EditorCategory[];
   attributeCount: number;
   selectedCategoryIds: string[];
@@ -328,10 +380,12 @@ export function OrganizationSection({
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onBrandCreated: (brand: { id: string; name: string; slug: string; logo: { url: string | null } | null }) => void;
+  onLabelCreated: (label: { id: string; name: string; slug: string; colorHex: string | null; image: { url: string | null } | null }) => void;
   onCategoryCreated: (category: EditorCategory) => void;
   onUnitLabelCreated: (label: { id: string | null; name: string; slug: string; isDefault: boolean }) => void;
 }) {
   const [brandDialog, setBrandDialog] = React.useState(false);
+  const [labelDialog, setLabelDialog] = React.useState(false);
   const [categoryDialog, setCategoryDialog] = React.useState(false);
   const [unitDraft, setUnitDraft] = React.useState("");
   const [unitSaving, setUnitSaving] = React.useState(false);
@@ -364,7 +418,7 @@ export function OrganizationSection({
     <CollapsibleSection
       id="organization"
       title="Product organisation"
-      description="Brand, categories, how the product is sold and how much it weighs."
+      description="Brand, categories, labels, how the product is sold and how much it weighs."
       icon={<Layers className="h-4 w-4" />}
       defaultOpen
       badge={selectedCategoryIds.length > 0 ? `${selectedCategoryIds.length} category(ies)` : undefined}
@@ -391,6 +445,31 @@ export function OrganizationSection({
             <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setBrandDialog(true)}>
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               Create brand
+            </Button>
+          }
+        />
+
+        <Combobox
+          id="product-labels"
+          label="Labels"
+          multiple
+          placeholder="Search labels…"
+          tooltip="Merchandising tags such as New, Sale or Featured. Labels work like brands and categories: create one here without leaving the form."
+          help="Optional. The same label can be used on many products."
+          options={labels.map((label) => ({
+            value: label.id,
+            label: label.name,
+            hint: `${label.productCount} product(s)`,
+            imageUrl: label.image?.url ?? null,
+          }))}
+          value={selectedLabelIds}
+          onChange={(value) => onPatch({ labelIds: value })}
+          emptyMessage="No label matches that search."
+          error={errors.labelIds}
+          footer={
+            <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setLabelDialog(true)}>
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              Create label
             </Button>
           }
         />
@@ -534,6 +613,15 @@ export function OrganizationSection({
           onPatch({ categoryIds: [...selectedCategoryIds, category.id], primaryCategoryId: primaryCategoryId ?? category.id });
         }}
       />
+      <CreateLabelDialog
+        open={labelDialog}
+        onOpenChange={setLabelDialog}
+        productUrlPrefix={productUrlPrefix}
+        onCreated={(label) => {
+          onLabelCreated(label);
+          onPatch({ labelIds: [...selectedLabelIds, label.id] });
+        }}
+      />
     </CollapsibleSection>
   );
 }
@@ -543,40 +631,40 @@ export function OrganizationSection({
 /* -------------------------------------------------------------------------- */
 
 export function ProductImagesSection({
+  primaryImage,
   images,
-  onChange,
+  onPrimaryChange,
+  onImagesChange,
   errors,
 }: {
+  primaryImage: MediaGalleryItem | null;
   images: MediaGalleryItem[];
-  onChange: (items: MediaGalleryItem[]) => void;
+  onPrimaryChange: (item: MediaGalleryItem | null) => void;
+  onImagesChange: (items: MediaGalleryItem[]) => void;
   errors: Record<string, string[]>;
 }) {
-  const primary = images[0] ?? null;
-  const gallery = images.slice(1);
-
   return (
     <CollapsibleSection
       id="images"
       title="Product images"
-      description="The image every listing shows, plus the gallery shoppers browse on the product page."
+      description="The listing image is independent of the gallery. Changing one never rewrites the other."
       icon={<ImageIcon className="h-4 w-4" />}
-      badge={images.length > 0 ? `${images.length} image(s)` : "No images"}
-      badgeTone={images.length > 0 ? "success" : "warning"}
+      badge={primaryImage || images.length > 0 ? `${(primaryImage ? 1 : 0) + images.length} image(s)` : "No images"}
+      badgeTone={primaryImage ? "success" : "warning"}
     >
       <div className="space-y-5">
         <MediaField
           label="Primary image"
           required
-          value={primary?.asset ?? null}
+          value={primaryImage?.asset ?? null}
           onChange={(asset) => {
             if (!asset) {
-              onChange(images.filter((item) => item.mediaId !== primary?.mediaId));
+              onPrimaryChange(null);
               return;
             }
-            const rest = images.filter((item) => item.mediaId !== primary?.mediaId && item.mediaId !== asset.id);
-            onChange([{ mediaId: asset.id, asset, altText: primary?.altText ?? null }, ...rest]);
+            onPrimaryChange({ mediaId: asset.id, asset, altText: primaryImage?.altText ?? null });
           }}
-          tooltip="Shown in listings, search results, cart and social previews. Choosing an existing asset reuses the same file instead of uploading it again."
+          tooltip="Shown in listings, search results, cart and social previews. It is stored separately from additional images — it is never gallery row 0."
           help="Pick from the shared media library — upload inside the library if the image is not there yet."
           size={128}
           error={errors.primaryImage}
@@ -584,13 +672,14 @@ export function ProductImagesSection({
 
         <MediaGalleryField
           label="Additional images"
-          items={gallery}
-          onChange={(items) => onChange(primary ? [primary, ...items] : items)}
-          max={19}
-          tooltip="Extra angles shown as thumbnails under the main image. Order matters: the first three are usually visible without scrolling."
-          help="Use the arrows to reorder and “Make primary” to promote an image. Removing an image here only detaches it from this product."
+          items={images}
+          onChange={onImagesChange}
+          max={20}
+          allowMakePrimary={false}
+          tooltip="Extra angles shown as thumbnails under the main image. These never become the primary image from here."
+          help="Use the arrows to reorder. Removing an image here only detaches it from this product — it stays in the media library."
           onAltTextChange={(mediaId, altText) =>
-            onChange(images.map((item) => (item.mediaId === mediaId ? { ...item, altText: altText || null } : item)))
+            onImagesChange(images.map((item) => (item.mediaId === mediaId ? { ...item, altText: altText || null } : item)))
           }
         />
       </div>
@@ -844,9 +933,9 @@ export function ProductSettingsSection({
 
   return (
     <CollapsibleSection
-      id="settings"
-      title="Settings, SEO and publication"
-      description="Tax and packaging presets, preorder policy, search metadata and whether the product is live."
+      id="seo"
+      title="SEO and publication"
+      description="Search metadata, tax and packaging, preorder policy, and whether the product is live. This section is last on purpose."
       icon={<Search className="h-4 w-4" />}
       badge={status === "ACTIVE" ? "Published" : status === "DRAFT" ? "Draft" : "Archived"}
       badgeTone={status === "ACTIVE" ? "success" : "neutral"}
@@ -1112,24 +1201,20 @@ export function AttributesAndValues({
   attributes,
   selectedAttributeIds,
   selectedValueIds,
-  attributeValueImages,
   attributesSummary,
   errors,
   onPatch,
   onAttributeCreated,
   onValueAdded,
-  onSetValueImage,
 }: {
   attributes: EditorAttribute[];
   selectedAttributeIds: string[];
   selectedValueIds: string[];
-  attributeValueImages: Record<string, string | null>;
   attributesSummary: string;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onAttributeCreated: (attribute: EditorAttribute) => void;
   onValueAdded: (attributeId: string, value: { id: string; value: string; colorHex: string | null; mediaId: string | null }) => void;
-  onSetValueImage: (attributeValueId: string, mediaId: string | null) => void;
 }) {
   const [dialog, setDialog] = React.useState(false);
   const selected = attributes.filter((attribute) => selectedAttributeIds.includes(attribute.id));
@@ -1196,7 +1281,6 @@ export function AttributesAndValues({
               <div className="mt-3 flex flex-wrap gap-2">
                 {attribute.values.map((value) => {
                   const checked = selectedValueIds.includes(value.id);
-                  const imageId = attributeValueImages[value.id] ?? value.mediaId ?? null;
                   return (
                     <div
                       key={value.id}
@@ -1222,37 +1306,6 @@ export function AttributesAndValues({
                         ) : null}
                         {value.value}
                       </label>
-
-                      <MediaPicker
-                        title={`Default image for ${attribute.name}: ${value.value}`}
-                        mimeGroup="image"
-                        onSelect={(asset) => onSetValueImage(value.id, asset.id)}
-                        trigger={
-                          <button
-                            type="button"
-                            className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full border border-slate-300 bg-white"
-                            aria-label={imageId ? `Change the default image for ${value.value}` : `Set a default image for ${value.value}`}
-                            title={imageId ? "Change the attribute default image" : "Set an attribute default image"}
-                          >
-                            {imageId ? (
-                              <AttributeValueThumb mediaId={imageId} />
-                            ) : (
-                              <Plus className="h-3 w-3 text-slate-400" aria-hidden="true" />
-                            )}
-                          </button>
-                        }
-                      />
-
-                      {imageId ? (
-                        <button
-                          type="button"
-                          className="text-[10px] text-slate-500 underline"
-                          onClick={() => onSetValueImage(value.id, null)}
-                          title="Remove the default image for this value"
-                        >
-                          clear
-                        </button>
-                      ) : null}
                     </div>
                   );
                 })}
@@ -1263,8 +1316,7 @@ export function AttributesAndValues({
         </div>
 
         <p className="text-xs text-slate-500">
-          {attributesSummary} Attribute default images are shared: the same asset can be the default of several values and a product image at
-          the same time.
+          {attributesSummary} Images are assigned on the variant after it exists — not while picking values.
         </p>
         {errors.selectedValueIds ? <p className="text-xs text-red-600">{errors.selectedValueIds[0]}</p> : null}
 
@@ -1279,4 +1331,3 @@ export function AttributesAndValues({
     </div>
   );
 }
-

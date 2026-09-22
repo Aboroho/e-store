@@ -54,7 +54,7 @@ export default async function ProductsPage({
     <div className="space-y-4">
       <PageHeader
         title="Products"
-        description="Catalog with variants, pricing and live stock. Archived products keep their history."
+        description="Catalogue of products and variants. Stock lives in Inventory — this list does not show on-hand quantities."
         actions={
           can(session, "product.create") ? (
             <Link href="/admin/catalog/products/new" className={buttonVariants({ variant: "default" })}>
@@ -90,7 +90,7 @@ export default async function ProductsPage({
           <CardContent>
             <EmptyState
               title="No products yet"
-              description="Create your first product — you can add variants, prices and stock right away."
+              description="Create your first product. Stock is received later through purchasing, not here."
               action={
                 can(session, "product.create") ? (
                   <Link href="/admin/catalog/products/new" className={buttonVariants({ variant: "default" })}>
