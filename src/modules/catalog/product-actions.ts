@@ -185,10 +185,17 @@ export async function checkProductSkusAction(input: {
     const variants: Record<string, SkuCheckEntry> = {};
 
     let productCode: SkuCheckEntry = { available: true };
-    const code = parsed.productSku?.trim().toUpperCase();
+    const code = (parsed.productSku ?? parsed.productCode)?.trim().toUpperCase();
     if (code) {
       const productClash = await prisma.product.findFirst({
-        where: { businessId: session.businessId, sku: { equals: code, mode: "insensitive" }, ...(parsed.productId ? { id: { not: parsed.productId } } : {}) },
+        where: {
+          businessId: session.businessId,
+          sku: { equals: code, mode: "insensitive" },
+          ...(parsed.productId ? { id: { not: parsed.productId } } : {}),
+          NOT: {
+            AND: [{ status: "DRAFT" }, { publishedAt: null }, { createdByUserId: session.id }],
+          },
+        },
         select: { name: true },
       });
       if (productClash) productCode = { available: false, message: `Already used by "${productClash.name}".` };

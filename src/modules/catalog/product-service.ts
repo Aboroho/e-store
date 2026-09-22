@@ -376,6 +376,25 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
   };
 
   return withTransaction(async (tx) => {
+    /* Reuse an unpublished autosave product with this SKU before uniqueness checks. */
+    if (!input.productId) {
+      const sku = normalizeSku(input.productCode);
+      const leftover = sku
+        ? await tx.product.findFirst({
+            where: {
+              businessId: actor.businessId,
+              sku: { equals: sku, mode: "insensitive" },
+              status: "DRAFT",
+              publishedAt: null,
+              deletedAt: null,
+              createdByUserId: actor.userId,
+            },
+            select: { id: true },
+          })
+        : null;
+      if (leftover) input.productId = leftover.id;
+    }
+
     const context = await validateReferences(tx, actor.businessId, input);
     await assertSkusAvailable(tx, actor.businessId, input, context);
 
@@ -1818,14 +1837,12 @@ export async function saveProductDraft(
   const name = input.name?.trim() || (typeof input.payload.name === "string" ? input.payload.name.trim() : "") || "Untitled draft";
   const payload = input.payload as Prisma.InputJsonValue;
 
-  let productId = input.productId ?? null;
-  let createdProduct = false;
+  const productId = input.productId ?? null;
+  const createdProduct = false;
 
-  if (!productId) {
-    const created = await createAutosaveProduct(actor, name, input.payload);
-    productId = created.id;
-    createdProduct = true;
-  } else {
+  // Autosave writes ProductDraft only. Creating a real Product here used to
+  // consume the SKU, so a later "Create product" failed with "already used".
+  if (productId) {
     const product = await prisma.product.findFirst({
       where: { id: productId, businessId: actor.businessId },
       select: { id: true, status: true, publishedAt: true, deletedAt: true },
@@ -1884,47 +1901,6 @@ export async function saveProductDraft(
     select: { id: true, revision: true, updatedAt: true },
   });
   return { draftId: created.id, revision: created.revision, updatedAt: created.updatedAt.toISOString(), productId, createdProduct };
-}
-
-async function uniqueDraftSlug(businessId: string, desired: string): Promise<string> {
-  const base = desired || "untitled-draft";
-  let candidate = base;
-  for (let suffix = 2; suffix <= 200; suffix += 1) {
-    const clash = await prisma.product.findFirst({ where: { businessId, slug: candidate }, select: { id: true } });
-    if (!clash) return candidate;
-    candidate = `${base}-${suffix}`;
-  }
-  return `${base}-${Date.now().toString(36)}`;
-}
-
-async function createAutosaveProduct(actor: CatalogActor, name: string, payload: Record<string, unknown>) {
-  const slug = await uniqueDraftSlug(actor.businessId, suggestSlug(name) || "untitled-draft");
-  const productType = payload.productType === "VARIABLE" ? "VARIABLE" : "SIMPLE";
-  const product = await prisma.product.create({
-    data: {
-      businessId: actor.businessId,
-      name,
-      slug,
-      productType,
-      status: "DRAFT",
-      unitLabel: typeof payload.unitLabel === "string" && payload.unitLabel.trim() ? payload.unitLabel.trim() : "piece",
-      sku: typeof payload.productCode === "string" ? normalizeSku(payload.productCode) || null : null,
-      createdByUserId: actor.userId,
-      updatedByUserId: actor.userId,
-      variants: {
-        create: [{ name: "Default", optionKey: "default", position: 0, status: "ACTIVE" }],
-      },
-    },
-    select: { id: true },
-  });
-  const locationId = await defaultLocationId(actor.businessId);
-  const variant = await prisma.variant.findFirst({ where: { productId: product.id }, select: { id: true } });
-  if (variant) {
-    await withTransaction(async (tx) => {
-      await ensureBalance(tx, { locationId, variantId: variant.id });
-    });
-  }
-  return product;
 }
 
 async function updateAutosaveProduct(actor: CatalogActor, productId: string, name: string, payload: Record<string, unknown>) {

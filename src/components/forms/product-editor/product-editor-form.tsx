@@ -200,7 +200,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     if (!slug) return;
     let cancelled = false;
     const handle = setTimeout(async () => {
-      const result = await checkProductSlugAction({ slug, productId: product?.id });
+      const result = await checkProductSlugAction({ slug, productId: product?.id ?? draft.productId ?? undefined });
       if (cancelled) return;
       if (!result.ok) {
         setSlugState({ checking: false, available: null, suggestion: null });
@@ -212,7 +212,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [state.slug, product?.id]);
+  }, [state.slug, product?.id, draft.productId]);
 
   /* ------------------------------------------------- product code uniqueness */
 
@@ -221,7 +221,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     if (!code) return;
     let cancelled = false;
     const handle = setTimeout(async () => {
-      const result = await checkProductSkusAction({ productId: product?.id, productCode: code });
+      const result = await checkProductSkusAction({ productId: product?.id ?? draft.productId ?? undefined, productCode: code });
       if (cancelled) return;
       setSkuState({
         checking: false,
@@ -237,7 +237,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [state.productCode, product?.id]);
+  }, [state.productCode, product?.id, draft.productId]);
 
   /* ------------------------------------------------------- unsaved changes */
 
@@ -390,7 +390,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
   const buildPayload = (saveAsDraft: boolean) => {
     return {
-      productId: product?.id,
+      productId: product?.id ?? draft.productId ?? undefined,
       expectedUpdatedAt: product?.updatedAt,
       draftId: draft.draftId,
       draftRevision: draft.revision,
@@ -604,11 +604,12 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           currentPrice={state.currentPrice}
           discountType={state.discountType}
           discountValue={state.discountValue}
-          defaultCost={state.defaultCost}
+          taxRateId={state.taxRateId}
+          taxRates={data.taxRates}
+          taxRateBps={state.taxRateBps}
           variantCount={state.variants.length}
           overrideCount={overrideCount}
           unpricedCount={unpricedCount}
-          canViewCost={data.canViewCost}
           errors={errors}
           onPatch={(value) => patch(value as Partial<ProductEditorState>)}
         />
@@ -684,6 +685,8 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
             selection={selection}
             productImage={productImage}
             productPricing={productPricing}
+            inheritedWeight={state.weightValue}
+            inheritedWeightUnit={state.weightUnit}
             canViewCost={data.canViewCost}
             onApplied={() => router.refresh()}
             onPatch={(value) => patch(value as Partial<ProductEditorState>)}
@@ -733,9 +736,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
         <ProductSettingsSection
           status={state.status}
-          taxRateId={state.taxRateId}
-          taxRates={data.taxRates}
-          taxRateBps={state.taxRateBps}
           packagingTemplateId={state.packagingCostTemplateId}
           packagingTemplates={data.packagingTemplates}
           packagingCostPaisa={state.packagingCostPaisa}

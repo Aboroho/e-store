@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { AlertTriangle, Sparkles, Wand2 } from "lucide-react";
-import { Alert, Badge, Button } from "@/components/ui/primitives";
+import { Alert, Button } from "@/components/ui/primitives";
+import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { InfoTip } from "@/components/ui/tooltip";
 import { CollapsibleSection } from "@/components/ui/collapsible";
 import { AttributesAndValues } from "./sections";
@@ -10,18 +11,16 @@ import { VariantTable } from "./variant-table";
 import { VariantBulkActions } from "./bulk-actions";
 import type { EditorAttribute } from "@/modules/catalog/product-queries";
 import type { MediaAssetView } from "@/modules/media/service";
-import type { DraftAttribute, DraftVariant, MatrixPlan } from "@/modules/catalog/product-draft";
+import type { DraftAttribute, DraftVariant, MatrixPlan, WeightUnit } from "@/modules/catalog/product-draft";
 import type { PricingLevelInput } from "@/modules/catalog/inheritance";
 import type { ProductEditorState } from "./use-product-editor";
 
 /**
- * Attributes, variants and bulk editing — one coherent section.
+ * Attributes and variants — one coherent section.
  *
- * Attribute selection, combination generation, per-variant overrides, filtering
- * and bulk updates live together because they are one job: describing the
- * options a product has and the sellable rows they produce. There is no separate
- * "bulk actions" screen — the bulk panel sits above the table it acts on so it
- * is visible as soon as the section opens.
+ * Attribute selection, combination generation and per-variant overrides live
+ * together. Bulk editing opens in a dialog from the table toolbar so the
+ * always-visible surface stays the matrix itself.
  */
 
 export function AttributesVariationsSection({
@@ -34,12 +33,14 @@ export function AttributesVariationsSection({
   selection,
   productImage,
   productPricing,
+  inheritedWeight,
+  inheritedWeightUnit,
   canViewCost,
   onApplied,
   onPatch,
   onAttributeCreated,
   onValueAdded,
-  onSetValueImage,
+  onSetValueImage: _onSetValueImage,
   onGenerateMatrix,
   onUpdateVariant,
   onAddVariant,
@@ -58,6 +59,8 @@ export function AttributesVariationsSection({
   productImage: MediaAssetView | null;
   /** Product default pricing, used to show the effective price of a row. */
   productPricing: PricingLevelInput;
+  inheritedWeight?: string;
+  inheritedWeightUnit?: WeightUnit;
   canViewCost: boolean;
   /** Called after a bulk change so the server read model is refreshed. */
   onApplied: () => void;
@@ -72,6 +75,8 @@ export function AttributesVariationsSection({
   onSelectionChange: (keys: string[]) => void;
   onLocalApply?: (next: DraftVariant[]) => void;
 }) {
+  const [bulkOpen, setBulkOpen] = React.useState(false);
+
   const draftAttributes: DraftAttribute[] = React.useMemo(
     () =>
       attributes
@@ -95,11 +100,11 @@ export function AttributesVariationsSection({
   return (
     <CollapsibleSection
       id="variants"
-      title="Attributes, variations and bulk edit"
-      description="Choose the options, generate the combinations, then bulk-edit selected rows or every variant matching an attribute filter."
+      title="Attributes and variations"
+      description="Choose the options, generate the combinations, then edit rows or open bulk edit from the table."
       icon={<Sparkles className="h-4 w-4" />}
       defaultOpen
-      badge={state.variants.length > 0 ? `${state.variants.length} variant(s) · bulk edit` : `${plannedCombinations} combination(s) planned`}
+      badge={state.variants.length > 0 ? `${state.variants.length} variant(s)` : `${plannedCombinations} combination(s) planned`}
       badgeTone={state.variants.length > 0 ? "success" : "neutral"}
     >
       <div className="space-y-5">
@@ -170,30 +175,50 @@ export function AttributesVariationsSection({
           {errors.variants ? <p className="text-xs text-red-600">{errors.variants[0]}</p> : null}
         </div>
 
-        <VariantBulkActions
-          productId={productId}
-          rows={state.variants}
-          attributes={draftAttributes}
-          selectedKeys={selection}
-          productImage={productImage}
-          canViewCost={canViewCost}
-          onApplied={onApplied}
-          onLocalApply={onLocalApply}
-        />
-
         <VariantTable
           rows={state.variants}
           attributes={draftAttributes}
           orphanKeys={plan.orphans.map((orphan) => orphan.key)}
           productImage={productImage}
           productPricing={productPricing}
+          inheritedWeight={inheritedWeight}
+          inheritedWeightUnit={inheritedWeightUnit}
           rowErrors={rowErrors}
           selectedKeys={selection}
           onSelectionChange={onSelectionChange}
           onUpdate={onUpdateVariant}
           onRemove={onRemoveVariant}
           canViewCost={canViewCost}
+          toolbarExtra={
+            <Button type="button" variant="outline" size="sm" onClick={() => setBulkOpen(true)} disabled={state.variants.length === 0}>
+              <Wand2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Bulk edit
+            </Button>
+          }
         />
+
+        <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+          <DialogContent
+            title="Bulk edit variants"
+            description="Apply one change to selected variants or to every variant matching an attribute. Nothing is written until you preview and confirm."
+            className="max-h-[90dvh] max-w-2xl overflow-y-auto"
+          >
+            <VariantBulkActions
+              productId={productId}
+              rows={state.variants}
+              attributes={draftAttributes}
+              selectedKeys={selection}
+              productImage={productImage}
+              canViewCost={canViewCost}
+              onApplied={() => {
+                onApplied();
+                setBulkOpen(false);
+              }}
+              onLocalApply={onLocalApply}
+              embedded
+            />
+          </DialogContent>
+        </Dialog>
       </div>
     </CollapsibleSection>
   );

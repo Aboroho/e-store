@@ -735,24 +735,26 @@ export function PricingSection({
   currentPrice,
   discountType,
   discountValue,
-  defaultCost,
+  taxRateId,
+  taxRates,
+  taxRateBps,
   variantCount,
   overrideCount,
   unpricedCount,
-  canViewCost,
   errors,
   onPatch,
 }: {
   currentPrice: string;
   discountType: "PERCENTAGE" | "FLAT" | "NONE";
   discountValue: string;
-  defaultCost: string;
+  taxRateId: string | null;
+  taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
+  taxRateBps: string;
   variantCount: number;
   /** Variants carrying a price override of their own. */
   overrideCount: number;
   /** Variants that would sell for nothing because no level defines a price. */
   unpricedCount: number;
-  canViewCost: boolean;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
 }) {
@@ -804,8 +806,8 @@ export function PricingSection({
             onChange={(event) => onPatch({ discountType: event.target.value as "PERCENTAGE" | "FLAT" | "NONE" })}
           >
             <option value="NONE">No discount</option>
-            <option value="PERCENTAGE">Percentage (%)</option>
-            <option value="FLAT">Flat amount (BDT)</option>
+            <option value="PERCENTAGE">Percentage</option>
+            <option value="FLAT">Flat</option>
           </NativeSelect>
         </FieldWithTip>
 
@@ -841,24 +843,49 @@ export function PricingSection({
         </FieldWithTip>
       </div>
 
-      {canViewCost ? (
-        <div className="mt-4 max-w-xs">
-          <FieldWithTip
-            id="product-default-cost"
-            label="Default purchase cost (BDT)"
-            tooltip="Fallback unit cost for margin reporting when a variant has no cost of its own. Never shown to shoppers."
-            error={errors.defaultCostPaisa}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <FieldWithTip
+          id="product-tax-rate"
+          label="Tax rate"
+          tooltip="Reusable preset. Selecting one copies its rate onto this product; editing the preset later does not rewrite historical orders."
+        >
+          <NativeSelect
+            id="product-tax-rate"
+            value={taxRateId ?? ""}
+            onChange={(event) => {
+              const nextId = event.target.value || null;
+              const preset = taxRates.find((rate) => rate.id === nextId);
+              onPatch({ taxRateId: nextId, ...(preset ? { taxRateBps: String(preset.rateBps) } : {}) });
+            }}
           >
+            <option value="">No tax preset</option>
+            {taxRates.map((rate) => (
+              <option key={rate.id} value={rate.id}>
+                {rate.name} ({(rate.rateBps / 100).toFixed(2)}%)
+              </option>
+            ))}
+          </NativeSelect>
+          <div className="mt-2 flex items-center gap-2">
+            <Label htmlFor="product-tax-bps" className="text-xs text-slate-500">
+              Custom rate (basis points)
+            </Label>
             <Input
-              id="product-default-cost"
-              inputMode="decimal"
-              value={defaultCost}
-              placeholder="0.00"
-              onChange={(event) => onPatch({ defaultCost: event.target.value })}
+              id="product-tax-bps"
+              className="h-8 w-24"
+              inputMode="numeric"
+              value={taxRateBps}
+              onChange={(event) => onPatch({ taxRateBps: event.target.value })}
             />
-          </FieldWithTip>
-        </div>
-      ) : null}
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Manage presets in{" "}
+            <Link href="/admin/catalog/tax-rates" className="text-brand-700 underline">
+              Tax rates
+            </Link>
+            . Tax is recorded separately from discounts and profit.
+          </p>
+        </FieldWithTip>
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
         <Badge variant="neutral">{overrideCount} variant override(s)</Badge>
@@ -882,9 +909,6 @@ export function PricingSection({
  */
 export function ProductSettingsSection({
   status,
-  taxRateId,
-  taxRates,
-  taxRateBps,
   packagingTemplateId,
   packagingTemplates,
   packagingCostPaisa,
@@ -905,9 +929,6 @@ export function ProductSettingsSection({
   onSeoImageChange,
 }: {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
-  taxRateId: string | null;
-  taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
-  taxRateBps: string;
   packagingTemplateId: string | null;
   packagingTemplates: Array<{ id: string; name: string; costPaisa: number; isDefault: boolean }>;
   packagingCostPaisa: string;
@@ -935,53 +956,14 @@ export function ProductSettingsSection({
     <CollapsibleSection
       id="seo"
       title="SEO and publication"
-      description="Search metadata, tax and packaging, preorder policy, and whether the product is live. This section is last on purpose."
+      description="Search metadata, packaging, preorder policy, and whether the product is live. This section is last on purpose."
       icon={<Search className="h-4 w-4" />}
       badge={status === "ACTIVE" ? "Published" : status === "DRAFT" ? "Draft" : "Archived"}
       badgeTone={status === "ACTIVE" ? "success" : "neutral"}
       className="mb-10"
     >
       <div className="space-y-6">
-        <div className="grid gap-4 lg:grid-cols-3">
-          <FieldWithTip
-            id="product-tax-rate"
-            label="Tax rate"
-            tooltip="Reusable preset. Selecting one copies its rate onto this product; editing the preset later does not rewrite historical orders."
-          >
-            <NativeSelect
-              id="product-tax-rate"
-              value={taxRateId ?? ""}
-              onChange={(event) => {
-                const nextId = event.target.value || null;
-                const preset = taxRates.find((rate) => rate.id === nextId);
-                onPatch({ taxRateId: nextId, ...(preset ? { taxRateBps: String(preset.rateBps) } : {}) });
-              }}
-            >
-              <option value="">No tax preset</option>
-              {taxRates.map((rate) => (
-                <option key={rate.id} value={rate.id}>
-                  {rate.name} ({(rate.rateBps / 100).toFixed(2)}%)
-                </option>
-              ))}
-            </NativeSelect>
-            <div className="mt-2 flex items-center gap-2">
-              <Label htmlFor="product-tax-bps" className="text-xs text-slate-500">
-                Custom rate (basis points)
-              </Label>
-              <Input
-                id="product-tax-bps"
-                className="h-8 w-24"
-                inputMode="numeric"
-                value={taxRateBps}
-                onChange={(event) => onPatch({ taxRateBps: event.target.value })}
-              />
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              Manage presets in <Link href="/admin/catalog/tax-rates" className="text-brand-700 underline">Tax rates</Link>. Tax is recorded
-              separately from discounts, inventory cost and profit.
-            </p>
-          </FieldWithTip>
-
+        <div className="grid gap-4 lg:grid-cols-2">
           <FieldWithTip
             id="product-packaging-template"
             label="Packaging cost template"
@@ -1026,9 +1008,8 @@ export function ProductSettingsSection({
 
           {canViewCost ? (
             <div className="space-y-2 text-xs text-slate-500">
-              <p className="font-medium text-slate-700">How these are used</p>
-              <p>Packaging cost is added to the cost side of an order line when profit is reported.</p>
-              <p>Tax is stored on the product and kept on the order line; it is never treated as a discount or as stock cost.</p>
+              <p className="font-medium text-slate-700">How packaging cost is used</p>
+              <p>Packaging cost is added to the cost side of an order line when profit is reported. It is never added to what the shopper pays.</p>
             </div>
           ) : null}
         </div>

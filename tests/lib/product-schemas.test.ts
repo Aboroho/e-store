@@ -237,6 +237,7 @@ describe("availability check payloads", () => {
   it("bounds slug and sku check requests", () => {
     expect(slugCheckSchema.safeParse({ slug: "scarf" }).success).toBe(true);
     expect(skuCheckSchema.safeParse({ productSku: "TEE" }).success).toBe(true);
+    expect(skuCheckSchema.safeParse({ productCode: "TEE" }).success).toBe(true);
     expect(skuCheckSchema.safeParse({ productSku: "X".repeat(65) }).success).toBe(false);
   });
 });

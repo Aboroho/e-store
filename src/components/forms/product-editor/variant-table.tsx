@@ -8,6 +8,7 @@ import { MediaThumb } from "@/components/media/media-field";
 import { MediaPicker } from "@/components/media/media-picker";
 import { cn } from "@/lib/utils";
 import { formatPaisa } from "@/lib/money";
+import { calculatePricing } from "@/modules/catalog/pricing-rules";
 import { browseMediaAction } from "@/modules/media/actions";
 import type { MediaAssetView } from "@/modules/media/service";
 import {
@@ -47,7 +48,11 @@ export interface VariantTableProps {
   productImage: MediaAssetView | null;
   /** Product default pricing — level 3 of the inheritance model. */
   productPricing: PricingLevelInput;
+  inheritedWeight?: string;
+  inheritedWeightUnit?: WeightUnit;
   selectedKeys: string[];
+  /** Extra controls rendered next to “Rows per page” (bulk edit trigger). */
+  toolbarExtra?: React.ReactNode;
   /** Per-row validation messages, keyed by variant key (bad prices, duplicates…). */
   rowErrors?: Record<string, string>;
   onSelectionChange: (keys: string[]) => void;
@@ -57,6 +62,11 @@ export interface VariantTableProps {
 }
 
 const PAGE_SIZES = [25, 50, 100, 250];
+
+function formatInheritedMoney(paisa: number | null | undefined): string {
+  if (paisa == null || paisa <= 0) return "";
+  return paisa % 100 === 0 ? String(paisa / 100) : (paisa / 100).toFixed(2);
+}
 
 function toPaisa(value: string | null | undefined): number | null {
   const trimmed = (value ?? "").trim();
@@ -115,12 +125,15 @@ export function VariantTable({
   orphanKeys = [],
   productImage,
   productPricing,
+  inheritedWeight = "",
+  inheritedWeightUnit = DEFAULT_WEIGHT_UNIT,
   selectedKeys,
   rowErrors = {},
   onSelectionChange,
   onUpdate,
   onRemove,
-  canViewCost,
+  canViewCost: _canViewCost,
+  toolbarExtra,
 }: VariantTableProps) {
   const [query, setQuery] = React.useState("");
   const [valueFilter, setValueFilter] = React.useState("");
@@ -235,9 +248,11 @@ export function VariantTable({
     orphanKeys,
     rowErrors,
     productPricing,
+    inheritedWeight,
+    inheritedWeightUnit,
     onUpdate,
     onRemove,
-    canViewCost,
+    canViewCost: _canViewCost,
   };
 
   return (
@@ -314,6 +329,8 @@ export function VariantTable({
           </NativeSelect>
         </div>
 
+        {toolbarExtra ? <div className="pb-0.5">{toolbarExtra}</div> : null}
+
         <div className="flex flex-wrap items-center gap-2 pb-1">
           <Button type="button" variant="outline" size="sm" onClick={selectMatching} disabled={filtered.length === 0}>
             Select {filtered.length} shown
@@ -326,7 +343,7 @@ export function VariantTable({
 
       {/* Desktop table */}
       <div className="hidden overflow-x-auto rounded-lg border border-slate-200 md:block">
-        <table className="w-full min-w-[70rem] text-sm">
+        <table className="w-full min-w-[90rem] text-sm">
           <caption className="sr-only">Product variants</caption>
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -346,13 +363,17 @@ export function VariantTable({
                 Image
               </th>
               <th scope="col" className="px-3 py-2">
-                Price override
+                Current price
               </th>
-              {canViewCost ? (
-                <th scope="col" className="px-3 py-2">
-                  Cost
-                </th>
-              ) : null}
+              <th scope="col" className="px-3 py-2">
+                Discount type
+              </th>
+              <th scope="col" className="px-3 py-2">
+                Discount
+              </th>
+              <th scope="col" className="px-3 py-2">
+                Sell price
+              </th>
               <th scope="col" className="px-3 py-2">
                 Weight
               </th>
@@ -430,6 +451,8 @@ interface RowSharedProps {
   rowErrors: Record<string, string>;
   productImageId: string | null;
   productPricing: PricingLevelInput;
+  inheritedWeight: string;
+  inheritedWeightUnit: WeightUnit;
   selected: boolean;
   onSelect: (checked: boolean) => void;
   onUpdate: VariantTableProps["onUpdate"];
@@ -514,55 +537,93 @@ export function SourceBadge({ label }: { label: string }) {
   );
 }
 
-/**
- * Price cell: the override inputs plus the *effective* price underneath, so the
- * inherited value is visible without having to save and reopen the product.
- */
-function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowSharedProps) {
-  const effective = effectiveRowPrice(row, attributes, productPricing);
-  const hasOverride = Boolean(overrideFor(row)) && !row.clearPriceOverride;
+function displayedPricing(row: DraftVariant, productPricing: PricingLevelInput) {
+  const inheritedCurrent = formatInheritedMoney(productPricing.currentPricePaisa);
+  const inheritedType = productPricing.discountType ?? "NONE";
+  const inheritedDiscount =
+    inheritedType === "NONE" || !productPricing.discountValue ? "" : String(productPricing.discountValue);
+  const inheriting =
+    Boolean(row.clearPriceOverride) ||
+    (!row.currentPrice?.trim() && !row.discountValue?.trim() && (!row.discountType || row.discountType === "NONE"));
+  return {
+    inheriting,
+    current: inheriting ? inheritedCurrent : (row.currentPrice ?? ""),
+    type: (inheriting ? inheritedType : (row.discountType ?? inheritedType)) as DraftVariant["discountType"],
+    discount: inheriting ? inheritedDiscount : (row.discountValue ?? ""),
+    inheritedCurrent,
+    inheritedType,
+    inheritedDiscount,
+  };
+}
 
-  return (
+function VariantPriceFields({
+  row,
+  attributes,
+  productPricing,
+  onUpdate,
+  layout,
+}: RowSharedProps & { layout: "row" | "stack" }) {
+  const effective = effectiveRowPrice(row, attributes, productPricing);
+  const display = displayedPricing(row, productPricing);
+  const hasOverride = !display.inheriting;
+
+  const commit = (patch: Partial<DraftVariant>) => {
+    onUpdate(
+      row.key,
+      {
+        currentPrice: patch.currentPrice ?? (display.inheriting ? display.inheritedCurrent : display.current),
+        discountType: patch.discountType ?? display.type,
+        discountValue: patch.discountValue ?? display.discount,
+        clearPriceOverride: false,
+        price: "",
+      },
+      { touched: true },
+    );
+  };
+
+  const sell = calculatePricing({
+    currentPricePaisa: toPaisa(display.current) ?? 0,
+    discountType: display.type ?? "NONE",
+    discountValue: Number(display.discount) || 0,
+  });
+
+  const currentField = (
+    <Input
+      aria-label={`Current price for ${row.name}`}
+      className={cn("h-9 w-24", display.inheriting && "text-slate-500")}
+      inputMode="decimal"
+      value={display.current}
+      onChange={(event) => commit({ currentPrice: event.target.value })}
+    />
+  );
+  const typeField = (
+    <NativeSelect
+      aria-label={`Discount type for ${row.name}`}
+      className={cn("h-9 w-32", display.inheriting && "text-slate-500")}
+      value={display.type ?? "NONE"}
+      onChange={(event) => commit({ discountType: event.target.value as DraftVariant["discountType"] })}
+    >
+      <option value="NONE">No discount</option>
+      <option value="PERCENTAGE">Percentage</option>
+      <option value="FLAT">Flat</option>
+    </NativeSelect>
+  );
+  const discountField = (
+    <Input
+      aria-label={`Discount for ${row.name}`}
+      className={cn("h-9 w-20", display.inheriting && "text-slate-500")}
+      inputMode="decimal"
+      disabled={(display.type ?? "NONE") === "NONE"}
+      value={display.discount}
+      onChange={(event) => commit({ discountValue: event.target.value })}
+    />
+  );
+  const sellField = (
     <div className="space-y-1">
-      <div className="flex items-center gap-1">
-        <Input
-          aria-label={`Override price for ${row.name}`}
-          className="h-9 w-24"
-          inputMode="decimal"
-          placeholder="Default"
-          value={row.currentPrice ?? ""}
-          onChange={(event) =>
-            onUpdate(row.key, { currentPrice: event.target.value, clearPriceOverride: false, price: "" }, { touched: true })
-          }
-        />
-        <NativeSelect
-          aria-label={`Discount type for ${row.name}`}
-          className="h-9 w-16 px-1"
-          value={row.discountType ?? "NONE"}
-          onChange={(event) =>
-            onUpdate(
-              row.key,
-              { discountType: event.target.value as DraftVariant["discountType"], clearPriceOverride: false },
-              { touched: true },
-            )
-          }
-        >
-          <option value="NONE">—</option>
-          <option value="PERCENTAGE">%</option>
-          <option value="FLAT">৳</option>
-        </NativeSelect>
-        <Input
-          aria-label={`Discount value for ${row.name}`}
-          className="h-9 w-16"
-          inputMode="decimal"
-          placeholder="0"
-          disabled={(row.discountType ?? "NONE") === "NONE"}
-          value={row.discountValue ?? ""}
-          onChange={(event) => onUpdate(row.key, { discountValue: event.target.value, clearPriceOverride: false }, { touched: true })}
-        />
+      <div className="flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm font-medium text-slate-800">
+        {formatPaisa(sell.sellPricePaisa)}
       </div>
       <div className="flex flex-wrap items-center gap-1">
-        <span className="text-xs font-medium text-slate-700">{formatPaisa(effective.value.pricePaisa)}</span>
         <SourceBadge label={effective.label} />
         {hasOverride ? (
           <button
@@ -582,10 +643,42 @@ function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowShar
       </div>
     </div>
   );
+
+  if (layout === "stack") {
+    return (
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Current price</Label>
+          {currentField}
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Discount type</Label>
+          {typeField}
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Discount</Label>
+          {discountField}
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Sell price</Label>
+          {sellField}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <td className="px-3 py-2">{currentField}</td>
+      <td className="px-3 py-2">{typeField}</td>
+      <td className="px-3 py-2">{discountField}</td>
+      <td className="px-3 py-2">{sellField}</td>
+    </>
+  );
 }
 
 const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
-  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost } = props;
+  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove } = props;
   const isOrphan = orphanKeys.includes(row.key);
   const error = rowErrors[row.key];
 
@@ -619,36 +712,21 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
       <td className="px-3 py-2">
         <VariantImageCell {...props} />
       </td>
-      <td className="px-3 py-2">
-        <VariantPriceCell {...props} />
-      </td>
-      {canViewCost ? (
-        <td className="px-3 py-2">
-          <Input
-            aria-label={`Cost for ${row.name}`}
-            className="h-9 w-24"
-            inputMode="decimal"
-            placeholder="Default"
-            value={row.cost ?? ""}
-            onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
-          />
-        </td>
-      ) : null}
+      <VariantPriceFields {...props} layout="row" />
       <td className="px-3 py-2">
         <div className="flex items-center gap-1">
           <Input
             aria-label={`Weight for ${row.name}`}
-            className="h-9 w-20"
+            className={cn("h-9 w-20", (!row.weight?.trim() || row.clearWeightOverride) && "text-slate-500")}
             inputMode="decimal"
-            placeholder="Default"
-            value={row.weight ?? ""}
+            value={!row.weight?.trim() || row.clearWeightOverride ? props.inheritedWeight : row.weight}
             onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
           />
           <NativeSelect
             aria-label={`Weight unit for ${row.name}`}
             className="h-9 w-20"
-            value={row.weightUnit ?? DEFAULT_WEIGHT_UNIT}
-            onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit })}
+            value={row.weightUnit ?? props.inheritedWeightUnit ?? DEFAULT_WEIGHT_UNIT}
+            onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit, clearWeightOverride: false }, { touched: true })}
           >
             {WEIGHT_UNITS.map((unit) => (
               <option key={unit.value} value={unit.value}>
@@ -710,7 +788,7 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
 });
 
 const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
-  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost } = props;
+  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove } = props;
   const isOrphan = orphanKeys.includes(row.key);
   const error = rowErrors[row.key];
 
@@ -733,29 +811,20 @@ const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
         <VariantImageCell {...props} />
       </div>
 
+      <VariantPriceFields {...props} layout="stack" />
       <div className="grid gap-2 sm:grid-cols-2">
-        <VariantPriceCell {...props} />
-        {canViewCost ? (
-          <Input
-            aria-label={`Cost for ${row.name}`}
-            inputMode="decimal"
-            placeholder="Cost (default)"
-            value={row.cost ?? ""}
-            onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
-          />
-        ) : null}
         <div className="flex items-center gap-1">
           <Input
             aria-label={`Weight for ${row.name}`}
             inputMode="decimal"
-            placeholder="Weight"
-            value={row.weight ?? ""}
+            className={cn((!row.weight?.trim() || row.clearWeightOverride) && "text-slate-500")}
+            value={!row.weight?.trim() || row.clearWeightOverride ? props.inheritedWeight : row.weight}
             onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
           />
           <NativeSelect
             aria-label={`Weight unit for ${row.name}`}
-            value={row.weightUnit ?? DEFAULT_WEIGHT_UNIT}
-            onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit })}
+            value={row.weightUnit ?? props.inheritedWeightUnit ?? DEFAULT_WEIGHT_UNIT}
+            onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit, clearWeightOverride: false }, { touched: true })}
           >
             {WEIGHT_UNITS.map((unit) => (
               <option key={unit.value} value={unit.value}>

@@ -329,6 +329,7 @@ export const slugCheckSchema = z.object({
 export const skuCheckSchema = z.object({
   productId: zId.optional(),
   productSku: z.string().trim().max(64).optional(),
+  productCode: z.string().trim().max(64).optional(),
 });
 
 export const labelInputSchema = z.object({

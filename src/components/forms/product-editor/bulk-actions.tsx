@@ -40,14 +40,11 @@ type BulkAction =
   | "set-primary-image"
   | "add-gallery-image"
   | "set-price"
-  | "set-compare-at"
-  | "set-cost"
   | "set-weight"
   | "set-preorder"
   | "reset-image"
   | "clear-gallery"
   | "clear-price-override"
-  | "clear-cost-override"
   | "clear-weight-override"
   | "clear-preorder-override"
   | "clear-image-override"
@@ -58,7 +55,7 @@ interface ActionDefinition {
   label: string;
   hint: string;
   /** Which input the panel shows. */
-  input: "image" | "price" | "compareAt" | "cost" | "weight" | "preorder" | "none";
+  input: "image" | "price" | "weight" | "preorder" | "none";
   /** Confirmation strength: "danger" requires ticking a box. */
   confirm?: "standard" | "destructive";
   destructiveHint?: string;
@@ -93,21 +90,12 @@ const ACTIONS: ActionDefinition[] = [
     hint: "Set a current price and an optional discount. Choose where it is written: on each variant, on the matched attribute value (so future variants inherit it) or on the product default.",
     input: "price",
   },
-  { value: "set-compare-at", label: "Set compare-at price", hint: "The “was” price shown struck through next to the selling price.", input: "compareAt" },
-  { value: "set-cost", label: "Set purchase cost", hint: "Used for margin reporting. Requires the “view purchase cost” permission.", input: "cost" },
   { value: "set-weight", label: "Set weight", hint: "Overrides the product weight for the target variants.", input: "weight" },
   { value: "set-preorder", label: "Set preorder", hint: "Allow or refuse preorders for the target variants.", input: "preorder" },
   {
     value: "clear-price-override",
     label: "Restore inherited price",
     hint: "Clears variant price overrides in the target group, restoring attribute-level or product default price inheritance.",
-    input: "none",
-    restoresInheritance: true,
-  },
-  {
-    value: "clear-cost-override",
-    label: "Restore inherited cost",
-    hint: "Clears variant purchase cost overrides in the target group.",
     input: "none",
     restoresInheritance: true,
   },
@@ -159,9 +147,10 @@ export function VariantBulkActions({
   attributes,
   selectedKeys,
   productImage,
-  canViewCost,
+  canViewCost: _canViewCost,
   onApplied,
   onLocalApply,
+  embedded = false,
 }: {
   productId: string | null;
   rows: DraftVariant[];
@@ -172,6 +161,8 @@ export function VariantBulkActions({
   onApplied: () => void;
   /** Apply the change to in-memory rows when the product has not been saved yet. */
   onLocalApply?: (next: DraftVariant[]) => void;
+  /** Drop the outer card chrome when the panel already lives in a dialog. */
+  embedded?: boolean;
 }) {
   const [action, setAction] = React.useState<BulkAction>("set-primary-image");
   const [targetKind, setTargetKind] = React.useState<BulkTarget["kind"]>(selectedKeys.length > 0 ? "selected" : "all");
@@ -181,8 +172,6 @@ export function VariantBulkActions({
   const [discountType, setDiscountType] = React.useState<"PERCENTAGE" | "FLAT" | "NONE">("NONE");
   const [discountValue, setDiscountValue] = React.useState("");
   const [overrideTarget, setOverrideTarget] = React.useState<"variant" | "attribute" | "product" | "clear">("variant");
-  const [compareAt, setCompareAt] = React.useState("");
-  const [cost, setCost] = React.useState("");
   const [weight, setWeight] = React.useState("");
   const [weightUnit, setWeightUnit] = React.useState<WeightUnit>(DEFAULT_WEIGHT_UNIT);
   const [preorder, setPreorder] = React.useState(true);
@@ -240,10 +229,8 @@ export function VariantBulkActions({
   const missingInput =
     (definition.input === "image" && !media) ||
     (definition.input === "price" && !currentPrice.trim()) ||
-    (definition.input === "cost" && !cost.trim()) ||
-    (definition.input === "compareAt" && !compareAt.trim()) ||
     (definition.input === "weight" && !weight.trim()) ||
-    (targetKind === "attribute" && criteria.every((criterion) => criterion.valueIds.length === 0));
+    (targetKind === "attribute" && (criteria.length === 0 || criteria.every((criterion) => criterion.valueIds.length === 0)));
 
   const apply = async () => {
     setApplying(true);
@@ -256,8 +243,8 @@ export function VariantBulkActions({
         currentPrice: currentPrice.trim() || undefined,
         discountType,
         discountValue: discountValue.trim() || undefined,
-        compareAt: compareAt.trim() || undefined,
-        cost: cost.trim() || undefined,
+        compareAt: undefined,
+        cost: undefined,
         weight: weight.trim() || undefined,
         weightUnit,
         isPreorderEnabled: preorder,
@@ -283,8 +270,6 @@ export function VariantBulkActions({
       payload.discountType = discountType;
       if (discountValue.trim()) payload.discountValue = Number(discountValue);
     }
-    if (action === "set-compare-at") payload.compareAtPricePaisa = moneyToPaisa(compareAt);
-    if (action === "set-cost") payload.costPaisa = moneyToPaisa(cost);
     if (action === "set-weight") {
       payload.weightGrams = toWeightGrams(weight, weightUnit);
       payload.weightUnit = weightUnit;
@@ -309,7 +294,8 @@ export function VariantBulkActions({
   };
 
   return (
-    <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+    <div className={embedded ? "space-y-4" : "space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4"}>
+      {embedded ? null : (
       <div className="flex items-start gap-2">
         <Wand2 className="mt-0.5 h-4 w-4 text-brand-600" aria-hidden="true" />
         <div>
@@ -320,6 +306,7 @@ export function VariantBulkActions({
           </p>
         </div>
       </div>
+      )}
 
       <div className="grid gap-3 lg:grid-cols-3">
         <div className="space-y-1">
@@ -335,7 +322,7 @@ export function VariantBulkActions({
               invalidateConfirmation();
             }}
           >
-            {ACTIONS.filter((entry) => entry.value !== "set-cost" || canViewCost).map((entry) => (
+            {ACTIONS.map((entry) => (
               <option key={entry.value} value={entry.value}>
                 {entry.label}
               </option>
@@ -364,7 +351,7 @@ export function VariantBulkActions({
             <option value="selected" disabled={selectedKeys.length === 0}>
               Selected variants ({selectedKeys.length})
             </option>
-            <option value="attribute">Variants matching attribute values</option>
+            <option value="attribute">Variants with matching attribute</option>
           </NativeSelect>
         </div>
 
@@ -434,8 +421,8 @@ export function VariantBulkActions({
                 onChange={(event) => setDiscountType(event.target.value as "PERCENTAGE" | "FLAT" | "NONE")}
               >
                 <option value="NONE">No discount</option>
-                <option value="PERCENTAGE">Percentage (%)</option>
-                <option value="FLAT">Flat amount (BDT)</option>
+                <option value="PERCENTAGE">Percentage</option>
+                <option value="FLAT">Flat</option>
               </NativeSelect>
             </div>
             <MoneyInput
@@ -488,19 +475,6 @@ export function VariantBulkActions({
           ) : null}
         </div>
       ) : null}
-      {definition.input === "compareAt" ? (
-        <MoneyInput
-          id="bulk-compare-at"
-          label="Compare-at price (BDT)"
-          value={compareAt}
-          onChange={setCompareAt}
-          tip="Leave empty to send an empty compare-at price, which removes the strike-through price."
-        />
-      ) : null}
-      {definition.input === "cost" ? (
-        <MoneyInput id="bulk-cost" label="Purchase cost (BDT)" value={cost} onChange={setCost} tip="Only used for margin reporting; never shown to shoppers." />
-      ) : null}
-
       {definition.input === "weight" ? (
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
@@ -725,52 +699,49 @@ function AttributeCriteria({
   criteria: BulkTargetCriteria[];
   onChange: (criteria: BulkTargetCriteria[]) => void;
 }) {
-  const addCriterion = () => {
-    const first = attributes.find((attribute) => !criteria.some((criterion) => criterion.attributeId === attribute.id));
-    if (!first) return;
-    onChange([...criteria, { attributeId: first.id, valueIds: [] }]);
-  };
+  const selectedAttributeId = criteria[0]?.attributeId ?? "";
+  const selectedValueIds = criteria[0]?.valueIds ?? [];
+  const attribute = attributes.find((entry) => entry.id === selectedAttributeId);
 
   return (
     <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1">
-          <p className="text-xs font-medium text-slate-700">Match variants where</p>
-          <InfoTip>
-            Every condition must match (AND). Within one condition, matching any selected value is enough. Example: Colour = Black.
-          </InfoTip>
-        </div>
-        <Button type="button" variant="ghost" size="sm" onClick={addCriterion} disabled={criteria.length >= attributes.length}>
-          Add condition
-        </Button>
+      <div className="flex items-center gap-1">
+        <p className="text-xs font-medium text-slate-700">Which attribute should match?</p>
+        <InfoTip>
+          First choose the attribute (for example Colour), then pick the values (Black, White). Only variants carrying one of those values are updated.
+        </InfoTip>
       </div>
 
-      {criteria.length === 0 ? <p className="text-xs text-slate-500">Add a condition to match an attribute value, for example Colour = Black.</p> : null}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label htmlFor="bulk-match-attribute" className="text-xs">
+            Attribute
+          </Label>
+          <NativeSelect
+            id="bulk-match-attribute"
+            value={selectedAttributeId}
+            onChange={(event) => {
+              const nextId = event.target.value;
+              onChange(nextId ? [{ attributeId: nextId, valueIds: [] }] : []);
+            }}
+          >
+            <option value="">Select an attribute</option>
+            {attributes.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
 
-      {criteria.map((criterion, index) => {
-        const attribute = attributes.find((entry) => entry.id === criterion.attributeId);
-        return (
-          <div key={`${criterion.attributeId}-${index}`} className="flex flex-wrap items-start gap-2">
-            <NativeSelect
-              aria-label="Attribute"
-              className="h-9 w-40"
-              value={criterion.attributeId}
-              onChange={(event) => {
-                const next = [...criteria];
-                next[index] = { attributeId: event.target.value, valueIds: [] };
-                onChange(next);
-              }}
-            >
-              {attributes.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name}
-                </option>
-              ))}
-            </NativeSelect>
-
-            <div className="flex min-w-[12rem] flex-1 flex-wrap gap-1.5" role="group" aria-label={`Values of ${attribute?.name ?? "attribute"}`}>
+        <div className="space-y-1">
+          <Label className="text-xs">Attribute value</Label>
+          {!selectedAttributeId ? (
+            <p className="flex h-9 items-center text-xs text-slate-500">Choose an attribute first, then pick its values.</p>
+          ) : (
+            <div className="flex min-h-9 flex-wrap items-center gap-1.5" role="group" aria-label={`Values of ${attribute?.name ?? "attribute"}`}>
               {(attribute?.values ?? []).map((value) => {
-                const checked = criterion.valueIds.includes(value.id);
+                const checked = selectedValueIds.includes(value.id);
                 return (
                   <label
                     key={value.id}
@@ -783,14 +754,14 @@ function AttributeCriteria({
                       className="sr-only"
                       checked={checked}
                       onChange={(event) => {
-                        const next = [...criteria];
-                        next[index] = {
-                          ...criterion,
-                          valueIds: event.target.checked
-                            ? [...criterion.valueIds, value.id]
-                            : criterion.valueIds.filter((id) => id !== value.id),
-                        };
-                        onChange(next);
+                        onChange([
+                          {
+                            attributeId: selectedAttributeId,
+                            valueIds: event.target.checked
+                              ? [...selectedValueIds, value.id]
+                              : selectedValueIds.filter((id) => id !== value.id),
+                          },
+                        ]);
                       }}
                     />
                     {value.colorHex ? (
@@ -802,18 +773,9 @@ function AttributeCriteria({
               })}
               {(attribute?.values ?? []).length === 0 ? <span className="text-xs text-slate-400">This attribute has no values yet.</span> : null}
             </div>
-
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => onChange(criteria.filter((_, position) => position !== index))}
-            >
-              Remove
-            </Button>
-          </div>
-        );
-      })}
+          )}
+        </div>
+      </div>
     </div>
   );
 }
