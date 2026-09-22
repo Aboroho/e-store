@@ -131,7 +131,7 @@ export async function checkoutCatalog(storefront: CheckoutStorefront, limit = 60
       const pricePaisa = priceItem?.pricePaisa ?? variant.priceOverridePaisa ?? 0;
       return {
         variantId: variant.id,
-        sku: variant.sku,
+        sku: variant.sku ?? "",
         variantName: variant.name,
         productId: product.id,
         productName: product.name,

@@ -6,9 +6,10 @@ import { assertPermission, can } from "@/lib/permissions";
 import { parseListQuery } from "@/lib/validation";
 import { formatPaisa } from "@/lib/money";
 import { listCategoryOptions, listProducts } from "@/modules/catalog/queries";
-import { PageHeader, Badge, Card, CardContent, EmptyState, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, buttonVariants } from "@/components/ui/primitives";
+import { PageHeader, Badge, Card, CardContent, EmptyState, buttonVariants } from "@/components/ui/primitives";
 import { FilterSelect, SearchForm } from "@/components/ui/interactive";
-import { Pagination, SortableHead } from "@/components/ui/pagination";
+import { Pagination } from "@/components/ui/pagination";
+import { ProductListTable } from "./product-list-table";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Products" };
@@ -100,53 +101,11 @@ export default async function ProductsPage({
             />
           </CardContent>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <SortableHead label="Product" field="name" currentSortBy={query.sortBy} currentSortDir={query.sortDir} basePath="/admin/catalog/products" searchParams={params} />
-                <TableHead>Status</TableHead>
-                <TableHead className="text-center">Variants</TableHead>
-                <TableHead className="text-right">From</TableHead>
-                <TableHead className="text-right">On hand</TableHead>
-                <TableHead className="text-right">Available</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((product) => (
-                <TableRow key={product.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Link href={`/admin/catalog/products/${product.id}`} className="font-medium text-brand-600 hover:underline">
-                        {product.name}
-                      </Link>
-                      {product.isFeatured ? <Badge variant="violet">featured</Badge> : null}
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      {product.brand ? `${product.brand} · ` : ""}
-                      {product.slug}
-                    </p>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={STATUS_VARIANT[product.status] ?? "neutral"}>{product.status.toLowerCase()}</Badge>
-                  </TableCell>
-                  <TableCell className="text-center tabular-nums">{product.variantCount}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {product.priceFromPaisa != null ? formatPaisa(product.priceFromPaisa) : "—"}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{product.onHand}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    <span className={product.available <= 0 ? "font-medium text-red-600" : undefined}>{product.available}</span>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Link href={`/admin/catalog/products/${product.id}`} className={cn("text-sm font-medium text-brand-600 hover:underline")}>
-                      {can(session, "product.update") ? "Edit" : "View"}
-                    </Link>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <ProductListTable
+            products={rows}
+            canEdit={can(session, "product.update")}
+            canViewCost={can(session, "product.view_cost")}
+          />
         )}
 
         <div className="px-4">

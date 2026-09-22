@@ -461,7 +461,7 @@ export async function storefrontProduct(storefront: StorefrontContext, slug: str
       const price = prices.get(variant.id);
       return {
         id: variant.id,
-        sku: variant.sku,
+        sku: variant.sku ?? "",
         name: variant.name,
         pricePaisa: price?.pricePaisa ?? variant.priceOverridePaisa ?? 0,
         compareAtPricePaisa: price?.compareAtPricePaisa ?? variant.compareAtPricePaisa,

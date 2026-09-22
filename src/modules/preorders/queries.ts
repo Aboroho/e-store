@@ -66,7 +66,7 @@ export async function preorderBacklog(businessId: string) {
     if (outstanding <= 0) continue;
     const entry = byVariant.get(row.variantId) ?? {
       variantId: row.variantId,
-      sku: row.variant.sku,
+      sku: row.variant.sku ?? "",
       variantName: row.variant.name,
       productName: row.variant.product.name,
       outstanding: 0,

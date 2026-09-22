@@ -4,19 +4,42 @@ import { availableQuantity } from "@/modules/inventory/service";
 
 /** Read queries for catalog screens. All of them are scoped by businessId. */
 
+export interface ProductListVariantRow {
+  id: string;
+  name: string;
+  sku: string | null;
+  optionKey: string;
+  status: string;
+  pricePaisa: number;
+  priceOverridePaisa: number | null;
+  compareAtPricePaisa: number | null;
+  costPaisa: number | null;
+  packagingCostPaisa: number | null;
+  isPreorderEnabled: boolean | null;
+  weightGrams: number | null;
+  onHand: number;
+  available: number;
+  attributesSummary: Record<string, string> | null;
+}
+
 export interface ProductListRow {
   id: string;
   name: string;
   slug: string;
+  sku: string | null;
   status: string;
   productType: string;
   brand: string | null;
+  unitLabel: string;
+  defaultPricePaisa: number | null;
   variantCount: number;
   onHand: number;
   available: number;
   priceFromPaisa: number | null;
   isFeatured: boolean;
+  isPreorderEnabled: boolean;
   updatedAt: Date;
+  variants: ProductListVariantRow[];
 }
 
 export async function listProducts(
@@ -33,6 +56,7 @@ export async function listProducts(
           OR: [
             { name: { contains: query.search, mode: "insensitive" as const } },
             { brand: { contains: query.search, mode: "insensitive" as const } },
+            { sku: { contains: query.search, mode: "insensitive" as const } },
             { variants: { some: { sku: { contains: query.search, mode: "insensitive" as const } } } },
           ],
         }
@@ -54,10 +78,25 @@ export async function listProducts(
       take: query.take,
       include: {
         variants: {
+          orderBy: { position: "asc" },
           select: {
             id: true,
+            name: true,
+            sku: true,
             status: true,
+            optionKey: true,
             priceOverridePaisa: true,
+            compareAtPricePaisa: true,
+            costPaisa: true,
+            packagingCostPaisa: true,
+            isPreorderEnabled: true,
+            weightGrams: true,
+            attributesSummary: true,
+            priceItems: {
+              where: { minQuantity: 1 },
+              take: 1,
+              select: { pricePaisa: true, compareAtPricePaisa: true },
+            },
             inventory: { select: { onHand: true, reserved: true, damaged: true, inspection: true } },
           },
         },
@@ -67,31 +106,55 @@ export async function listProducts(
   ]);
 
   const rows: ProductListRow[] = products.map((product) => {
-    const activeVariants = product.variants.filter((variant) => variant.status === "ACTIVE");
+    const metadata = (product.metadata ?? {}) as Record<string, unknown>;
+    const defaultPricePaisa = typeof metadata.defaultPricePaisa === "number" ? (metadata.defaultPricePaisa as number) : null;
+
+    const variantRows: ProductListVariantRow[] = product.variants.map((variant) => {
+      const onHand = variant.inventory.reduce((sum, balance) => sum + balance.onHand, 0);
+      const available = variant.inventory.reduce((sum, balance) => sum + availableQuantity(balance), 0);
+      const effectivePrice = variant.priceItems[0]?.pricePaisa ?? variant.priceOverridePaisa ?? defaultPricePaisa ?? 0;
+      return {
+        id: variant.id,
+        name: variant.name,
+        sku: variant.sku,
+        optionKey: variant.optionKey,
+        status: variant.status,
+        pricePaisa: effectivePrice,
+        priceOverridePaisa: variant.priceOverridePaisa,
+        compareAtPricePaisa: variant.priceItems[0]?.compareAtPricePaisa ?? variant.compareAtPricePaisa,
+        costPaisa: variant.costPaisa,
+        packagingCostPaisa: variant.packagingCostPaisa ?? product.packagingCostPaisa,
+        isPreorderEnabled: variant.isPreorderEnabled,
+        weightGrams: variant.weightGrams,
+        onHand,
+        available,
+        attributesSummary: (variant.attributesSummary as Record<string, string>) || null,
+      };
+    });
+
+    const activeVariants = variantRows.filter((variant) => variant.status === "ACTIVE");
     const prices = activeVariants
-      .map((variant) => variant.priceOverridePaisa)
+      .map((variant) => variant.pricePaisa)
       .filter((price): price is number => typeof price === "number" && price > 0);
 
     return {
       id: product.id,
       name: product.name,
       slug: product.slug,
+      sku: product.sku,
       status: product.status,
       productType: product.productType,
       brand: product.brand,
+      unitLabel: product.unitLabel,
+      defaultPricePaisa,
       variantCount: product.variants.length,
-      onHand: product.variants.reduce(
-        (total_, variant) => total_ + variant.inventory.reduce((sum, balance) => sum + balance.onHand, 0),
-        0,
-      ),
-      available: product.variants.reduce(
-        (total_, variant) =>
-          total_ + variant.inventory.reduce((sum, balance) => sum + availableQuantity(balance), 0),
-        0,
-      ),
-      priceFromPaisa: prices.length > 0 ? Math.min(...prices) : null,
+      onHand: variantRows.reduce((total_, variant) => total_ + variant.onHand, 0),
+      available: variantRows.reduce((total_, variant) => total_ + variant.available, 0),
+      priceFromPaisa: prices.length > 0 ? Math.min(...prices) : defaultPricePaisa,
       isFeatured: product.isFeatured,
+      isPreorderEnabled: product.isPreorderEnabled,
       updatedAt: product.updatedAt,
+      variants: variantRows,
     };
   });
 

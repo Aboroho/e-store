@@ -68,7 +68,7 @@ export default async function NewExchangePage({ searchParams }: { searchParams: 
           }))}
           variants={variants.map((variant) => ({
             id: variant.id,
-            sku: variant.sku,
+            sku: variant.sku ?? "",
             name: variant.name,
             productName: variant.product.name,
           }))}

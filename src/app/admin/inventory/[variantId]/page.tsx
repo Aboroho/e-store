@@ -230,7 +230,7 @@ export default async function VariantInventoryPage({ params }: { params: Promise
         presetVariantId={variant.id}
         variants={variants.map((entry) => ({
           id: entry.id,
-          sku: entry.sku,
+          sku: entry.sku ?? "",
           label: `${entry.product.name} — ${entry.name}`,
           available: entry.inventory.reduce((sum, row) => sum + availableQuantity(row), 0),
         }))}

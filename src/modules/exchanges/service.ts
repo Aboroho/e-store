@@ -147,11 +147,11 @@ export async function createExchangeRequest(actor: ExchangeActor, input: CreateE
       if (variant.status !== "ACTIVE") throw AppError.invalidState(`${variant.sku} is unavailable for exchange`);
 
       const resolved = await resolveVariantPrice(variant.id, { quantity: item.quantity });
-      if (resolved.pricePaisa <= 0) throw AppError.validation(`${variant.sku} has no price configured`);
+      if (resolved.pricePaisa <= 0) throw AppError.validation(`${variant.sku || variant.name} has no price configured`);
       replacementValuePaisa += resolved.pricePaisa * item.quantity;
       replacementRows.push({
         variantId: variant.id,
-        sku: variant.sku,
+        sku: variant.sku ?? "",
         productName: variant.product.name,
         variantName: variant.name,
         attributesSnapshot: variant.attributeValues.map((value) => ({

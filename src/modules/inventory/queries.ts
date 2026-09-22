@@ -68,7 +68,7 @@ export async function listInventory(
   const rows: InventoryRow[] = balances
     .map((balance) => ({
       variantId: balance.variant.id,
-      sku: balance.variant.sku,
+      sku: balance.variant.sku ?? "",
       variantName: balance.variant.name,
       productId: balance.variant.product.id,
       productName: balance.variant.product.name,

@@ -49,15 +49,23 @@ export const productVariantInputSchema = z.object({
   /** Present when the variant already exists (edit/regeneration keeps its identity). */
   id: zId.optional(),
   name: z.string().trim().min(1, "Give the variant a name").max(160),
-  sku: skuSchema,
+  /** Variant SKU is optional in the workflow; SKU belongs to the main product. */
+  sku: z.string().trim().max(64).optional(),
   barcode: zOptionalText(64),
-  pricePaisa: zMoneyPaisa,
+  /** Regular / current price in paisa. */
+  currentPricePaisa: zMoneyPaisa.optional(),
+  discountType: z.enum(["PERCENTAGE", "FLAT", "NONE"]).optional(),
+  discountValue: z.coerce.number().min(0).max(1_000_000).optional(),
+  /** Sell price in paisa; optional if inherited from product default pricing. */
+  pricePaisa: zMoneyPaisa.optional(),
   compareAtPricePaisa: zMoneyPaisa.optional(),
   costPaisa: zMoneyPaisa.optional(),
   /** Weight is normalised to grams; `weightUnit` only preserves the typed unit for display. */
   weightGrams: z.coerce.number().int().min(0).max(1_000_000).optional(),
   weightUnit: weightUnitSchema.optional(),
-  isPreorderEnabled: z.boolean().default(false),
+  isPreorderEnabled: z.boolean().optional(),
+  /** Packaging cost in paisa override. */
+  packagingCostPaisa: zMoneyPaisa.optional(),
   /** Variant-level image override. `null` = inherit. */
   imageMediaId: z.string().uuid().nullable().optional(),
   galleryMediaIds: z.array(z.string().uuid()).max(12).default([]),
@@ -65,6 +73,11 @@ export const productVariantInputSchema = z.object({
   attributeValueIds: z.array(zId).default([]),
   /** True when a person edited this row by hand (kept for the "preserve overrides" logic). */
   touched: z.boolean().optional(),
+  clearPriceOverride: z.boolean().optional(),
+  clearCostOverride: z.boolean().optional(),
+  clearWeightOverride: z.boolean().optional(),
+  clearPreorderOverride: z.boolean().optional(),
+  clearImageOverride: z.boolean().optional(),
 });
 
 export const productDraftSchema = z.object({
@@ -72,7 +85,7 @@ export const productDraftSchema = z.object({
   productId: zId.optional(),
   name: z.string().trim().min(2, "Enter the product name").max(200, "Product names are limited to 200 characters"),
   slug: slugSchema,
-  /** Parent product code. Unique inside the business; variant codes are separate. */
+  /** Product SKU. Belongs to the main product. */
   productCode: skuSchema,
   barcode: zOptionalText(64),
   productType: z.enum(["SIMPLE", "VARIABLE"]).default("SIMPLE"),
@@ -97,31 +110,39 @@ export const productDraftSchema = z.object({
   weightValue: z.coerce.number().min(0).max(1_000_000).nullable().optional(),
   weightUnit: weightUnitSchema.default("g"),
 
+  taxRateId: zId.nullable().optional(),
   taxRateBps: z.coerce.number().int().min(0).max(5_000).default(0),
+  packagingCostTemplateId: zId.nullable().optional(),
   packagingCostPaisa: zMoneyPaisa.default(0),
-  /** Product-level default price offered to variants that have none of their own. */
+
+  /** Product-level default pricing configuration. */
+  currentPricePaisa: zMoneyPaisa.nullable().optional(),
+  discountType: z.enum(["PERCENTAGE", "FLAT", "NONE"]).default("NONE"),
+  discountValue: z.coerce.number().min(0).max(1_000_000).default(0),
+  /** Product-level default price (sell price) offered to variants that have none of their own. */
   defaultPricePaisa: zMoneyPaisa.nullable().optional(),
 
   requiresShipping: z.boolean().default(true),
   isFeatured: z.boolean().default(false),
   isPreorderEnabled: z.boolean().default(false),
   preorderNote: zOptionalText(300),
-  /** Opening stock is explicit: it is recorded as a stock adjustment, never implied. */
-  openingStock: z
-    .object({
-      variantKey: z.string().min(1),
-      quantity: z.coerce.number().int().positive().max(100_000),
-    })
-    .array()
-    .max(500)
-    .default([]),
-  recordOpeningStock: z.boolean().default(false),
 
   seoTitle: zOptionalText(200),
   seoDescription: zOptionalText(400),
   seoKeywords: zOptionalText(400),
 
   variants: z.array(productVariantInputSchema).min(1, "A product needs at least one variant").max(500, "Split products with more than 500 variants"),
+
+  /** Optional programmatic opening stock (excluded from product editor UI). */
+  recordOpeningStock: z.boolean().default(false),
+  openingStock: z
+    .array(
+      z.object({
+        variantKey: z.string(),
+        quantity: z.number().int().min(0),
+      }),
+    )
+    .default([]),
 
   /** Optimistic concurrency: the `updatedAt` the form was rendered with. */
   expectedUpdatedAt: z.string().trim().optional(),
@@ -223,6 +244,10 @@ export const BULK_VARIANT_ACTIONS = [
   "set-preorder",
   "reset-image",
   "clear-gallery",
+  "clear-price-override",
+  "clear-cost-override",
+  "clear-weight-override",
+  "clear-preorder-override",
 ] as const;
 
 export type BulkVariantAction = (typeof BULK_VARIANT_ACTIONS)[number];
@@ -246,6 +271,42 @@ export const bulkVariantActionSchema = z.object({
 });
 
 export type BulkVariantActionInput = z.infer<typeof bulkVariantActionSchema>;
+
+export const taxRateInputSchema = z.object({
+  name: z.string().trim().min(1, "Enter a tax rate name").max(100),
+  rateBps: z.coerce.number().int().min(0).max(10_000, "Tax rate cannot exceed 100%"),
+  isDefault: z.boolean().default(false),
+  isActive: z.boolean().default(true),
+});
+
+export type TaxRateInput = z.infer<typeof taxRateInputSchema>;
+
+export const packagingCostTemplateInputSchema = z.object({
+  name: z.string().trim().min(1, "Enter a template name").max(100),
+  costPaisa: zMoneyPaisa.default(0),
+  isDefault: z.boolean().default(false),
+  isActive: z.boolean().default(true),
+});
+
+export type PackagingCostTemplateInput = z.infer<typeof packagingCostTemplateInputSchema>;
+
+export const singleVariantUpdateSchema = z.object({
+  variantId: zId,
+  priceOverridePaisa: zMoneyPaisa.nullable().optional(),
+  compareAtPricePaisa: zMoneyPaisa.nullable().optional(),
+  costPaisa: zMoneyPaisa.nullable().optional(),
+  weightGrams: z.coerce.number().int().min(0).max(1_000_000).nullable().optional(),
+  isPreorderEnabled: z.boolean().nullable().optional(),
+  packagingCostPaisa: zMoneyPaisa.nullable().optional(),
+  imageMediaId: z.string().uuid().nullable().optional(),
+  clearPriceOverride: z.boolean().optional(),
+  clearCostOverride: z.boolean().optional(),
+  clearWeightOverride: z.boolean().optional(),
+  clearPreorderOverride: z.boolean().optional(),
+  clearImageOverride: z.boolean().optional(),
+});
+
+export type SingleVariantUpdateInput = z.infer<typeof singleVariantUpdateSchema>;
 
 export const slugCheckSchema = z.object({
   slug: z.string().trim().max(120),

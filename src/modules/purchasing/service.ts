@@ -125,7 +125,7 @@ export async function createPurchaseOrder(actor: PurchasingActor, input: Purchas
             const variant = variantById.get(item.variantId)!;
             return {
               variantId: item.variantId,
-              sku: variant.sku,
+              sku: variant.sku ?? "",
               productName: variant.product.name,
               variantName: variant.name,
               orderedQuantity: item.orderedQuantity,

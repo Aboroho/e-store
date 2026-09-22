@@ -11,7 +11,9 @@ import { assertImageAssets, assertMediaAssetsAvailable, syncMediaUsageCounts, to
 import { applyStockMovement, defaultLocationId, ensureBalance } from "@/modules/inventory/service";
 import { DEFAULT_WEIGHT_UNIT, isValidSlug, normalizeSku, resolveBulkTarget, suggestSlug, toWeightGrams } from "@/modules/catalog/product-draft";
 import type { BulkTarget, DraftVariant } from "@/modules/catalog/product-draft";
-import type { BulkVariantActionInput, BrandInput, ProductDraftInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
+import { calculatePricing } from "@/modules/catalog/pricing-rules";
+import { resolveVariantPrice } from "@/modules/pricing/service";
+import type { BulkVariantActionInput, BrandInput, ProductDraftInput, SingleVariantUpdateInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
 import type { CatalogActor } from "@/modules/catalog/service";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
 
@@ -133,8 +135,8 @@ function collectPayloadMediaIds(input: ProductDraftInput): string[] {
 /* -------------------------------------------------------------------------- */
 
 interface ValidatedContext {
-  attributeValues: Map<string, { id: string; attributeId: string; attributeSlug: string; valueSlug: string; mediaId: string | null }>;
-  variantsById: Map<string, { id: string; sku: string; optionKey: string; productId: string }>;
+  attributeValues: Map<string, { id: string; attributeId: string; attributeSlug: string; valueSlug: string; mediaId: string | null; priceOverridePaisa?: number | null }>;
+  variantsById: Map<string, { id: string; sku: string | null; optionKey: string; productId: string }>;
   brand: { id: string; name: string } | null;
   priceListId: string;
 }
@@ -197,6 +199,7 @@ async function validateReferences(
           id: true,
           attributeId: true,
           mediaId: true,
+          priceOverridePaisa: true,
           slug: true,
           attribute: { select: { id: true, slug: true, businessId: true, name: true } },
         },
@@ -216,7 +219,7 @@ async function validateReferences(
 
   /* Variant identity and combinations ------------------------------------ */
   const variantIds = input.variants.map((variant) => variant.id).filter((id): id is string => Boolean(id));
-  const variantsById = new Map<string, { id: string; sku: string; optionKey: string; productId: string }>();
+  const variantsById = new Map<string, { id: string; sku: string | null; optionKey: string; productId: string }>();
   if (variantIds.length > 0) {
     if (!input.productId) throw AppError.validation("Variant ids can only be sent when editing an existing product.");
     const rows = await tx.variant.findMany({
@@ -250,6 +253,7 @@ async function validateReferences(
           attributeSlug: value.attribute.slug,
           valueSlug: value.slug,
           mediaId: value.mediaId,
+          priceOverridePaisa: value.priceOverridePaisa,
         },
       ]),
     ),
@@ -279,20 +283,33 @@ async function assertSkusAvailable(
   input: ProductDraftInput,
   context: ValidatedContext,
 ): Promise<void> {
-  // 1. No duplicates inside this submission (the UI warns earlier, the server decides).
-  const seen = new Map<string, number>();
+  // 1. No duplicate variant codes inside this submission (if provided)
+  const seenSkus = new Map<string, number>();
   for (const variant of input.variants) {
     const sku = normalizeSku(variant.sku);
-    seen.set(sku, (seen.get(sku) ?? 0) + 1);
+    if (sku) {
+      seenSkus.set(sku, (seenSkus.get(sku) ?? 0) + 1);
+    }
   }
-  const duplicates = [...seen.entries()].filter(([, count]) => count > 1).map(([sku]) => sku);
-  if (duplicates.length > 0) {
-    throw AppError.validation(`These variant codes are used more than once in this product: ${duplicates.join(", ")}`);
+  const duplicateSkus = [...seenSkus.entries()].filter(([, count]) => count > 1).map(([sku]) => sku);
+  if (duplicateSkus.length > 0) {
+    throw AppError.validation(`These variant codes are used more than once in this product: ${duplicateSkus.join(", ")}`);
   }
 
-  // 2. Variant SKUs are globally unique in this platform — check the whole table but
-  //    only for the codes that actually changed, so a large catalogue stays fast.
-  const payloadSkus = input.variants.map((variant) => normalizeSku(variant.sku));
+  // Check duplicate option combinations
+  if (input.variants.length > 1) {
+    const seenOptionKeys = new Set<string>();
+    for (const variant of input.variants) {
+      const optKey = optionKeyFor(variant.attributeValueIds, context.attributeValues) || "default";
+      if (seenOptionKeys.has(optKey)) {
+        throw AppError.validation(`These variant codes are used more than once in this product: duplicate combination ${optKey}`);
+      }
+      seenOptionKeys.add(optKey);
+    }
+  }
+
+  // 2. Variant SKUs that are explicitly provided: check clashes across the platform
+  const payloadSkus = input.variants.map((v) => normalizeSku(v.sku)).filter(Boolean);
   const unchanged = new Set(
     input.variants
       .map((variant) => (variant.id ? context.variantsById.get(variant.id)?.sku : undefined))
@@ -303,20 +320,16 @@ async function assertSkusAvailable(
   if (toCheck.length > 0) {
     const clashes = await tx.variant.findMany({
       where: { sku: { in: toCheck } },
-      select: { sku: true, product: { select: { name: true, id: true } } },
+      select: { sku: true, product: { select: { id: true, name: true } } },
     });
-    const realClashes = clashes.filter((clash) => clash.product.id !== input.productId);
+    const realClashes = clashes.filter((c) => c.product.id !== input.productId);
     if (realClashes.length > 0) {
       const first = realClashes[0]!;
-      throw AppError.validation(
-        realClashes.length === 1
-          ? `Variant code ${first.sku} is already used by another product (${first.product.name}). Product codes are unique across the platform.`
-          : `${realClashes.length} variant codes are already used by other products: ${realClashes.map((clash) => clash.sku).join(", ")}.`,
-      );
+      throw AppError.validation(`Variant code ${first.sku} is already used by another product (${first.product.name}). Product codes are unique across the platform.`);
     }
   }
 
-  // 3. The parent product code is unique inside the business (variant codes may differ).
+  // 3. Parent product code (SKU) belongs to the main product and must be unique inside the business
   const productSku = normalizeSku(input.productCode);
   if (productSku) {
     const clash = await tx.product.findFirst({
@@ -329,10 +342,6 @@ async function assertSkusAvailable(
     });
     if (clash) {
       throw AppError.validation(`Product code ${productSku} is already used by "${clash.name}". Choose a different code.`);
-    }
-    const variantClash = await tx.variant.findFirst({ where: { sku: productSku }, select: { sku: true } });
-    if (variantClash) {
-      throw AppError.validation(`Product code ${productSku} is already used by a variant. Choose a different code.`);
     }
   }
 }
@@ -423,7 +432,11 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
     const weightGrams = toWeightGrams(input.weightValue ?? null, input.weightUnit ?? DEFAULT_WEIGHT_UNIT);
     const metadata: Prisma.InputJsonObject = {
       weightUnit: input.weightUnit ?? DEFAULT_WEIGHT_UNIT,
+      ...(input.weightValue != null ? { weightValue: input.weightValue } : {}),
       ...(input.defaultPricePaisa != null ? { defaultPricePaisa: input.defaultPricePaisa } : {}),
+      ...(input.currentPricePaisa != null ? { currentPricePaisa: input.currentPricePaisa } : {}),
+      ...(input.discountType ? { discountType: input.discountType } : {}),
+      ...(input.discountValue != null ? { discountValue: input.discountValue } : {}),
     };
 
     const productFields: any = {
@@ -443,7 +456,9 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       isFeatured: input.isFeatured,
       isPreorderEnabled: input.isPreorderEnabled,
       preorderNote: input.preorderNote?.trim() || null,
+      taxRateId: input.taxRateId ?? null,
       taxRateBps: input.taxRateBps,
+      packagingCostTemplateId: input.packagingCostTemplateId ?? null,
       packagingCostPaisa: input.packagingCostPaisa,
       seoTitle: input.seoTitle?.trim() || null,
       seoDescription: input.seoDescription?.trim() || null,
@@ -581,19 +596,64 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       );
 
       const existingVariant = variant.id ? context.variantsById.get(variant.id) : undefined;
+      const derivedSku = normalizeSku(variant.sku) || `${normalizeSku(input.productCode) || "SKU"}-${position + 1}`;
+
+      // Attribute-level price override
+      const attrOverrides = variant.attributeValueIds
+        .map((id) => context.attributeValues.get(id)?.priceOverridePaisa)
+        .filter((p): p is number => p != null && p > 0);
+      const attributePrice = attrOverrides[0] ?? null;
+
+      let effectivePricePaisa = 0;
+      let effectiveCompareAt: number | null = null;
+      let variantPriceOverride: number | null = null;
+      let variantCompareAtOverride: number | null = null;
+
+      if (variant.clearPriceOverride) {
+        variantPriceOverride = null;
+        variantCompareAtOverride = null;
+        effectivePricePaisa = attributePrice ?? input.defaultPricePaisa ?? 0;
+      } else if (variant.pricePaisa != null && variant.pricePaisa > 0) {
+        variantPriceOverride = variant.pricePaisa;
+        variantCompareAtOverride = variant.compareAtPricePaisa ?? null;
+        effectivePricePaisa = variant.pricePaisa;
+        effectiveCompareAt = variant.compareAtPricePaisa ?? null;
+      } else if (variant.currentPricePaisa != null && variant.currentPricePaisa > 0) {
+        const calc = calculatePricing({
+          currentPricePaisa: variant.currentPricePaisa,
+          discountType: variant.discountType,
+          discountValue: variant.discountValue,
+        });
+        variantPriceOverride = calc.sellPricePaisa;
+        variantCompareAtOverride = calc.compareAtPricePaisa;
+        effectivePricePaisa = calc.sellPricePaisa;
+        effectiveCompareAt = calc.compareAtPricePaisa;
+      } else if (attributePrice != null && attributePrice > 0) {
+        effectivePricePaisa = attributePrice;
+      } else if (input.defaultPricePaisa != null && input.defaultPricePaisa > 0) {
+        effectivePricePaisa = input.defaultPricePaisa;
+        effectiveCompareAt = input.currentPricePaisa && input.currentPricePaisa > input.defaultPricePaisa ? input.currentPricePaisa : null;
+      }
+
       const variantData = {
         name: variant.name,
-        sku: normalizeSku(variant.sku),
+        sku: derivedSku,
         barcode: variant.barcode ?? null,
         optionKey,
         position,
-        weightGrams: variant.weightGrams ?? null,
-        metadata: { weightUnit: variant.weightUnit ?? input.weightUnit ?? DEFAULT_WEIGHT_UNIT },
-        priceOverridePaisa: variant.pricePaisa,
-        compareAtPricePaisa: variant.compareAtPricePaisa ?? null,
-        costPaisa: variant.costPaisa ?? null,
-        isPreorderEnabled: variant.isPreorderEnabled,
-        imageMediaId: variant.imageMediaId ?? null,
+        weightGrams: variant.clearWeightOverride ? null : (variant.weightGrams ?? null),
+        metadata: {
+          weightUnit: variant.weightUnit ?? input.weightUnit ?? DEFAULT_WEIGHT_UNIT,
+          currentPricePaisa: variant.currentPricePaisa,
+          discountType: variant.discountType,
+          discountValue: variant.discountValue,
+        },
+        priceOverridePaisa: variantPriceOverride,
+        compareAtPricePaisa: variantCompareAtOverride,
+        costPaisa: variant.clearCostOverride ? null : (variant.costPaisa ?? null),
+        packagingCostPaisa: variant.packagingCostPaisa ?? null,
+        isPreorderEnabled: variant.clearPreorderOverride ? null : variant.isPreorderEnabled,
+        imageMediaId: variant.clearImageOverride ? null : (variant.imageMediaId ?? null),
         attributesSummary,
       };
 
@@ -617,17 +677,19 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
         });
       }
 
-      await tx.priceListItem.upsert({
-        where: { priceListId_variantId_minQuantity: { priceListId: context.priceListId, variantId: saved.id, minQuantity: 1 } },
-        create: {
-          priceListId: context.priceListId,
-          variantId: saved.id,
-          productId: product.id,
-          pricePaisa: variant.pricePaisa,
-          compareAtPricePaisa: variant.compareAtPricePaisa ?? null,
-        },
-        update: { pricePaisa: variant.pricePaisa, compareAtPricePaisa: variant.compareAtPricePaisa ?? null },
-      });
+      if (effectivePricePaisa > 0) {
+        await tx.priceListItem.upsert({
+          where: { priceListId_variantId_minQuantity: { priceListId: context.priceListId, variantId: saved.id, minQuantity: 1 } },
+          create: {
+            priceListId: context.priceListId,
+            variantId: saved.id,
+            productId: product.id,
+            pricePaisa: effectivePricePaisa,
+            compareAtPricePaisa: effectiveCompareAt,
+          },
+          update: { pricePaisa: effectivePricePaisa, compareAtPricePaisa: effectiveCompareAt },
+        });
+      }
 
       /* Variant images */
       const previousVariantMedia = await collectAssociationUsages(tx, "VARIANT", saved.id, ["primary-image", "gallery-image"]);
@@ -700,9 +762,19 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
 
     await syncMediaUsageCounts(tx, [...previousProductMedia, ...previousValueMedia, ...mediaIds]);
 
-    /* Opening stock — explicit, ledger-based, and never implied by saving. */
+    /* Discard matching working draft once product is saved/updated */
+    await tx.productDraft.deleteMany({
+      where: {
+        businessId: actor.businessId,
+        OR: [
+          { productId: product.id },
+          ...(existing ? [] : [{ userId: actor.userId, productId: null }]),
+        ],
+      },
+    });
+
     let openingStockRecorded = 0;
-    if (input.recordOpeningStock && input.openingStock.length > 0) {
+    if (input.recordOpeningStock && input.openingStock && input.openingStock.length > 0) {
       const locationId = await defaultLocationId(actor.businessId);
       const byVariantSku = new Map(
         await tx.variant
@@ -711,7 +783,6 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       );
       for (const entry of input.openingStock) {
         if (entry.quantity <= 0) continue;
-        // Keys come from the form as the client row key, the variant id or its SKU — compare codes case-insensitively.
         const wantedKey = normalizeSku(entry.variantKey);
         const variantId = [...keptVariantIds].find(
           (id) => id === entry.variantKey || normalizeSku(byVariantSku.get(id)) === wantedKey,
@@ -744,14 +815,14 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
         entityId: product.id,
         summary: `${existing ? "Updated" : "Created"} product ${product.name} with ${input.variants.length} variant(s)${intent === "draft" ? " (draft)" : ""}`,
         before: existing ? { name: existing.name, slug: existing.slug, status: existing.status } : undefined,
-        after: { name: input.name, slug: product.slug, status: product.status, variants: input.variants.map((variant) => variant.sku) },
+        after: { name: input.name, slug: product.slug, status: product.status, variants: input.variants.map((variant) => variant.sku || "") },
         changedFields: ["product", "images", "variants", "seo"],
       },
     });
 
     const warnings: string[] = [];
     if (removed.length > 0) {
-      warnings.push(`${removed.length} variant(s) are no longer part of this product and were archived (${removed.map((variant) => variant.sku).join(", ")}).`);
+      warnings.push(`${removed.length} variant(s) are no longer part of this product and were archived (${removed.map((variant) => variant.sku || "").join(", ")}).`);
     }
 
     return {
@@ -1204,7 +1275,7 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
     const draftRows = variantRows.map<DraftVariant>((row) => ({
       key: row.id,
       id: row.id,
-      sku: row.sku,
+      sku: row.sku ?? "",
       name: row.name,
       imageMediaId: row.imageMediaId,
       galleryMediaIds: row.images.map((image) => image.mediaId),
@@ -1387,6 +1458,39 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
           affected += 1;
           break;
         }
+        case "clear-price-override": {
+          await tx.variant.update({ where: { id: variantId }, data: { priceOverridePaisa: null, compareAtPricePaisa: null } });
+          const defaultPriceList =
+            (await tx.priceList.findFirst({ where: { businessId: actor.businessId, isDefault: true }, select: { id: true } })) ??
+            (await tx.priceList.findFirst({ where: { businessId: actor.businessId }, orderBy: { createdAt: "asc" }, select: { id: true } }));
+          if (defaultPriceList) {
+            const resolved = await resolveVariantPrice(variantId, { priceListId: defaultPriceList.id });
+            if (resolved.pricePaisa > 0) {
+              await tx.priceListItem.upsert({
+                where: { priceListId_variantId_minQuantity: { priceListId: defaultPriceList.id, variantId, minQuantity: 1 } },
+                create: { priceListId: defaultPriceList.id, variantId, productId: product.id, pricePaisa: resolved.pricePaisa, compareAtPricePaisa: resolved.compareAtPricePaisa },
+                update: { pricePaisa: resolved.pricePaisa, compareAtPricePaisa: resolved.compareAtPricePaisa },
+              });
+            }
+          }
+          affected += 1;
+          break;
+        }
+        case "clear-cost-override": {
+          await tx.variant.update({ where: { id: variantId }, data: { costPaisa: null } });
+          affected += 1;
+          break;
+        }
+        case "clear-weight-override": {
+          await tx.variant.update({ where: { id: variantId }, data: { weightGrams: null } });
+          affected += 1;
+          break;
+        }
+        case "clear-preorder-override": {
+          await tx.variant.update({ where: { id: variantId }, data: { isPreorderEnabled: null } });
+          affected += 1;
+          break;
+        }
         case "clear-gallery": {
           if (row.galleryMediaIds.length === 0) {
             skipped += 1;
@@ -1407,6 +1511,184 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
     await recordBulkAudit(tx, actor, product.id, input, targetDescription, affected, skipped);
     return { action: input.action, affected, skipped, targetDescription, details };
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Single Variant Editing (from Product List)                                  */
+/* -------------------------------------------------------------------------- */
+
+export async function updateSingleVariant(
+  actor: CatalogActor,
+  input: SingleVariantUpdateInput,
+): Promise<{ variantId: string; productName: string; variantName: string }> {
+  return withTransaction(async (tx) => {
+    const variant = await tx.variant.findFirst({
+      where: { id: input.variantId, product: { businessId: actor.businessId, deletedAt: null } },
+      include: {
+        product: { select: { id: true, name: true, sku: true, metadata: true } },
+      },
+    });
+    if (!variant) throw AppError.notFound("Variant not found");
+
+    const data: Prisma.VariantUpdateInput = {};
+
+    if (input.clearPriceOverride) {
+      data.priceOverridePaisa = null;
+      data.compareAtPricePaisa = null;
+    } else if (input.priceOverridePaisa !== undefined) {
+      data.priceOverridePaisa = input.priceOverridePaisa;
+      if (input.compareAtPricePaisa !== undefined) {
+        data.compareAtPricePaisa = input.compareAtPricePaisa;
+      }
+    }
+
+    if (input.clearCostOverride) {
+      data.costPaisa = null;
+    } else if (input.costPaisa !== undefined) {
+      data.costPaisa = input.costPaisa;
+    }
+
+    if (input.clearWeightOverride) {
+      data.weightGrams = null;
+    } else if (input.weightGrams !== undefined) {
+      data.weightGrams = input.weightGrams;
+    }
+
+    if (input.clearPreorderOverride) {
+      data.isPreorderEnabled = null;
+    } else if (input.isPreorderEnabled !== undefined) {
+      data.isPreorderEnabled = input.isPreorderEnabled;
+    }
+
+    if (input.packagingCostPaisa !== undefined) {
+      data.packagingCostPaisa = input.packagingCostPaisa;
+    }
+
+    if (input.clearImageOverride) {
+      data.imageMediaId = null;
+    } else if (input.imageMediaId !== undefined) {
+      data.imageMediaId = input.imageMediaId;
+    }
+
+    await tx.variant.update({
+      where: { id: variant.id },
+      data,
+    });
+
+    // Update the default PriceList item for this variant
+    const defaultPriceList =
+      (await tx.priceList.findFirst({ where: { businessId: actor.businessId, isDefault: true }, select: { id: true } })) ??
+      (await tx.priceList.findFirst({ where: { businessId: actor.businessId }, orderBy: { createdAt: "asc" }, select: { id: true } }));
+    if (defaultPriceList) {
+      const resolved = await resolveVariantPrice(variant.id, { priceListId: defaultPriceList.id });
+      if (resolved.pricePaisa > 0) {
+        await tx.priceListItem.upsert({
+          where: { priceListId_variantId_minQuantity: { priceListId: defaultPriceList.id, variantId: variant.id, minQuantity: 1 } },
+          create: {
+            priceListId: defaultPriceList.id,
+            variantId: variant.id,
+            productId: variant.productId,
+            pricePaisa: resolved.pricePaisa,
+            compareAtPricePaisa: resolved.compareAtPricePaisa ?? null,
+          },
+          update: {
+            pricePaisa: resolved.pricePaisa,
+            compareAtPricePaisa: resolved.compareAtPricePaisa ?? null,
+          },
+        });
+      }
+    }
+
+    await recordAudit(
+      {
+        businessId: actor.businessId,
+        actorUserId: actor.userId,
+        actorLabel: actor.actorLabel,
+        action: "variant.updated",
+        entityType: "Variant",
+        entityId: variant.id,
+        summary: `Updated variant ${variant.name} of ${variant.product.name}`,
+      },
+      tx,
+    );
+
+    return { variantId: variant.id, productName: variant.product.name, variantName: variant.name };
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Product Drafts and Autosave Persistence                                   */
+/* -------------------------------------------------------------------------- */
+
+export async function saveProductDraft(
+  actor: CatalogActor,
+  input: { productId?: string | null; name?: string; payload: Record<string, unknown> },
+): Promise<{ draftId: string; updatedAt: string }> {
+  const existingDraft = await prisma.productDraft.findFirst({
+    where: {
+      businessId: actor.businessId,
+      ...(input.productId ? { productId: input.productId } : { userId: actor.userId, productId: null }),
+    },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true },
+  });
+
+  const name = input.name?.trim() || (input.payload.name as string) || "Untitled draft";
+  const saved = existingDraft
+    ? await prisma.productDraft.update({
+        where: { id: existingDraft.id },
+        data: { name, payload: input.payload as Prisma.InputJsonValue, updatedAt: new Date() },
+        select: { id: true, updatedAt: true },
+      })
+    : await prisma.productDraft.create({
+        data: {
+          businessId: actor.businessId,
+          productId: input.productId ?? null,
+          userId: actor.userId ?? null,
+          name,
+          payload: input.payload as Prisma.InputJsonValue,
+        },
+        select: { id: true, updatedAt: true },
+      });
+
+  return { draftId: saved.id, updatedAt: saved.updatedAt.toISOString() };
+}
+
+export async function loadProductDraft(
+  businessId: string,
+  options: { productId?: string | null; draftId?: string | null; userId?: string | null },
+): Promise<{ draftId: string; name: string; payload: Record<string, unknown>; updatedAt: string } | null> {
+  const draft = await prisma.productDraft.findFirst({
+    where: {
+      businessId,
+      ...(options.draftId ? { id: options.draftId } : {}),
+      ...(options.productId ? { productId: options.productId } : {}),
+      ...(options.userId && !options.productId ? { userId: options.userId, productId: null } : {}),
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  if (!draft) return null;
+  return {
+    draftId: draft.id,
+    name: draft.name,
+    payload: draft.payload as Record<string, unknown>,
+    updatedAt: draft.updatedAt.toISOString(),
+  };
+}
+
+export async function discardProductDraft(
+  businessId: string,
+  options: { productId?: string | null; draftId?: string | null },
+): Promise<boolean> {
+  const result = await prisma.productDraft.deleteMany({
+    where: {
+      businessId,
+      ...(options.draftId ? { id: options.draftId } : {}),
+      ...(options.productId ? { productId: options.productId } : {}),
+    },
+  });
+  return result.count > 0;
 }
 
 async function recordBulkAudit(
