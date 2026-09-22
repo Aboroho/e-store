@@ -14,7 +14,6 @@ import {
   resolveBulkTarget,
   resolveVariantImage,
   suggestSlug,
-  suggestVariantSkus,
   toWeightGrams,
   variantLabel,
   type DraftAttribute,
@@ -52,7 +51,6 @@ const size: DraftAttribute = {
 function variant(partial: Partial<DraftVariant>): DraftVariant {
   return {
     key: partial.key ?? "row-1",
-    sku: "",
     name: "",
     imageMediaId: null,
     galleryMediaIds: [],
@@ -149,27 +147,27 @@ describe("variant matrix", () => {
 
   it("recombines without destroying manually entered data", () => {
     const existing = [
-      variant({ key: "v1", id: "id-1", sku: "TEE-1", price: "900", attributeValueIds: ["v-black", "v-s"], touched: true }),
-      variant({ key: "v2", id: "id-2", sku: "TEE-LEGACY", attributeValueIds: ["v-m"] }),
+      variant({ key: "v1", id: "id-1", name: "Black / S", currentPrice: "900", attributeValueIds: ["v-black", "v-s"], touched: true }),
+      variant({ key: "v2", id: "id-2", name: "Legacy row", currentPrice: "850", attributeValueIds: ["v-m"] }),
     ];
-    const plan = planMatrix([color, size], ["v-black", "v-white", "v-s"], existing, { skuPrefix: "TEE" });
+    const plan = planMatrix([color, size], ["v-black", "v-white", "v-s"], existing, { keepOrphans: true });
 
-    // Existing combination survives with its typed price and SKU untouched.
+    // Existing combination survives with its typed price untouched.
     expect(plan.kept).toHaveLength(1);
-    expect(plan.kept[0]!.sku).toBe("TEE-1");
-    expect(plan.kept[0]!.price).toBe("900");
+    expect(plan.kept[0]!.name).toBe("Black / S");
+    expect(plan.kept[0]!.currentPrice).toBe("900");
 
     // The new combination gets a fresh row.
     expect(plan.added).toHaveLength(1);
     expect(plan.added[0]!.name).toBe("White / S");
 
     // The deselected combination is an orphan, not silently deleted.
-    expect(plan.orphans.map((row) => row.sku)).toEqual(["TEE-LEGACY"]);
+    expect(plan.orphans.map((row) => row.name)).toEqual(["Legacy row"]);
     expect(plan.rows).toHaveLength(3);
 
     // With keepOrphans off the caller explicitly drops them.
-    const hard = planMatrix([color, size], ["v-black", "v-white", "v-s"], existing, { skuPrefix: "TEE", keepOrphans: false });
-    expect(hard.rows.filter((row) => row.sku === "TEE-LEGACY")).toHaveLength(0);
+    const hard = planMatrix([color, size], ["v-black", "v-white", "v-s"], existing, { keepOrphans: false });
+    expect(hard.rows.filter((row) => row.name === "Legacy row")).toHaveLength(0);
   });
 
   it("never plans two rows for the same combination", () => {
@@ -177,7 +175,7 @@ describe("variant matrix", () => {
       variant({ key: "a", attributeValueIds: ["v-black"] }),
       variant({ key: "b", attributeValueIds: ["v-black"] }),
     ];
-    const plan = planMatrix([color], ["v-black"], duplicates, { skuPrefix: "TEE" });
+    const plan = planMatrix([color], ["v-black"], duplicates, { keepOrphans: true });
     // One combination → one row regardless of how confusing the current rows are:
     // the matrix emits a single row for the shared combination and adds nothing.
     expect(plan.combinations).toBe(1);
@@ -186,15 +184,6 @@ describe("variant matrix", () => {
     expect(plan.rows).toHaveLength(1);
   });
 
-  it("suggests unique SKUs from the product code without touching filled ones", () => {
-    const rows = [variant({ key: "1", sku: "TEE-1" }), variant({ key: "2" }), variant({ key: "3", sku: "tee-2" }), variant({ key: "4" })];
-    const suggested = suggestVariantSkus(rows, "Tee Shirt");
-    const skus = suggested.map((row) => row.sku);
-    expect(skus[0]).toBe("TEE-1");
-    expect(new Set(skus.map((sku) => sku?.toUpperCase())).size).toBe(4);
-    expect(skus[1]).toMatch(/^TEE-SHIRT-/);
-    expect(skus[3]).toMatch(/^TEE-SHIRT-/);
-  });
 });
 
 describe("image inheritance", () => {
@@ -228,7 +217,7 @@ describe("image inheritance", () => {
     expect(
       resolveVariantImage({ imageMediaId: null, attributeValueIds: ["v-white"], productImageMediaId: "media-product", attributes })
         .label,
-    ).toBe("Inherited from product");
+    ).toBe("Inherited from product primary image");
     expect(
       resolveVariantImage({ imageMediaId: null, attributeValueIds: ["v-white"], productImageMediaId: null, attributes }),
     ).toMatchObject({ kind: "none", mediaId: null });

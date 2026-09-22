@@ -8,11 +8,12 @@ import { slugify } from "@/lib/utils";
 import { assertDocumentMediaExists, assertValidDocument, syncDocumentMediaUsages } from "@/modules/media/content";
 import { serializeRichTextOrEmpty } from "@/components/rich-text-editor/serialization";
 import { assertImageAssets, assertMediaAssetsAvailable, syncMediaUsageCounts, toAssetView } from "@/modules/media/service";
-import { applyStockMovement, defaultLocationId, ensureBalance } from "@/modules/inventory/service";
+import { defaultLocationId, ensureBalance } from "@/modules/inventory/service";
 import { DEFAULT_WEIGHT_UNIT, isValidSlug, normalizeSku, resolveBulkTarget, suggestSlug, toWeightGrams } from "@/modules/catalog/product-draft";
 import type { BulkTarget, DraftVariant } from "@/modules/catalog/product-draft";
-import { calculatePricing } from "@/modules/catalog/pricing-rules";
-import { resolveVariantPrice } from "@/modules/pricing/service";
+import { calculatePricing, normalizeDiscount, validateDiscount, type DiscountType } from "@/modules/catalog/pricing-rules";
+import { pricingFromLevel, resolvePricing, type PricingLevelInput } from "@/modules/catalog/inheritance";
+import { syncVariantPriceListItem } from "@/modules/catalog/variant-pricing";
 import type { BulkVariantActionInput, BrandInput, ProductDraftInput, SingleVariantUpdateInput, UnitLabelInput } from "@/modules/catalog/product-schemas";
 import type { CatalogActor } from "@/modules/catalog/service";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
@@ -39,6 +40,7 @@ export interface SaveProductResult {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   created: boolean;
   variantCount: number;
+  /** Always zero: saving a product never creates stock. */
   openingStockRecorded: number;
   warnings: string[];
 }
@@ -135,7 +137,22 @@ function collectPayloadMediaIds(input: ProductDraftInput): string[] {
 /* -------------------------------------------------------------------------- */
 
 interface ValidatedContext {
-  attributeValues: Map<string, { id: string; attributeId: string; attributeSlug: string; valueSlug: string; mediaId: string | null; priceOverridePaisa?: number | null }>;
+  attributeValues: Map<
+    string,
+    {
+      id: string;
+      attributeId: string;
+      attributeSlug: string;
+      valueSlug: string;
+      attributeName: string;
+      valueLabel: string;
+      mediaId: string | null;
+      priceOverridePaisa?: number | null;
+      currentPricePaisa?: number | null;
+      discountType?: string | null;
+      discountValue?: number | null;
+    }
+  >;
   variantsById: Map<string, { id: string; sku: string | null; optionKey: string; productId: string }>;
   brand: { id: string; name: string } | null;
   priceListId: string;
@@ -200,7 +217,11 @@ async function validateReferences(
           attributeId: true,
           mediaId: true,
           priceOverridePaisa: true,
+          currentPricePaisa: true,
+          discountType: true,
+          discountValue: true,
           slug: true,
+          value: true,
           attribute: { select: { id: true, slug: true, businessId: true, name: true } },
         },
       })
@@ -252,8 +273,13 @@ async function validateReferences(
           attributeId: value.attribute.id,
           attributeSlug: value.attribute.slug,
           valueSlug: value.slug,
+          attributeName: value.attribute.name,
+          valueLabel: value.value,
           mediaId: value.mediaId,
           priceOverridePaisa: value.priceOverridePaisa,
+          currentPricePaisa: value.currentPricePaisa,
+          discountType: value.discountType,
+          discountValue: value.discountValue,
         },
       ]),
     ),
@@ -430,13 +456,35 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       intent === "draft" && !existing ? "DRAFT" : input.status;
 
     const weightGrams = toWeightGrams(input.weightValue ?? null, input.weightUnit ?? DEFAULT_WEIGHT_UNIT);
+
+    /* Product default pricing (level 3 of the inheritance model) ------------ */
+    // The browser sends the operator's *intent* (current price + discount); the
+    // sell price is derived here so nothing client-side can forge it.
+    const productDiscount = normalizeDiscount({
+      discountType: input.discountType,
+      discountValue: input.discountValue,
+      currentPricePaisa: input.currentPricePaisa,
+    });
+    const productCurrentPricePaisa = input.currentPricePaisa != null && input.currentPricePaisa > 0 ? Math.round(input.currentPricePaisa) : null;
+    const productDiscountCheck = validateDiscount({
+      currentPricePaisa: productCurrentPricePaisa,
+      discountType: productDiscount.discountType,
+      discountValue: productDiscount.discountValue,
+    });
+    if (!productDiscountCheck.ok) throw AppError.validation(productDiscountCheck.message ?? "The product discount is invalid.");
+    const productPricing = calculatePricing({
+      currentPricePaisa: productCurrentPricePaisa ?? 0,
+      discountType: productDiscount.discountType,
+      discountValue: productDiscount.discountValue,
+    });
+    // An explicit sell price from the form wins (the UI shows the derived value,
+    // so they normally agree); otherwise the calculation is authoritative.
+    const productDefaultPricePaisa =
+      input.defaultPricePaisa != null && input.defaultPricePaisa > 0 ? Math.round(input.defaultPricePaisa) : productCurrentPricePaisa != null ? productPricing.sellPricePaisa : null;
+
     const metadata: Prisma.InputJsonObject = {
       weightUnit: input.weightUnit ?? DEFAULT_WEIGHT_UNIT,
       ...(input.weightValue != null ? { weightValue: input.weightValue } : {}),
-      ...(input.defaultPricePaisa != null ? { defaultPricePaisa: input.defaultPricePaisa } : {}),
-      ...(input.currentPricePaisa != null ? { currentPricePaisa: input.currentPricePaisa } : {}),
-      ...(input.discountType ? { discountType: input.discountType } : {}),
-      ...(input.discountValue != null ? { discountValue: input.discountValue } : {}),
     };
 
     const productFields: any = {
@@ -451,7 +499,14 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       sku: normalizeSku(input.productCode) || null,
       barcode: input.barcode?.trim() || null,
       unitLabel: input.unitLabel.trim(),
+      unitLabelId: input.unitLabelId ?? null,
       weightGrams,
+      defaultCurrentPricePaisa: productCurrentPricePaisa,
+      defaultDiscountType: productDiscount.discountType,
+      defaultDiscountValue: productDiscount.discountValue,
+      defaultPricePaisa: productDefaultPricePaisa,
+      defaultCompareAtPricePaisa: productCurrentPricePaisa,
+      defaultCostPaisa: input.defaultCostPaisa ?? null,
       requiresShipping: input.requiresShipping,
       isFeatured: input.isFeatured,
       isPreorderEnabled: input.isPreorderEnabled,
@@ -596,63 +651,87 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       );
 
       const existingVariant = variant.id ? context.variantsById.get(variant.id) : undefined;
-      const derivedSku = normalizeSku(variant.sku) || `${normalizeSku(input.productCode) || "SKU"}-${position + 1}`;
 
-      // Attribute-level price override
-      const attrOverrides = variant.attributeValueIds
-        .map((id) => context.attributeValues.get(id)?.priceOverridePaisa)
-        .filter((p): p is number => p != null && p > 0);
-      const attributePrice = attrOverrides[0] ?? null;
+      /* Price inheritance: variant override > attribute override > product default */
+      // Attribute candidates follow the order the product lists its attributes,
+      // so "Colour" beats "Size" — the same order the editor shows.
+      const attributeCandidates = variant.attributeValueIds
+        .map((id) => context.attributeValues.get(id))
+        .filter((value): value is NonNullable<typeof value> => Boolean(value))
+        .map((value) => ({
+          attributeValueId: value.id,
+          attributeName: value.attributeName,
+          valueLabel: value.valueLabel,
+          value: {
+            currentPricePaisa: value.currentPricePaisa ?? null,
+            discountType: (value.discountType ?? "NONE") as DiscountType,
+            discountValue: value.discountValue ?? 0,
+            pricePaisa: value.priceOverridePaisa ?? null,
+          } satisfies PricingLevelInput,
+        }));
 
-      let effectivePricePaisa = 0;
-      let effectiveCompareAt: number | null = null;
-      let variantPriceOverride: number | null = null;
-      let variantCompareAtOverride: number | null = null;
-
-      if (variant.clearPriceOverride) {
-        variantPriceOverride = null;
-        variantCompareAtOverride = null;
-        effectivePricePaisa = attributePrice ?? input.defaultPricePaisa ?? 0;
-      } else if (variant.pricePaisa != null && variant.pricePaisa > 0) {
-        variantPriceOverride = variant.pricePaisa;
-        variantCompareAtOverride = variant.compareAtPricePaisa ?? null;
-        effectivePricePaisa = variant.pricePaisa;
-        effectiveCompareAt = variant.compareAtPricePaisa ?? null;
-      } else if (variant.currentPricePaisa != null && variant.currentPricePaisa > 0) {
-        const calc = calculatePricing({
-          currentPricePaisa: variant.currentPricePaisa,
-          discountType: variant.discountType,
-          discountValue: variant.discountValue,
+      const variantDiscount = normalizeDiscount({
+        discountType: variant.discountType,
+        discountValue: variant.discountValue,
+        currentPricePaisa: variant.currentPricePaisa,
+      });
+      if (!variant.clearPriceOverride) {
+        const discountCheck = validateDiscount({
+          currentPricePaisa: variant.currentPricePaisa ?? null,
+          discountType: variantDiscount.discountType,
+          discountValue: variantDiscount.discountValue,
         });
-        variantPriceOverride = calc.sellPricePaisa;
-        variantCompareAtOverride = calc.compareAtPricePaisa;
-        effectivePricePaisa = calc.sellPricePaisa;
-        effectiveCompareAt = calc.compareAtPricePaisa;
-      } else if (attributePrice != null && attributePrice > 0) {
-        effectivePricePaisa = attributePrice;
-      } else if (input.defaultPricePaisa != null && input.defaultPricePaisa > 0) {
-        effectivePricePaisa = input.defaultPricePaisa;
-        effectiveCompareAt = input.currentPricePaisa && input.currentPricePaisa > input.defaultPricePaisa ? input.currentPricePaisa : null;
+        if (!discountCheck.ok) {
+          throw AppError.validation(`${variant.name || "A variant"}: ${discountCheck.message ?? "the discount is invalid."}`);
+        }
       }
+
+      const resolution = resolvePricing({
+        productDefault: {
+          currentPricePaisa: productCurrentPricePaisa,
+          discountType: productDiscount.discountType,
+          discountValue: productDiscount.discountValue,
+          pricePaisa: productDefaultPricePaisa,
+        },
+        attributeValues: attributeCandidates,
+        variantOverride: variant.clearPriceOverride
+          ? null
+          : {
+              currentPricePaisa: variant.currentPricePaisa ?? null,
+              discountType: variantDiscount.discountType,
+              discountValue: variantDiscount.discountValue,
+              pricePaisa: variant.pricePaisa ?? null,
+              compareAtPricePaisa: variant.compareAtPricePaisa ?? null,
+            },
+      });
+
+      const effectivePricePaisa = resolution.value.pricePaisa;
+      const effectiveCompareAt = resolution.value.compareAtPricePaisa;
+      // Only a manual variant override is persisted on the variant: an inherited
+      // price stays inherited, so changing the product default later moves every
+      // variant that has no override of its own.
+      const hasVariantOverride = resolution.level === "VARIANT";
 
       const variantData = {
         name: variant.name,
-        sku: derivedSku,
+        // SKU belongs to the product. A variant only keeps an optional legacy
+        // internal code; the workflow never generates or requires one.
+        ...(existingVariant ? {} : { sku: normalizeSku(variant.sku) || null }),
         barcode: variant.barcode ?? null,
         optionKey,
         position,
         weightGrams: variant.clearWeightOverride ? null : (variant.weightGrams ?? null),
         metadata: {
           weightUnit: variant.weightUnit ?? input.weightUnit ?? DEFAULT_WEIGHT_UNIT,
-          currentPricePaisa: variant.currentPricePaisa,
-          discountType: variant.discountType,
-          discountValue: variant.discountValue,
-        },
-        priceOverridePaisa: variantPriceOverride,
-        compareAtPricePaisa: variantCompareAtOverride,
+        } as Prisma.InputJsonValue,
+        currentPricePaisa: hasVariantOverride ? variant.currentPricePaisa ?? null : null,
+        discountType: hasVariantOverride ? variantDiscount.discountType : ("NONE" as const),
+        discountValue: hasVariantOverride ? variantDiscount.discountValue : 0,
+        priceOverridePaisa: hasVariantOverride ? resolution.value.pricePaisa : null,
+        compareAtPricePaisa: hasVariantOverride ? variant.compareAtPricePaisa ?? resolution.value.compareAtPricePaisa : null,
         costPaisa: variant.clearCostOverride ? null : (variant.costPaisa ?? null),
         packagingCostPaisa: variant.packagingCostPaisa ?? null,
-        isPreorderEnabled: variant.clearPreorderOverride ? null : variant.isPreorderEnabled,
+        isPreorderEnabled: variant.clearPreorderOverride ? null : variant.isPreorderEnabled ?? null,
         imageMediaId: variant.clearImageOverride ? null : (variant.imageMediaId ?? null),
         attributesSummary,
       };
@@ -688,6 +767,12 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
             compareAtPricePaisa: effectiveCompareAt,
           },
           update: { pricePaisa: effectivePricePaisa, compareAtPricePaisa: effectiveCompareAt },
+        });
+      } else {
+        // No resolvable price: drop the stale row instead of leaving a price
+        // the catalogue no longer agrees with.
+        await tx.priceListItem.deleteMany({
+          where: { priceListId: context.priceListId, variantId: saved.id, minQuantity: 1 },
         });
       }
 
@@ -736,7 +821,7 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
        carry order lines, movements and historical prices. */
     const removed = await tx.variant.findMany({
       where: { productId: product.id, id: { notIn: [...keptVariantIds] }, status: { not: "ARCHIVED" } },
-      select: { id: true, sku: true },
+      select: { id: true, sku: true, name: true },
     });
     if (removed.length > 0) {
       await tx.variant.updateMany({ where: { id: { in: removed.map((variant) => variant.id) } }, data: { status: "ARCHIVED" } });
@@ -773,36 +858,11 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       },
     });
 
-    let openingStockRecorded = 0;
-    if (input.recordOpeningStock && input.openingStock && input.openingStock.length > 0) {
-      const locationId = await defaultLocationId(actor.businessId);
-      const byVariantSku = new Map(
-        await tx.variant
-          .findMany({ where: { id: { in: [...keptVariantIds] } }, select: { id: true, sku: true } })
-          .then((rows) => rows.map((row) => [row.id, row.sku] as const)),
-      );
-      for (const entry of input.openingStock) {
-        if (entry.quantity <= 0) continue;
-        const wantedKey = normalizeSku(entry.variantKey);
-        const variantId = [...keptVariantIds].find(
-          (id) => id === entry.variantKey || normalizeSku(byVariantSku.get(id)) === wantedKey,
-        );
-        if (!variantId) continue;
-        await applyStockMovement(tx, {
-          businessId: actor.businessId,
-          variantId,
-          locationId,
-          type: "OPENING",
-          onHandDelta: entry.quantity,
-          reason: "Opening stock recorded while creating the product",
-          sourceType: "Product",
-          sourceId: product.id,
-          actorUserId: actor.userId,
-          idempotencyKey: `opening-stock:${product.id}:${variantId}`,
-        });
-        openingStockRecorded += 1;
-      }
-    }
+    /* Saving a product never creates stock. --------------------------------
+       `ensureBalance` above only makes sure a zero balance row exists so the
+       inventory module has something to move; every unit that later appears on
+       hand arrives through a purchase receipt (or an authorised inventory
+       adjustment), both of which write their own ledger movement. */
 
     await tx.auditLog.create({
       data: {
@@ -815,14 +875,16 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
         entityId: product.id,
         summary: `${existing ? "Updated" : "Created"} product ${product.name} with ${input.variants.length} variant(s)${intent === "draft" ? " (draft)" : ""}`,
         before: existing ? { name: existing.name, slug: existing.slug, status: existing.status } : undefined,
-        after: { name: input.name, slug: product.slug, status: product.status, variants: input.variants.map((variant) => variant.sku || "") },
+        after: { name: input.name, slug: product.slug, status: product.status, variantCount: input.variants.length },
         changedFields: ["product", "images", "variants", "seo"],
       },
     });
 
     const warnings: string[] = [];
     if (removed.length > 0) {
-      warnings.push(`${removed.length} variant(s) are no longer part of this product and were archived (${removed.map((variant) => variant.sku || "").join(", ")}).`);
+      warnings.push(
+        `${removed.length} variant(s) are no longer part of this product and were archived (${removed.map((variant) => variant.name).join(", ")}).`,
+      );
     }
 
     return {
@@ -831,7 +893,7 @@ export async function saveProduct(actor: CatalogActor, input: ProductDraftInput)
       status: product.status as "DRAFT" | "ACTIVE" | "ARCHIVED",
       created: !existing,
       variantCount: input.variants.length,
-      openingStockRecorded,
+      openingStockRecorded: 0,
       warnings,
     };
   });
@@ -1254,10 +1316,14 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
         id: true,
         sku: true,
         name: true,
+        currentPricePaisa: true,
+        discountType: true,
+        discountValue: true,
         priceOverridePaisa: true,
         compareAtPricePaisa: true,
         costPaisa: true,
         weightGrams: true,
+        packagingCostPaisa: true,
         isPreorderEnabled: true,
         imageMediaId: true,
         attributeValues: { select: { attributeValueId: true } },
@@ -1318,6 +1384,8 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
     const details: string[] = [];
     let affected = 0;
     let skipped = 0;
+    /** Variants whose default price-list row has to be recomputed after the write. */
+    const priceRowsToSync = new Set<string>();
 
     const matchingValueIds = new Set((input.target.criteria ?? []).flatMap((criterion) => criterion.valueIds));
 
@@ -1404,17 +1472,80 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
           break;
         }
         case "set-price": {
-          if (input.pricePaisa === undefined) throw AppError.validation("Enter the new price.");
-          const priceList =
-            (await tx.priceList.findFirst({ where: { businessId: actor.businessId, isDefault: true }, select: { id: true } })) ??
-            (await tx.priceList.findFirst({ where: { businessId: actor.businessId }, orderBy: { createdAt: "asc" }, select: { id: true } }));
-          if (!priceList) throw AppError.conflict("Create a price list before setting prices.");
-          await tx.variant.update({ where: { id: variantId }, data: { priceOverridePaisa: input.pricePaisa } });
-          await tx.priceListItem.upsert({
-            where: { priceListId_variantId_minQuantity: { priceListId: priceList.id, variantId, minQuantity: 1 } },
-            create: { priceListId: priceList.id, variantId, productId: product.id, pricePaisa: input.pricePaisa },
-            update: { pricePaisa: input.pricePaisa },
+          if (input.pricePaisa === undefined && input.currentPricePaisa === undefined) {
+            throw AppError.validation("Enter the new price.");
+          }
+          const discount = normalizeDiscount({
+            discountType: input.discountType,
+            discountValue: input.discountValue,
+            currentPricePaisa: input.currentPricePaisa,
           });
+          const currentPricePaisa =
+            input.currentPricePaisa != null && input.currentPricePaisa > 0 ? Math.round(input.currentPricePaisa) : null;
+          const check = validateDiscount({
+            currentPricePaisa,
+            discountType: discount.discountType,
+            discountValue: discount.discountValue,
+          });
+          if (!check.ok) throw AppError.validation(check.message ?? "The discount is invalid.");
+          const sellPricePaisa =
+            input.pricePaisa != null && input.pricePaisa > 0
+              ? Math.round(input.pricePaisa)
+              : pricingFromLevel({ currentPricePaisa, discountType: discount.discountType, discountValue: discount.discountValue }).pricePaisa;
+          if (sellPricePaisa <= 0) throw AppError.validation("Enter a price greater than zero.");
+
+          if (input.overrideTarget === "attribute") {
+            // Attribute-level override: every variant of the matched values
+            // inherits it, including variants generated later. Manual variant
+            // overrides are preserved unless the operator asked to replace them.
+            for (const attributeValueId of matchingValueIds) {
+              await tx.attributeValue.update({
+                where: { id: attributeValueId },
+                data: {
+                  currentPricePaisa,
+                  discountType: discount.discountType,
+                  discountValue: discount.discountValue,
+                  priceOverridePaisa: sellPricePaisa,
+                },
+              });
+            }
+            if (matchingValueIds.size === 0) {
+              throw AppError.validation("Attribute-level pricing needs an attribute filter — choose the values to update.");
+            }
+          } else if (input.overrideTarget === "product") {
+            await tx.product.update({
+              where: { id: product.id },
+              data: {
+                defaultCurrentPricePaisa: currentPricePaisa,
+                defaultDiscountType: discount.discountType,
+                defaultDiscountValue: discount.discountValue,
+                defaultPricePaisa: sellPricePaisa,
+                defaultCompareAtPricePaisa: currentPricePaisa,
+              },
+            });
+          } else if (input.overrideTarget === "clear") {
+            await tx.variant.update({
+              where: { id: variantId },
+              data: {
+                currentPricePaisa: null,
+                discountType: "NONE",
+                discountValue: 0,
+                priceOverridePaisa: null,
+                compareAtPricePaisa: null,
+              },
+            });
+          } else {
+            await tx.variant.update({
+              where: { id: variantId },
+              data: {
+                currentPricePaisa,
+                discountType: discount.discountType,
+                discountValue: discount.discountValue,
+                priceOverridePaisa: sellPricePaisa,
+                compareAtPricePaisa: currentPricePaisa && currentPricePaisa > sellPricePaisa ? currentPricePaisa : null,
+              },
+            });
+          }
           affected += 1;
           break;
         }
@@ -1459,20 +1590,17 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
           break;
         }
         case "clear-price-override": {
-          await tx.variant.update({ where: { id: variantId }, data: { priceOverridePaisa: null, compareAtPricePaisa: null } });
-          const defaultPriceList =
-            (await tx.priceList.findFirst({ where: { businessId: actor.businessId, isDefault: true }, select: { id: true } })) ??
-            (await tx.priceList.findFirst({ where: { businessId: actor.businessId }, orderBy: { createdAt: "asc" }, select: { id: true } }));
-          if (defaultPriceList) {
-            const resolved = await resolveVariantPrice(variantId, { priceListId: defaultPriceList.id });
-            if (resolved.pricePaisa > 0) {
-              await tx.priceListItem.upsert({
-                where: { priceListId_variantId_minQuantity: { priceListId: defaultPriceList.id, variantId, minQuantity: 1 } },
-                create: { priceListId: defaultPriceList.id, variantId, productId: product.id, pricePaisa: resolved.pricePaisa, compareAtPricePaisa: resolved.compareAtPricePaisa },
-                update: { pricePaisa: resolved.pricePaisa, compareAtPricePaisa: resolved.compareAtPricePaisa },
-              });
-            }
-          }
+          await tx.variant.update({
+            where: { id: variantId },
+            data: {
+              currentPricePaisa: null,
+              discountType: "NONE",
+              discountValue: 0,
+              priceOverridePaisa: null,
+              compareAtPricePaisa: null,
+            },
+          });
+          priceRowsToSync.add(variantId);
           affected += 1;
           break;
         }
@@ -1491,6 +1619,27 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
           affected += 1;
           break;
         }
+        case "clear-packaging-cost-override": {
+          if (row.packagingCost == null) {
+            skipped += 1;
+            break;
+          }
+          await tx.variant.update({ where: { id: variantId }, data: { packagingCostPaisa: null } });
+          affected += 1;
+          break;
+        }
+        case "clear-image-override": {
+          if (!row.imageMediaId) {
+            skipped += 1;
+            break;
+          }
+          const previousImage = await collectAssociationUsages(tx, "VARIANT", variantId, ["primary-image"]);
+          await tx.variant.update({ where: { id: variantId }, data: { imageMediaId: null } });
+          await tx.mediaUsage.deleteMany({ where: { entityType: "VARIANT", entityId: variantId, field: "primary-image" } });
+          await syncMediaUsageCounts(tx, previousImage);
+          affected += 1;
+          break;
+        }
         case "clear-gallery": {
           if (row.galleryMediaIds.length === 0) {
             skipped += 1;
@@ -1506,6 +1655,17 @@ export async function bulkApplyVariantAction(actor: CatalogActor, input: BulkVar
         default:
           throw AppError.validation("Unsupported bulk action");
       }
+
+      // Any pricing write (variant, attribute or product level) changes what
+      // these variants sell for, so the default price-list row is recomputed
+      // from the database — never from what the browser sent.
+      if (input.action === "set-price" || input.action.startsWith("clear-price")) {
+        priceRowsToSync.add(variantId);
+      }
+    }
+
+    for (const variantId of priceRowsToSync) {
+      await syncVariantPriceListItem(tx, { businessId: actor.businessId, productId: product.id, variantId });
     }
 
     await recordBulkAudit(tx, actor, product.id, input, targetDescription, affected, skipped);
@@ -1532,14 +1692,44 @@ export async function updateSingleVariant(
 
     const data: Prisma.VariantUpdateInput = {};
 
+    if (input.name !== undefined) data.name = input.name;
+    if (input.barcode !== undefined) data.barcode = input.barcode || null;
+
+    /* Pricing: discount-aware override, or back to inheritance. */
     if (input.clearPriceOverride) {
+      data.currentPricePaisa = null;
+      data.discountType = "NONE";
+      data.discountValue = 0;
       data.priceOverridePaisa = null;
       data.compareAtPricePaisa = null;
-    } else if (input.priceOverridePaisa !== undefined) {
-      data.priceOverridePaisa = input.priceOverridePaisa;
-      if (input.compareAtPricePaisa !== undefined) {
-        data.compareAtPricePaisa = input.compareAtPricePaisa;
+    } else if (input.currentPricePaisa !== undefined || input.priceOverridePaisa !== undefined) {
+      const discount = normalizeDiscount({
+        discountType: input.discountType,
+        discountValue: input.discountValue,
+        currentPricePaisa: input.currentPricePaisa,
+      });
+      const currentPricePaisa =
+        input.currentPricePaisa != null && input.currentPricePaisa > 0 ? Math.round(input.currentPricePaisa) : null;
+      const check = validateDiscount({
+        currentPricePaisa,
+        discountType: discount.discountType,
+        discountValue: discount.discountValue,
+      });
+      if (!check.ok) throw AppError.validation(check.message ?? "The discount is invalid.");
+      const pricing = pricingFromLevel({
+        currentPricePaisa,
+        discountType: discount.discountType,
+        discountValue: discount.discountValue,
+        pricePaisa: input.priceOverridePaisa,
+      });
+      if (pricing.pricePaisa <= 0 && input.priceOverridePaisa !== null && input.currentPricePaisa !== null) {
+        throw AppError.validation("Enter a price greater than zero, or clear the override to inherit.");
       }
+      data.currentPricePaisa = currentPricePaisa;
+      data.discountType = discount.discountType;
+      data.discountValue = discount.discountValue;
+      data.priceOverridePaisa = pricing.pricePaisa > 0 ? pricing.pricePaisa : null;
+      data.compareAtPricePaisa = input.compareAtPricePaisa ?? pricing.compareAtPricePaisa;
     }
 
     if (input.clearCostOverride) {
@@ -1560,7 +1750,9 @@ export async function updateSingleVariant(
       data.isPreorderEnabled = input.isPreorderEnabled;
     }
 
-    if (input.packagingCostPaisa !== undefined) {
+    if (input.clearPackagingCostOverride) {
+      data.packagingCostPaisa = null;
+    } else if (input.packagingCostPaisa !== undefined) {
       data.packagingCostPaisa = input.packagingCostPaisa;
     }
 
@@ -1570,34 +1762,35 @@ export async function updateSingleVariant(
       data.imageMediaId = input.imageMediaId;
     }
 
-    await tx.variant.update({
-      where: { id: variant.id },
-      data,
-    });
+    const mediaChanged = Boolean(input.imageMediaId || input.clearImageOverride);
+    const previousImageMedia = mediaChanged
+      ? await collectAssociationUsages(tx, "VARIANT", variant.id, ["primary-image"])
+      : [];
 
-    // Update the default PriceList item for this variant
-    const defaultPriceList =
-      (await tx.priceList.findFirst({ where: { businessId: actor.businessId, isDefault: true }, select: { id: true } })) ??
-      (await tx.priceList.findFirst({ where: { businessId: actor.businessId }, orderBy: { createdAt: "asc" }, select: { id: true } }));
-    if (defaultPriceList) {
-      const resolved = await resolveVariantPrice(variant.id, { priceListId: defaultPriceList.id });
-      if (resolved.pricePaisa > 0) {
-        await tx.priceListItem.upsert({
-          where: { priceListId_variantId_minQuantity: { priceListId: defaultPriceList.id, variantId: variant.id, minQuantity: 1 } },
-          create: {
-            priceListId: defaultPriceList.id,
-            variantId: variant.id,
-            productId: variant.productId,
-            pricePaisa: resolved.pricePaisa,
-            compareAtPricePaisa: resolved.compareAtPricePaisa ?? null,
-          },
-          update: {
-            pricePaisa: resolved.pricePaisa,
-            compareAtPricePaisa: resolved.compareAtPricePaisa ?? null,
-          },
+    await tx.variant.update({ where: { id: variant.id }, data });
+
+    if (mediaChanged) {
+      await tx.mediaUsage.deleteMany({ where: { entityType: "VARIANT", entityId: variant.id, field: "primary-image" } });
+      if (input.imageMediaId) {
+        await attachAssociation(tx, {
+          mediaId: input.imageMediaId,
+          entityType: "VARIANT",
+          entityId: variant.id,
+          field: "primary-image",
+          productId: variant.productId,
+          variantId: variant.id,
         });
       }
+      await syncMediaUsageCounts(tx, [...previousImageMedia, ...(input.imageMediaId ? [input.imageMediaId] : [])]);
     }
+
+    // The default price-list row always mirrors the *resolved* price, so the
+    // storefront, the API and order creation read one authoritative number.
+    await syncVariantPriceListItem(tx, {
+      businessId: actor.businessId,
+      productId: variant.productId,
+      variantId: variant.id,
+    });
 
     await recordAudit(
       {
@@ -1620,50 +1813,92 @@ export async function updateSingleVariant(
 /* Product Drafts and Autosave Persistence                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Persist (or update) an autosave draft.
+ *
+ * Drafts live in the database, not in `localStorage`, so a merchandiser can
+ * start a product on a laptop, continue on a phone and still find the work.
+ * `revision` is returned and expected back on the next save: if another tab
+ * saved in the meantime the revision no longer matches and the caller is told
+ * instead of silently overwriting the newer work.
+ */
 export async function saveProductDraft(
   actor: CatalogActor,
-  input: { productId?: string | null; name?: string; payload: Record<string, unknown> },
-): Promise<{ draftId: string; updatedAt: string }> {
-  const existingDraft = await prisma.productDraft.findFirst({
+  input: { productId?: string | null; draftId?: string | null; revision?: number | null; name?: string; payload: Record<string, unknown> },
+): Promise<{ draftId: string; revision: number; updatedAt: string }> {
+  const name = input.name?.trim() || (input.payload.name as string) || "Untitled draft";
+  const payload = input.payload as Prisma.InputJsonValue;
+
+  if (input.draftId) {
+    const existing = await prisma.productDraft.findFirst({
+      where: { id: input.draftId, businessId: actor.businessId },
+      select: { id: true, revision: true },
+    });
+    if (!existing) throw AppError.notFound("That draft no longer exists.");
+    if (input.revision != null && existing.revision !== input.revision) {
+      throw AppError.conflict(
+        "This draft was changed in another tab or by another user. Reload the page to pick up the newer version before saving again.",
+      );
+    }
+    const saved = await prisma.productDraft.update({
+      where: { id: existing.id },
+      data: { name, payload, revision: { increment: 1 } },
+      select: { id: true, revision: true, updatedAt: true },
+    });
+    return { draftId: saved.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString() };
+  }
+
+  const existing = await prisma.productDraft.findFirst({
     where: {
       businessId: actor.businessId,
-      ...(input.productId ? { productId: input.productId } : { userId: actor.userId, productId: null }),
+      ...(input.productId ? { productId: input.productId } : { productId: null, userId: actor.userId ?? null }),
     },
     orderBy: { updatedAt: "desc" },
     select: { id: true },
   });
 
-  const name = input.name?.trim() || (input.payload.name as string) || "Untitled draft";
-  const saved = existingDraft
-    ? await prisma.productDraft.update({
-        where: { id: existingDraft.id },
-        data: { name, payload: input.payload as Prisma.InputJsonValue, updatedAt: new Date() },
-        select: { id: true, updatedAt: true },
-      })
-    : await prisma.productDraft.create({
-        data: {
-          businessId: actor.businessId,
-          productId: input.productId ?? null,
-          userId: actor.userId ?? null,
-          name,
-          payload: input.payload as Prisma.InputJsonValue,
-        },
-        select: { id: true, updatedAt: true },
-      });
+  if (existing) {
+    const saved = await prisma.productDraft.update({
+      where: { id: existing.id },
+      data: { name, payload, revision: { increment: 1 }, ...(actor.userId ? { userId: actor.userId } : {}) },
+      select: { id: true, revision: true, updatedAt: true },
+    });
+    return { draftId: saved.id, revision: saved.revision, updatedAt: saved.updatedAt.toISOString() };
+  }
 
-  return { draftId: saved.id, updatedAt: saved.updatedAt.toISOString() };
+  const created = await prisma.productDraft.create({
+    data: {
+      businessId: actor.businessId,
+      productId: input.productId ?? null,
+      userId: actor.userId ?? null,
+      name,
+      payload,
+    },
+    select: { id: true, revision: true, updatedAt: true },
+  });
+  return { draftId: created.id, revision: created.revision, updatedAt: created.updatedAt.toISOString() };
 }
 
+export interface ProductDraftSummary {
+  draftId: string;
+  productId: string | null;
+  name: string;
+  revision: number;
+  updatedAt: string;
+  payload: Record<string, unknown>;
+}
+
+/** Load one draft (by id, or the working draft of a product / of this user). */
 export async function loadProductDraft(
   businessId: string,
   options: { productId?: string | null; draftId?: string | null; userId?: string | null },
-): Promise<{ draftId: string; name: string; payload: Record<string, unknown>; updatedAt: string } | null> {
+): Promise<ProductDraftSummary | null> {
   const draft = await prisma.productDraft.findFirst({
     where: {
       businessId,
       ...(options.draftId ? { id: options.draftId } : {}),
       ...(options.productId ? { productId: options.productId } : {}),
-      ...(options.userId && !options.productId ? { userId: options.userId, productId: null } : {}),
+      ...(options.userId && !options.productId && !options.draftId ? { userId: options.userId, productId: null } : {}),
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -1671,21 +1906,51 @@ export async function loadProductDraft(
   if (!draft) return null;
   return {
     draftId: draft.id,
+    productId: draft.productId,
     name: draft.name,
-    payload: draft.payload as Record<string, unknown>,
+    revision: draft.revision,
     updatedAt: draft.updatedAt.toISOString(),
+    payload: draft.payload as Record<string, unknown>,
   };
 }
 
+/** Unfinished drafts this user (or this product) can resume. */
+export async function listProductDrafts(
+  businessId: string,
+  options: { userId?: string | null; productId?: string | null } = {},
+): Promise<ProductDraftSummary[]> {
+  const rows = await prisma.productDraft.findMany({
+    where: {
+      businessId,
+      ...(options.productId ? { productId: options.productId } : {}),
+      ...(options.userId && !options.productId ? { userId: options.userId } : {}),
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 20,
+    select: { id: true, productId: true, name: true, revision: true, updatedAt: true, payload: true },
+  });
+  return rows.map((row) => ({
+    draftId: row.id,
+    productId: row.productId,
+    name: row.name,
+    revision: row.revision,
+    updatedAt: row.updatedAt.toISOString(),
+    payload: row.payload as Record<string, unknown>,
+  }));
+}
+
+/** Throw a draft away (after a successful save, or when the user discards it). */
 export async function discardProductDraft(
   businessId: string,
-  options: { productId?: string | null; draftId?: string | null },
+  options: { productId?: string | null; draftId?: string | null; userId?: string | null },
 ): Promise<boolean> {
+  if (!options.draftId && !options.productId && !options.userId) return false;
   const result = await prisma.productDraft.deleteMany({
     where: {
       businessId,
       ...(options.draftId ? { id: options.draftId } : {}),
       ...(options.productId ? { productId: options.productId } : {}),
+      ...(options.userId && !options.productId && !options.draftId ? { userId: options.userId } : {}),
     },
   });
   return result.count > 0;

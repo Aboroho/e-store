@@ -452,10 +452,19 @@ model OrderItem {
   orderId          String
   variantId        String?
   productId        String?
+  /// The product's SKU (SKU belongs to the product, not to a variant). Kept on
+  /// the line as a historical snapshot: renaming the product later never
+  /// rewrites a completed order.
   sku              String
   productName      String
   variantName      String
   variantAttributes Json?
+  /// Stable variant identity snapshots: `optionKey` is the deterministic
+  /// attribute combination and `variantCode` the legacy internal variant code.
+  /// They let a report or an integration identify the exact variant even if the
+  /// catalogue is restructured later.
+  optionKey        String?
+  variantCode      String?
   quantity         Int
   unitPricePaisa   Int
   compareAtPricePaisa Int?

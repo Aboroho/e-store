@@ -135,11 +135,21 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
 
     // -------------------------------------------------------------------- pricing
     const priceListId = await resolvePriceListId(tx, actor.businessId, input);
+    // A storefront can switch preorders off for its own channel; staff channels
+    // (admin, in-store, reseller) follow the catalogue setting only.
+    const storefrontAllowsPreorder = input.storefrontId
+      ? Boolean(
+          (await tx.storefront.findFirst({
+            where: { id: input.storefrontId, businessId: actor.businessId },
+            select: { preorderEnabled: true },
+          }))?.preorderEnabled ?? true,
+        )
+      : true;
     const variantIds = [...new Set(input.items.map((item) => item.variantId))];
     const variants = await tx.variant.findMany({
       where: { id: { in: variantIds }, product: { businessId: actor.businessId, deletedAt: null } },
       include: {
-        product: { select: { id: true, name: true, isPreorderEnabled: true } },
+        product: { select: { id: true, name: true, sku: true, isPreorderEnabled: true, packagingCostPaisa: true } },
         attributeValues: { include: { attribute: true, attributeValue: true } },
       },
     });
@@ -153,6 +163,8 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       productName: string;
       variantName: string;
       variantAttributes: Prisma.InputJsonValue;
+      optionKey: string | null;
+      variantCode: string | null;
       quantity: number;
       unitPricePaisa: number;
       compareAtPricePaisa: number | null;
@@ -173,16 +185,20 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
 
     for (const item of input.items) {
       const variant = variantById.get(item.variantId)!;
-      if (variant.status !== "ACTIVE") throw AppError.validation(`${variant.sku} is not available`);
+      // SKU belongs to the product; the variant is identified by its id and by
+      // the snapshot of its option key, so renaming a product never rewrites a
+      // completed order line and two variants of one product stay distinct.
+      const lineSku = variant.product.sku ?? variant.sku ?? "";
+      if (variant.status !== "ACTIVE") throw AppError.validation(`${variant.product.name} — ${variant.name} is not available`);
 
       const canOverride = input.channel === "ADMIN" || input.channel === "RESELLER" || input.channel === "IN_STORE";
       const resolved = await resolveVariantPrice(variant.id, { priceListId });
       const unitPricePaisa = canOverride && item.unitPricePaisa != null ? item.unitPricePaisa : resolved.pricePaisa;
-      if (unitPricePaisa <= 0) throw AppError.validation(`${variant.sku} has no price configured`);
+      if (unitPricePaisa <= 0) throw AppError.validation(`${variant.product.name} — ${variant.name} has no price configured`);
 
       const lineSubtotalPaisa = unitPricePaisa * item.quantity;
       const discountPaisa = Math.min(item.discountPaisa, lineSubtotalPaisa);
-      const itemPackaging = item.packagingCostPaisa ?? variant.packagingCostPaisa ?? 0;
+      const itemPackaging = item.packagingCostPaisa ?? variant.packagingCostPaisa ?? variant.product.packagingCostPaisa ?? 0;
       // Tax is not part of v1 (no VAT module); the column stays so a later step can
       // add it without touching historical orders.
       const taxPaisa = 0;
@@ -190,13 +206,15 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       preparedItems.push({
         variantId: variant.id,
         productId: variant.product.id,
-        sku: variant.sku ?? "",
+        sku: lineSku,
         productName: variant.product.name,
         variantName: variant.name,
         variantAttributes: variant.attributeValues.map((value) => ({
           name: value.attribute.name,
           value: value.attributeValue.value,
         })) as Prisma.InputJsonValue,
+        optionKey: variant.optionKey ?? null,
+        variantCode: variant.sku ?? null,
         quantity: item.quantity,
         unitPricePaisa,
         compareAtPricePaisa: variant.compareAtPricePaisa ?? null,
@@ -206,7 +224,10 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         lineSubtotalPaisa,
         lineTotalPaisa: lineSubtotalPaisa - discountPaisa,
         taxPaisa,
-        isPreorderAllowed: variant.product.isPreorderEnabled,
+        // Preorder eligibility follows the same inheritance chain as the rest of
+        // the catalogue: a variant override wins over the product default, and a
+        // storefront that has preorders switched off refuses them altogether.
+        isPreorderAllowed: (variant.isPreorderEnabled ?? variant.product.isPreorderEnabled) && storefrontAllowsPreorder,
         pricingSource: resolved.source,
         priceListId: resolved.priceListId,
         note: item.note ?? null,
@@ -286,6 +307,8 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
           productName: item.productName,
           variantName: item.variantName,
           variantAttributes: item.variantAttributes,
+          optionKey: item.optionKey,
+          variantCode: item.variantCode,
           quantity: item.quantity,
           unitPricePaisa: item.unitPricePaisa,
           compareAtPricePaisa: item.compareAtPricePaisa,

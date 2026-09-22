@@ -13,11 +13,15 @@ export default async function NewProductPage() {
   const session = await requireSession();
   assertPermission(session, "product.create");
 
-  const data = await loadProductEditorData(session.businessId, {
-    canViewCost: can(session, "product.view_cost"),
-    canManageMedia: can(session, "media.manage"),
-    canUploadMedia: can(session, "media.manage"),
-  });
+  const data = await loadProductEditorData(
+    session.businessId,
+    {
+      canViewCost: can(session, "product.view_cost"),
+      canManageMedia: can(session, "media.manage"),
+      canUploadMedia: can(session, "media.manage"),
+      userId: session.id,
+    },
+  );
 
   return (
     <div className="space-y-4">

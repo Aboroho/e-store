@@ -5,6 +5,7 @@ import { AppError } from "@/lib/errors";
 import { slugify } from "@/lib/utils";
 import { logger } from "@/lib/logging";
 import type { CatalogActor } from "@/modules/catalog/service";
+import { effectivePricing, loadVariantPricingRow } from "@/modules/catalog/variant-pricing";
 
 /**
  * Pricing service.
@@ -59,72 +60,23 @@ export async function resolveVariantPrice(
     }
   }
 
-  // Level 1: Variant manual override
-  const variant = await prisma.variant.findUnique({
-    where: { id: variantId },
-    select: {
-      productId: true,
-      priceOverridePaisa: true,
-      compareAtPricePaisa: true,
-      attributeValues: {
-        select: {
-          attributeValue: {
-            select: { priceOverridePaisa: true },
-          },
-        },
-      },
-      product: {
-        select: {
-          metadata: true,
-          variants: {
-            where: { optionKey: "default" },
-            select: { priceOverridePaisa: true, compareAtPricePaisa: true },
-          },
-        },
-      },
-    },
-  });
-  if (!variant) throw AppError.notFound("Variant not found");
-
-  if (variant.priceOverridePaisa != null) {
+  // Levels 1–3 (variant override → attribute override → product default) are
+  // resolved by the shared catalogue resolver, so the storefront, the API, the
+  // product list and order creation always agree on the same number.
+  const row = await loadVariantPricingRow(prisma, variantId);
+  const resolved = effectivePricing(row);
+  if (resolved.value.pricePaisa > 0) {
     return {
       variantId,
-      pricePaisa: variant.priceOverridePaisa,
-      compareAtPricePaisa: variant.compareAtPricePaisa ?? null,
+      pricePaisa: resolved.value.pricePaisa,
+      compareAtPricePaisa: resolved.value.compareAtPricePaisa,
       priceListId: null,
-      source: "VARIANT_OVERRIDE",
-    };
-  }
-
-  // Level 2: Attribute-level override
-  for (const link of variant.attributeValues) {
-    const attrPrice = link.attributeValue?.priceOverridePaisa;
-    if (attrPrice != null && attrPrice > 0) {
-      return {
-        variantId,
-        pricePaisa: attrPrice,
-        compareAtPricePaisa: null,
-        priceListId: null,
-        source: "ATTRIBUTE_OVERRIDE",
-      };
-    }
-  }
-
-  // Level 3: Product default
-  const meta = (variant.product?.metadata ?? {}) as Record<string, unknown>;
-  const metaPrice = typeof meta.defaultPricePaisa === "number" ? meta.defaultPricePaisa : null;
-  const metaCompareAt = typeof meta.defaultCompareAtPricePaisa === "number" ? meta.defaultCompareAtPricePaisa : null;
-  const defaultVariant = variant.product?.variants?.[0];
-  const fallbackPrice = metaPrice ?? defaultVariant?.priceOverridePaisa ?? null;
-  const fallbackCompareAt = metaCompareAt ?? defaultVariant?.compareAtPricePaisa ?? null;
-
-  if (fallbackPrice != null && fallbackPrice > 0) {
-    return {
-      variantId,
-      pricePaisa: fallbackPrice,
-      compareAtPricePaisa: fallbackCompareAt,
-      priceListId: null,
-      source: "PRODUCT_DEFAULT",
+      source:
+        resolved.level === "VARIANT"
+          ? "VARIANT_OVERRIDE"
+          : resolved.level === "ATTRIBUTE"
+            ? "ATTRIBUTE_OVERRIDE"
+            : "PRODUCT_DEFAULT",
     };
   }
 

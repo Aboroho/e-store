@@ -1,8 +1,10 @@
 /**
- * Pure domain logic for catalog pricing, discounts, and property inheritance.
+ * Pure domain logic for money: discounts, sell-price derivation and validation.
  *
- * Implements the 3-level property resolution system:
- *   Manual variant override > Attribute-level override > Product default
+ * The three-level property resolution that uses these calculations lives in
+ * `src/modules/catalog/inheritance.ts` — this file only knows how to turn a
+ * current price plus a discount into a sell price, in integer paisa, with no
+ * floating-point drift and no negative or above-list results.
  */
 
 export type DiscountType = "PERCENTAGE" | "FLAT" | "NONE";
@@ -74,168 +76,67 @@ export function calculatePricing(input: PricingCalculationInput): PricingCalcula
 }
 
 /* -------------------------------------------------------------------------- */
-/* Three-level property inheritance resolution                                */
+/* Validation                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export type PropertyInheritanceSource = "MANUAL_VARIANT" | "ATTRIBUTE_OVERRIDE" | "PRODUCT_DEFAULT" | "NONE";
+export interface DiscountValidationInput {
+  currentPricePaisa?: number | null;
+  discountType?: DiscountType | null;
+  discountValue?: number | null;
+}
 
-export interface ResolvedProperty<T> {
-  value: T;
-  source: PropertyInheritanceSource;
-  isOverridden: boolean;
-  isInherited: boolean;
-  label: string;
+export interface DiscountValidationResult {
+  ok: boolean;
+  message: string | null;
 }
 
 /**
- * Resolve effective price for a variant across the three inheritance levels:
- * Precedence: Manual variant override > Attribute-level override > Product default.
+ * Guard rails the editor, the bulk dialog and the server action all share:
+ *
+ * - a discount needs a current price to discount;
+ * - a percentage stays within 0–100;
+ * - a flat discount may not exceed the current price (a product cannot be sold
+ *   below zero by a discount — use a price override if that is really wanted);
+ * - money stays integer paisa.
  */
-export function resolveEffectivePrice(params: {
-  variantPricePaisa?: number | null;
-  variantCompareAtPaisa?: number | null;
-  attributePricePaisa?: number | null;
-  productDefaultPricePaisa?: number | null;
-  productCompareAtPaisa?: number | null;
-}): ResolvedProperty<{ pricePaisa: number; compareAtPricePaisa: number | null }> {
-  // Level 1: Manual variant override
-  if (params.variantPricePaisa != null && params.variantPricePaisa > 0) {
-    return {
-      value: {
-        pricePaisa: params.variantPricePaisa,
-        compareAtPricePaisa: params.variantCompareAtPaisa ?? null,
-      },
-      source: "MANUAL_VARIANT",
-      isOverridden: true,
-      isInherited: false,
-      label: "Custom variant price",
-    };
+export function validateDiscount(input: DiscountValidationInput): DiscountValidationResult {
+  const type = input.discountType ?? "NONE";
+  const value = Number(input.discountValue ?? 0);
+
+  if (type === "NONE") {
+    return value > 0
+      ? { ok: false, message: "Choose a discount type before entering a discount value." }
+      : { ok: true, message: null };
   }
 
-  // Level 2: Attribute-level override
-  if (params.attributePricePaisa != null && params.attributePricePaisa > 0) {
-    return {
-      value: {
-        pricePaisa: params.attributePricePaisa,
-        compareAtPricePaisa: null,
-      },
-      source: "ATTRIBUTE_OVERRIDE",
-      isOverridden: true,
-      isInherited: true,
-      label: "Inherited from attribute override",
-    };
+  if (!Number.isFinite(value) || value < 0) {
+    return { ok: false, message: "Enter a discount of zero or more." };
+  }
+  if (Math.round(value) !== value && type === "FLAT") {
+    return { ok: false, message: "Flat discounts are stored in paisa — enter a whole number." };
   }
 
-  // Level 3: Product default
-  if (params.productDefaultPricePaisa != null && params.productDefaultPricePaisa > 0) {
-    return {
-      value: {
-        pricePaisa: params.productDefaultPricePaisa,
-        compareAtPricePaisa: params.productCompareAtPaisa ?? null,
-      },
-      source: "PRODUCT_DEFAULT",
-      isOverridden: false,
-      isInherited: true,
-      label: "Inherited from product default",
-    };
+  const current = Number(input.currentPricePaisa ?? 0);
+  if (current <= 0) {
+    return { ok: false, message: "Enter a current price before applying a discount." };
+  }
+  if (type === "PERCENTAGE" && value > 100) {
+    return { ok: false, message: "A percentage discount cannot exceed 100%." };
+  }
+  if (type === "FLAT" && value > current) {
+    return { ok: false, message: "A flat discount cannot be larger than the current price." };
   }
 
-  return {
-    value: { pricePaisa: 0, compareAtPricePaisa: null },
-    source: "NONE",
-    isOverridden: false,
-    isInherited: false,
-    label: "No price configured",
-  };
+  return { ok: true, message: null };
 }
 
-/**
- * Resolve effective preorder eligibility across inheritance levels:
- * Manual variant override > Product default.
- */
-export function resolveEffectivePreorder(params: {
-  variantPreorderEnabled?: boolean | null;
-  productPreorderEnabled: boolean;
-}): ResolvedProperty<boolean> {
-  if (params.variantPreorderEnabled != null) {
-    return {
-      value: params.variantPreorderEnabled,
-      source: "MANUAL_VARIANT",
-      isOverridden: true,
-      isInherited: false,
-      label: params.variantPreorderEnabled ? "Preorder enabled (variant override)" : "Preorder disabled (variant override)",
-    };
-  }
-
-  return {
-    value: params.productPreorderEnabled,
-    source: "PRODUCT_DEFAULT",
-    isOverridden: false,
-    isInherited: true,
-    label: params.productPreorderEnabled ? "Preorder enabled (inherited from product)" : "Preorder disabled (inherited from product)",
-  };
-}
-
-/**
- * Resolve effective weight across inheritance levels:
- * Manual variant override > Product default.
- */
-export function resolveEffectiveWeight(params: {
-  variantWeightGrams?: number | null;
-  productWeightGrams?: number | null;
-}): ResolvedProperty<number | null> {
-  if (params.variantWeightGrams != null) {
-    return {
-      value: params.variantWeightGrams,
-      source: "MANUAL_VARIANT",
-      isOverridden: true,
-      isInherited: false,
-      label: `${params.variantWeightGrams} g (variant override)`,
-    };
-  }
-
-  if (params.productWeightGrams != null) {
-    return {
-      value: params.productWeightGrams,
-      source: "PRODUCT_DEFAULT",
-      isOverridden: false,
-      isInherited: true,
-      label: `${params.productWeightGrams} g (inherited from product)`,
-    };
-  }
-
-  return {
-    value: null,
-    source: "NONE",
-    isOverridden: false,
-    isInherited: false,
-    label: "No weight configured",
-  };
-}
-
-/**
- * Resolve effective packaging cost across inheritance levels:
- * Manual variant override > Product default.
- */
-export function resolveEffectivePackagingCost(params: {
-  variantPackagingCostPaisa?: number | null;
-  productPackagingCostPaisa: number;
-}): ResolvedProperty<number> {
-  if (params.variantPackagingCostPaisa != null) {
-    return {
-      value: params.variantPackagingCostPaisa,
-      source: "MANUAL_VARIANT",
-      isOverridden: true,
-      isInherited: false,
-      label: `${params.variantPackagingCostPaisa / 100} Tk (variant override)`,
-    };
-  }
-
-  return {
-    value: params.productPackagingCostPaisa,
-    source: "PRODUCT_DEFAULT",
-    isOverridden: false,
-    isInherited: true,
-    label: `${params.productPackagingCostPaisa / 100} Tk (inherited from product)`,
-  };
+/** Normalise a discount triple so empty/invalid input degrades to "no discount". */
+export function normalizeDiscount(input: DiscountValidationInput): {
+  discountType: DiscountType;
+  discountValue: number;
+} {
+  const type = input.discountType ?? "NONE";
+  const value = Number.isFinite(Number(input.discountValue)) ? Math.max(0, Number(input.discountValue)) : 0;
+  if (type === "NONE" || value <= 0) return { discountType: "NONE", discountValue: 0 };
+  return { discountType: type, discountValue: value };
 }

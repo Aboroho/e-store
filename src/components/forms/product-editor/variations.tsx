@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Layers, Sparkles, Wand2 } from "lucide-react";
+import { AlertTriangle, Sparkles, Wand2 } from "lucide-react";
 import { Alert, Badge, Button } from "@/components/ui/primitives";
 import { InfoTip } from "@/components/ui/tooltip";
 import { CollapsibleSection } from "@/components/ui/collapsible";
@@ -11,14 +11,21 @@ import { VariantBulkActions } from "./bulk-actions";
 import type { EditorAttribute } from "@/modules/catalog/product-queries";
 import type { MediaAssetView } from "@/modules/media/service";
 import type { DraftAttribute, DraftVariant, MatrixPlan } from "@/modules/catalog/product-draft";
+import type { PricingLevelInput } from "@/modules/catalog/inheritance";
 import type { ProductEditorState } from "./use-product-editor";
 
 /**
- * Section 5 of the product form: the attribute selection and everything it produces —
- * the combination matrix, the variant table and the bulk action panel.
+ * Attributes, variants and bulk editing — one coherent section.
+ *
+ * Attribute selection, combination generation, per-variant overrides, filtering
+ * and bulk updates live together because they are one job: describing the
+ * options a product has and the sellable rows they produce. There is no separate
+ * "bulk actions" screen — the bulk panel sits directly under the table it acts
+ * on, so the rows being changed are always on screen.
  */
 
 export function AttributesVariationsSection({
+  productId,
   attributes,
   state,
   plan,
@@ -26,7 +33,9 @@ export function AttributesVariationsSection({
   rowErrors,
   selection,
   productImage,
+  productPricing,
   canViewCost,
+  onApplied,
   onPatch,
   onAttributeCreated,
   onValueAdded,
@@ -37,15 +46,20 @@ export function AttributesVariationsSection({
   onRemoveVariant,
   onSelectionChange,
 }: {
+  productId: string | null;
   attributes: EditorAttribute[];
   state: ProductEditorState;
   plan: MatrixPlan;
   errors: Record<string, string[]>;
-  /** Per-row variant validation from the shell (SKU clashes, bad values). */
+  /** Per-row variant validation from the shell (bad prices, duplicate combinations). */
   rowErrors: Record<string, string>;
   selection: string[];
   productImage: MediaAssetView | null;
+  /** Product default pricing, used to show the effective price of a row. */
+  productPricing: PricingLevelInput;
   canViewCost: boolean;
+  /** Called after a bulk change so the server read model is refreshed. */
+  onApplied: () => void;
   onPatch: (patch: Record<string, unknown>) => void;
   onAttributeCreated: (attribute: EditorAttribute) => void;
   onValueAdded: (attributeId: string, value: { id: string; value: string; colorHex: string | null; mediaId: string | null }) => void;
@@ -78,9 +92,9 @@ export function AttributesVariationsSection({
 
   return (
     <CollapsibleSection
-      id="attributes"
-      title="Product attributes and variations"
-      description="Options such as colour and size. Variation attributes create the variant combinations you sell."
+      id="variants"
+      title="Attributes and variants"
+      description="Choose the options, generate the combinations, then edit the rows — individually or in bulk."
       icon={<Sparkles className="h-4 w-4" />}
       badge={state.variants.length > 0 ? `${state.variants.length} variant(s)` : `${plannedCombinations} combination(s) planned`}
       badgeTone={state.variants.length > 0 ? "success" : "neutral"}
@@ -145,7 +159,7 @@ export function AttributesVariationsSection({
               {plan.orphans.slice(0, 20).map((orphan) => (
                 <li key={orphan.key} className="flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                  {orphan.name || orphan.sku || orphan.key}
+                  {orphan.name || orphan.key}
                 </li>
               ))}
               {plan.orphans.length > 20 ? <li>…and {plan.orphans.length - 20} more</li> : null}
@@ -160,6 +174,7 @@ export function AttributesVariationsSection({
           attributes={draftAttributes}
           orphanKeys={plan.orphans.map((orphan) => orphan.key)}
           productImage={productImage}
+          productPricing={productPricing}
           rowErrors={rowErrors}
           selectedKeys={selection}
           onSelectionChange={onSelectionChange}
@@ -167,75 +182,27 @@ export function AttributesVariationsSection({
           onRemove={onRemoveVariant}
           canViewCost={canViewCost}
         />
+
+        {productId ? (
+          <VariantBulkActions
+            productId={productId}
+            rows={state.variants}
+            attributes={draftAttributes}
+            selectedKeys={selection}
+            productImage={productImage}
+            canViewCost={canViewCost}
+            onApplied={onApplied}
+          />
+        ) : (
+          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm text-slate-700">
+              Bulk actions run on saved variants, so the preview can never disagree with the update. Create the product first — you can then
+              apply a change to every variant, to the selected rows, or only to the rows matching an attribute value such as Colour: Black.
+            </p>
+            <Badge variant="neutral">{state.variants.length} variant(s) waiting</Badge>
+          </div>
+        )}
       </div>
-    </CollapsibleSection>
-  );
-}
-
-export function BulkActionsSection({
-  productId,
-  state,
-  selection,
-  attributes,
-  productImage,
-  canViewCost,
-  onApplied,
-}: {
-  productId: string | null;
-  state: ProductEditorState;
-  selection: string[];
-  attributes: EditorAttribute[];
-  productImage: MediaAssetView | null;
-  canViewCost: boolean;
-  onApplied: () => void;
-}) {
-  const draftAttributes: DraftAttribute[] = React.useMemo(
-    () =>
-      attributes
-        .filter((attribute) => state.attributeIds.includes(attribute.id))
-        .map((attribute) => ({
-          id: attribute.id,
-          name: attribute.name,
-          isVariantDefining: attribute.isVariantDefining,
-          slug: attribute.slug,
-          type: attribute.type,
-          values: attribute.values
-            .filter((value) => state.selectedValueIds.includes(value.id))
-            .map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex, mediaId: value.mediaId })),
-        })),
-    [attributes, state.attributeIds, state.selectedValueIds],
-  );
-
-  return (
-    <CollapsibleSection
-      id="bulk"
-      title="Variant bulk actions"
-      description="Change many variants at once — price, weight, images, preorder — with a preview before anything is written."
-      icon={<Layers className="h-4 w-4" />}
-      badge={selection.length > 0 ? `${selection.length} selected` : undefined}
-      badgeTone={selection.length > 0 ? "success" : "neutral"}
-    >
-      {productId ? (
-        <VariantBulkActions
-          productId={productId}
-          rows={state.variants}
-          attributes={draftAttributes}
-          selectedKeys={selection}
-          productImage={productImage}
-          canViewCost={canViewCost}
-          onApplied={onApplied}
-        />
-      ) : (
-        <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm text-slate-700">
-            Bulk actions run on saved variants so the preview can never disagree with the update. Create the product first — you can then
-            apply changes to all variants, the selected ones, or only the ones matching an attribute value such as Colour: Black.
-          </p>
-          <Badge variant="neutral">
-            {state.variants.length} variant(s) waiting
-          </Badge>
-        </div>
-      )}
     </CollapsibleSection>
   );
 }

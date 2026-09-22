@@ -20,6 +20,15 @@ enum AttributeType {
   NUMBER
 }
 
+/// How a discount is expressed. `NONE` means "sell at the current price".
+/// Shared by the product default, the attribute-value override and the variant
+/// override so one resolver can read all three levels.
+enum DiscountType {
+  PERCENTAGE
+  FLAT
+  NONE
+}
+
 enum VariantStatus {
   ACTIVE
   ARCHIVED
@@ -180,7 +189,8 @@ model UnitLabel {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products Product[]
 
   @@unique([businessId, slug])
   @@index([businessId, position])
@@ -232,9 +242,12 @@ model Product {
   /// Display name of the brand (kept in step with `brandRef` for storefront search).
   brand            String?
   brandId          String?
+  /// SKU belongs to the main product. Variants never own a SKU of their own —
+  /// they are identified by id and by their deterministic `optionKey`.
   sku              String?
   barcode          String?
   unitLabel        String        @default("piece")
+  unitLabelId      String?
   weightGrams      Int?
   requiresShipping Boolean       @default(true)
   isFeatured       Boolean       @default(false)
@@ -247,6 +260,17 @@ model Product {
   taxRateId        String?
   packagingCostPaisa Int         @default(0)
   packagingCostTemplateId String?
+  /// Product-level default pricing — level 3 of the inheritance model
+  /// (`variant override > attribute override > product default`).
+  /// `defaultCurrentPricePaisa` is the struck-through "was" price,
+  /// `defaultPricePaisa` the sell price after discount (derived, stored so
+  /// queries and historical reports never recompute it differently).
+  defaultCurrentPricePaisa Int?
+  defaultDiscountType DiscountType @default(NONE)
+  defaultDiscountValue Int         @default(0)
+  defaultPricePaisa Int?
+  defaultCompareAtPricePaisa Int?
+  defaultCostPaisa Int?
   attributesSummary Json?
   seoTitle         String?
   seoDescription   String?
@@ -263,6 +287,7 @@ model Product {
 
   business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   brandRef   Brand?              @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  unitLabelRef UnitLabel?        @relation(fields: [unitLabelId], references: [id], onDelete: SetNull)
   taxRate    TaxRate?            @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
   packagingCostTemplate PackagingCostTemplate? @relation(fields: [packagingCostTemplateId], references: [id], onDelete: SetNull)
   seoImage   MediaAsset?         @relation("ProductSeoImage", fields: [seoImageMediaId], references: [id], onDelete: SetNull)
@@ -281,6 +306,7 @@ model Product {
   @@index([businessId, isFeatured])
   @@index([businessId, deletedAt])
   @@index([businessId, brandId])
+  @@index([businessId, unitLabelId])
   @@index([businessId, sku])
 }
 
@@ -331,9 +357,15 @@ model AttributeValue {
   /// Default image for this value. Variants that carry this value inherit it unless
   /// they have their own override, so one asset serves every matching variant.
   mediaId     String?
-  /// Optional attribute-level price override in paisa (precedence: manual variant > attribute-level > product default).
+  /// Attribute-level pricing override — level 2 of the inheritance model
+  /// (`variant override > attribute override > product default`).
+  /// `priceOverridePaisa` is the derived sell price; the three discount columns
+  /// keep the operator's intent so the UI can show how it was reached.
+  currentPricePaisa Int?
+  discountType DiscountType @default(NONE)
+  discountValue Int         @default(0)
   priceOverridePaisa Int?
-  isActive    Boolean  @default(true)
+  isActive    Boolean       @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -364,16 +396,25 @@ model ProductAttribute {
 model Variant {
   id             String        @id @default(uuid())
   productId      String
-  /// SKU belongs to the main product; variants may carry an internal code but it is never required.
+  /// SKU belongs to the main product. This column is a legacy/internal code only:
+  /// the product-management workflow never asks for it and never generates it.
+  /// @deprecated Identify a variant by `id` (or `productId` + `optionKey`).
   sku            String?
   barcode        String?
   name           String
-  /// Deterministic key of the attribute combination, e.g. "color=red|size=xl".
-  /// Guarantees that one product cannot contain the same combination twice.
+  /// Deterministic key of the attribute combination, e.g. "color:red|size:xl".
+  /// Guarantees that one product cannot contain the same combination twice and is
+  /// the stable identity used by inventory, purchases, reservations and orders.
   optionKey      String
   status         VariantStatus @default(ACTIVE)
   position       Int           @default(0)
   weightGrams    Int?
+  /// Variant-level pricing override — level 1 of the inheritance model.
+  /// `priceOverridePaisa` is the derived sell price; the discount columns keep
+  /// the operator's intent. All three are null when the variant inherits.
+  currentPricePaisa Int?
+  discountType   DiscountType  @default(NONE)
+  discountValue  Int           @default(0)
   priceOverridePaisa Int?
   compareAtPricePaisa Int?
   costPaisa      Int?
@@ -411,10 +452,13 @@ model Variant {
 model ProductDraft {
   id         String   @id @default(uuid())
   businessId String
+  /// Null for a "new product" draft; set when an existing product is being edited.
   productId  String?
   userId     String?
   name       String   @default("")
   payload    Json
+  /// Incremented on every autosave so two browser tabs can detect a stale save.
+  revision   Int      @default(1)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
