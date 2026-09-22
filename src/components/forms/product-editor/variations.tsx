@@ -20,8 +20,8 @@ import type { ProductEditorState } from "./use-product-editor";
  * Attribute selection, combination generation, per-variant overrides, filtering
  * and bulk updates live together because they are one job: describing the
  * options a product has and the sellable rows they produce. There is no separate
- * "bulk actions" screen — the bulk panel sits directly under the table it acts
- * on, so the rows being changed are always on screen.
+ * "bulk actions" screen — the bulk panel sits above the table it acts on so it
+ * is visible as soon as the section opens.
  */
 
 export function AttributesVariationsSection({
