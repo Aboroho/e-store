@@ -16,8 +16,8 @@ export default defineConfig({
     // (the Prisma Client generator is WASM-based and does not need a DB connection).
     // Fall back to a dummy local URL so the CLI can load the config in air-gapped CI.
     url: process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/estore?schema=public",
-    shadowDatabaseUrl:
-      process.env.SHADOW_DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/estore_shadow?schema=public",
+    // shadowDatabaseUrl:
+    //   process.env.SHADOW_DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/estore_shadow?schema=public",
   },
   migrations: {
     path: "prisma/migrations",
