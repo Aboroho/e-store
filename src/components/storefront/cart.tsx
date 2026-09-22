@@ -160,16 +160,20 @@ export function AddToCartButton({
   className,
   showQuantity = false,
   disabled = false,
+  quantity: controlledQuantity,
 }: {
   line: CartLine;
   label?: string;
   className?: string;
   showQuantity?: boolean;
   disabled?: boolean;
+  /** Quantity chosen outside the button, for example by a variant picker. */
+  quantity?: number;
 }) {
   const cart = useCart();
-  const [quantity, setQuantity] = React.useState(1);
+  const [quantity, setQuantity] = React.useState(line.quantity ?? 1);
   const [added, setAdded] = React.useState(false);
+  const effectiveQuantity = controlledQuantity ?? quantity;
 
   return (
     <div className={`flex items-center gap-2 ${className ?? ""}`}>
@@ -182,7 +186,7 @@ export function AddToCartButton({
             type="number"
             min={1}
             max={50}
-            value={quantity}
+            value={effectiveQuantity}
             onChange={(event) => setQuantity(Math.max(1, Math.min(50, Number(event.target.value) || 1)))}
             className="w-12 border-x px-1 py-1 text-center text-sm"
             aria-label="Quantity"
@@ -196,9 +200,9 @@ export function AddToCartButton({
         type="button"
         disabled={disabled}
         onClick={() => {
-          cart.add({ ...line, quantity });
+          cart.add({ ...line, quantity: effectiveQuantity });
           // Pixel-side add-to-cart; a no-op when no pixel is configured or consent is off.
-          trackMarketingEvent("AddToCart", { contentIds: [line.variantId], valuePaisa: (line.pricePaisa ?? 0) * quantity });
+          trackMarketingEvent("AddToCart", { contentIds: [line.variantId], valuePaisa: (line.pricePaisa ?? 0) * effectiveQuantity });
           setAdded(true);
           setTimeout(() => setAdded(false), 1500);
         }}

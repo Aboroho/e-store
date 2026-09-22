@@ -25,7 +25,11 @@ export interface EditorAttributeValue {
   /** Attribute-value default image — the second level of the image precedence. */
   mediaId: string | null;
   image: MediaAssetView | null;
+  /** Attribute-level pricing override (level 2 of the inheritance model). */
   priceOverridePaisa?: number | null;
+  currentPricePaisa?: number | null;
+  discountType?: "PERCENTAGE" | "FLAT" | "NONE";
+  discountValue?: number;
 }
 
 export interface EditorAttribute {
@@ -89,6 +93,7 @@ export interface EditorProduct {
   brandId: string | null;
   brandName: string | null;
   unitLabel: string;
+  unitLabelId: string | null;
   weightGrams: number | null;
   weightUnit: string;
   requiresShipping: boolean;
@@ -103,6 +108,7 @@ export interface EditorProduct {
   currentPricePaisa: number | null;
   discountType: "PERCENTAGE" | "FLAT" | "NONE";
   discountValue: number;
+  defaultCostPaisa: number | null;
   seoTitle: string | null;
   seoDescription: string | null;
   seoKeywords: string | null;
@@ -126,7 +132,7 @@ export interface ProductEditorData {
   unitLabels: Array<{ id: string | null; name: string; slug: string; isDefault: boolean }>;
   taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
   packagingTemplates: Array<{ id: string; name: string; costPaisa: number; isDefault: boolean }>;
-  draft: { draftId: string; updatedAt: string; payload: Record<string, unknown> } | null;
+  draft: { draftId: string; updatedAt: string; revision: number; payload: Record<string, unknown> } | null;
   priceListName: string;
   /** Null when the business has no price list yet: variants cannot be priced. */
   priceListId: string | null;
@@ -167,7 +173,7 @@ async function storefrontUrlPrefix(businessId: string): Promise<string | null> {
  */
 export async function loadProductEditorData(
   businessId: string,
-  viewer: { canViewCost: boolean; canManageMedia: boolean; canUploadMedia: boolean },
+  viewer: { canViewCost: boolean; canManageMedia: boolean; canUploadMedia: boolean; userId?: string | null },
   productId?: string,
 ): Promise<ProductEditorData> {
   // Category and Attribute queries are written against scalar fields only
@@ -207,20 +213,26 @@ export async function loadProductEditorData(
             colorHex: true,
             mediaId: true,
             priceOverridePaisa: true,
+            currentPricePaisa: true,
+            discountType: true,
+            discountValue: true,
           },
         },
       },
-    } as never) as unknown as Promise<Array<{ id: string; name: string; slug: string; type: string; isVariantDefining: boolean; values: Array<{ id: string; value: string; colorHex: string | null; mediaId: string | null; priceOverridePaisa: number | null }> }>>,
+    } as never) as unknown as Promise<Array<{ id: string; name: string; slug: string; type: string; isVariantDefining: boolean; values: Array<{ id: string; value: string; colorHex: string | null; mediaId: string | null; priceOverridePaisa: number | null; currentPricePaisa: number | null; discountType: string; discountValue: number }> }>>,
     listUnitLabels(businessId).catch(() => [] as Awaited<ReturnType<typeof listUnitLabels>>),
     prisma.priceList.findMany({ where: { businessId }, orderBy: [{ isDefault: "desc" }, { priority: "desc" }], select: { id: true, name: true, isDefault: true } }),
     getBusinessSettings(businessId),
     storefrontUrlPrefix(businessId),
     prisma.taxRate.findMany({ where: { businessId, isActive: true }, orderBy: [{ isDefault: "desc" }, { name: "asc" }], select: { id: true, name: true, rateBps: true, isDefault: true } }).catch(() => []),
     prisma.packagingCostTemplate.findMany({ where: { businessId, isActive: true }, orderBy: [{ isDefault: "desc" }, { name: "asc" }], select: { id: true, name: true, costPaisa: true, isDefault: true } }).catch(() => []),
+    // Drafts are per user: a "new product" draft belongs to the person writing
+    // it, while an edit draft is shared for the product (the last autosave wins
+    // and the editor warns when a newer revision exists).
     prisma.productDraft.findFirst({
-      where: { businessId, ...(productId ? { productId } : { productId: null }) },
+      where: { businessId, ...(productId ? { productId } : { productId: null, userId: viewer.userId ?? undefined }) },
       orderBy: { updatedAt: "desc" },
-      select: { id: true, updatedAt: true, payload: true },
+      select: { id: true, updatedAt: true, payload: true, revision: true },
     }).catch(() => null),
   ]);
 
@@ -278,6 +290,9 @@ export async function loadProductEditorData(
               mediaId: value.mediaId,
               image: asset ? await toAssetView(asset as never) : null,
               priceOverridePaisa: value.priceOverridePaisa ?? null,
+              currentPricePaisa: value.currentPricePaisa ?? null,
+              discountType: (value.discountType ?? "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
+              discountValue: value.discountValue ?? 0,
             };
           }),
         ),
@@ -294,7 +309,14 @@ export async function loadProductEditorData(
     unitLabels: unitLabels.length > 0 ? unitLabels : DEFAULT_UNIT_LABELS.map((name, index) => ({ id: null, name, slug: name, isDefault: index === 0 })),
     taxRates,
     packagingTemplates,
-    draft: draft ? { draftId: draft.id, updatedAt: draft.updatedAt.toISOString(), payload: draft.payload as Record<string, unknown> } : null,
+    draft: draft
+      ? {
+          draftId: draft.id,
+          updatedAt: draft.updatedAt.toISOString(),
+          payload: draft.payload as Record<string, unknown>,
+          revision: (draft as { revision?: number }).revision ?? 1,
+        }
+      : null,
     priceListName: defaultPriceList?.name ?? "the default price list",
     priceListId: defaultPriceList?.id ?? null,
     productUrlPrefix: storefrontPrefix,
@@ -448,9 +470,9 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
         compareAtPricePaisa: variant.compareAtPricePaisa ?? price?.compareAtPricePaisa ?? null,
         costPaisa: variant.costPaisa,
         packagingCostPaisa: variant.packagingCostPaisa ?? null,
-        currentPricePaisa: typeof variantMetadata.currentPricePaisa === "number" ? (variantMetadata.currentPricePaisa as number) : null,
-        discountType: ((variantMetadata.discountType as any) || "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
-        discountValue: typeof variantMetadata.discountValue === "number" ? (variantMetadata.discountValue as number) : 0,
+        currentPricePaisa: variant.currentPricePaisa ?? null,
+        discountType: (variant.discountType ?? "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
+        discountValue: variant.discountValue ?? 0,
         isPreorderEnabled: variant.isPreorderEnabled,
         imageMediaId: variant.imageMediaId,
         image: override ? await toAssetView(override) : null,
@@ -494,10 +516,12 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
     taxRateBps: (rawProduct as { taxRateBps: number }).taxRateBps,
     packagingCostTemplateId: (rawProduct as { packagingCostTemplateId?: string | null }).packagingCostTemplateId ?? null,
     packagingCostPaisa: (rawProduct as { packagingCostPaisa: number }).packagingCostPaisa,
-    defaultPricePaisa: typeof metadata.defaultPricePaisa === "number" ? metadata.defaultPricePaisa : null,
-    currentPricePaisa: typeof metadata.currentPricePaisa === "number" ? metadata.currentPricePaisa : null,
-    discountType: ((metadata.discountType as any) || "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
-    discountValue: typeof metadata.discountValue === "number" ? metadata.discountValue : 0,
+    defaultPricePaisa: (rawProduct as { defaultPricePaisa?: number | null }).defaultPricePaisa ?? null,
+    currentPricePaisa: (rawProduct as { defaultCurrentPricePaisa?: number | null }).defaultCurrentPricePaisa ?? null,
+    discountType: ((rawProduct as { defaultDiscountType?: string }).defaultDiscountType ?? "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
+    discountValue: (rawProduct as { defaultDiscountValue?: number }).defaultDiscountValue ?? 0,
+    defaultCostPaisa: (rawProduct as { defaultCostPaisa?: number | null }).defaultCostPaisa ?? null,
+    unitLabelId: (rawProduct as { unitLabelId?: string | null }).unitLabelId ?? null,
     seoTitle: (rawProduct as { seoTitle: string | null }).seoTitle ?? null,
     seoDescription: (rawProduct as { seoDescription: string | null }).seoDescription ?? null,
     seoKeywords: (rawProduct as { seoKeywords: string | null }).seoKeywords ?? null,

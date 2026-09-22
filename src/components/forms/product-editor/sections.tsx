@@ -5,16 +5,13 @@ import Link from "next/link";
 import {
   CheckCircle2,
   ClipboardList,
-  FileText,
   Image as ImageIcon,
-  Info,
   Layers,
   Loader2,
   Plus,
   RefreshCw,
   Search,
   Tag,
-  Truck,
 } from "lucide-react";
 import { Alert, Badge, Button, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
 import { InfoTip } from "@/components/ui/tooltip";
@@ -27,6 +24,8 @@ import { Combobox, FieldWithTip } from "./combobox";
 import { AddAttributeValueInline, CreateAttributeDialog, CreateBrandDialog, CreateCategoryDialog } from "./product-dialogs";
 import { slugPreview } from "./product-url";
 import { WEIGHT_UNITS, type WeightUnit } from "@/modules/catalog/product-draft";
+import { formatPaisa } from "@/lib/money";
+import { calculatePricing, validateDiscount } from "@/modules/catalog/pricing-rules";
 import type { EditorAttribute, EditorCategory } from "@/modules/catalog/product-queries";
 import type { MediaAssetView } from "@/modules/media/service";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
@@ -41,7 +40,6 @@ export function BasicInformationSection({
   slugTouched,
   productCode,
   barcode,
-  status,
   productUrlPrefix,
   slugState,
   skuState,
@@ -50,13 +48,17 @@ export function BasicInformationSection({
   onSlugChange,
   onRegenerateSlug,
   onPatch,
+  shortDescription,
+  description,
+  onShortDescriptionChange,
+  onDescriptionChange,
+  canUpload,
 }: {
   name: string;
   slug: string;
   slugTouched: boolean;
   productCode: string;
   barcode: string;
-  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   productUrlPrefix: string | null;
   slugState: { checking: boolean; available: boolean | null; suggestion: string | null };
   skuState: { checking: boolean; message?: string };
@@ -64,13 +66,19 @@ export function BasicInformationSection({
   onNameChange: (value: string) => void;
   onSlugChange: (value: string, options?: { manual?: boolean }) => void;
   onRegenerateSlug: () => void;
-  onPatch: (patch: { barcode?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; productCode?: string }) => void;
+  onPatch: (patch: { barcode?: string; productCode?: string }) => void;
+  /** Rich-text documents live with the product information, not with the settings. */
+  shortDescription?: RichTextDocument;
+  description?: RichTextDocument;
+  onShortDescriptionChange?: (value: RichTextDocument) => void;
+  onDescriptionChange?: (value: RichTextDocument) => void;
+  canUpload?: boolean;
 }) {
   return (
     <CollapsibleSection
-      id="basic"
-      title="Basic information"
-      description="What the product is called and how it is identified in your catalogue."
+      id="information"
+      title="Product information"
+      description="What the product is called, how it is identified and what it is. Every variant inherits these values."
       icon={<Tag className="h-4 w-4" />}
       defaultOpen
       badge={name ? "In progress" : "Required"}
@@ -171,8 +179,8 @@ export function BasicInformationSection({
               Product code (SKU) <span className="text-red-500">*</span>
             </Label>
             <InfoTip>
-              Unique code identifying this product in inventory and order records. It is the parent code — every variant gets its own code
-              underneath it.
+              The product&apos;s stock keeping unit — the only SKU in the system. Variants do not carry their own code: they are identified by
+              their options in inventory, purchasing, orders and reports.
             </InfoTip>
           </div>
           <Input
@@ -205,30 +213,82 @@ export function BasicInformationSection({
           </div>
           <Input id="product-barcode" value={barcode} maxLength={64} onChange={(event) => onPatch({ barcode: event.target.value })} />
         </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Label htmlFor="product-status" className="text-slate-800">
-              Status
-            </Label>
-            <InfoTip>
-              Draft keeps the product invisible on the storefront. Active publishes it (the storefront only serves products that are
-              active). Archived hides it while keeping order history.
-            </InfoTip>
-          </div>
-          <NativeSelect
-            id="product-status"
-            value={status}
-            onChange={(event) => onPatch({ status: event.target.value as "DRAFT" | "ACTIVE" | "ARCHIVED" })}
-          >
-            <option value="DRAFT">Draft — not sellable yet</option>
-            <option value="ACTIVE">Active — visible and sellable</option>
-            <option value="ARCHIVED">Archived</option>
-          </NativeSelect>
-          <p className="text-xs text-slate-500">“Save as draft” always saves as a draft, whatever this says.</p>
-        </div>
       </div>
+
+      {onShortDescriptionChange || onDescriptionChange ? (
+        <div className="mt-5 space-y-6 border-t border-slate-200 pt-5">
+          {onShortDescriptionChange ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Label className="text-slate-800">Short description</Label>
+                <InfoTip>
+                  One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the
+                  fallback meta description.
+                </InfoTip>
+              </div>
+              <RichTextEditor
+                value={shortDescription}
+                onChange={onShortDescriptionChange}
+                aria-label="Short description"
+                expandedTitle="Short description"
+                placeholder="Lightweight leather shoes for everyday wear."
+                minHeight={140}
+                maxHeight={260}
+                features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
+                toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
+                onUpload={canUpload ? uploadToMediaLibrary : undefined}
+                renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+              />
+            </div>
+          ) : null}
+          {onDescriptionChange ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Label className="text-slate-800">Long description</Label>
+                <InfoTip>
+                  The full product story on the product page. Images and video are picked from the shared media library, so the same asset
+                  is never uploaded twice and never deleted while a description uses it.
+                </InfoTip>
+              </div>
+              <RichTextEditor
+                value={description}
+                onChange={onDescriptionChange}
+                aria-label="Long description"
+                expandedTitle="Long description"
+                placeholder="Describe the materials, sizing, care instructions… Press / for headings, lists, images and video."
+                minHeight={260}
+                expandable
+                onUpload={canUpload ? uploadToMediaLibrary : undefined}
+                renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+              />
+              <p className="text-xs text-slate-500">
+                Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting
+                is rejected on save.
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </CollapsibleSection>
+  );
+}
+
+function MediaLibraryTrigger({ kind, onSelect }: { kind: "image" | "file"; onSelect: (asset: { id?: string | null; url: string; name?: string; mimeType?: string; size?: number; width?: number; height?: number; alt?: string }) => void }) {
+  return (
+    <MediaPicker
+      title={kind === "image" ? "Insert image" : "Insert video or file"}
+      mimeGroup={kind === "image" ? "image" : "all"}
+      trigger={
+        <Button type="button" variant="outline" className="w-full">
+          <ImageIcon className="h-4 w-4" aria-hidden="true" />
+          Choose from media library
+        </Button>
+      }
+      onSelect={(asset) => {
+        const converted = assetToRichTextAsset(asset);
+        if (converted) onSelect(converted);
+      }}
+    />
   );
 }
 
@@ -482,102 +542,6 @@ export function OrganizationSection({
 /* Descriptions                                                               */
 /* -------------------------------------------------------------------------- */
 
-function MediaLibraryTrigger({ kind, onSelect }: { kind: "image" | "file"; onSelect: (asset: { id?: string | null; url: string; name?: string; mimeType?: string; size?: number; width?: number; height?: number; alt?: string }) => void }) {
-  return (
-    <MediaPicker
-      title={kind === "image" ? "Insert image" : "Insert video or file"}
-      mimeGroup={kind === "image" ? "image" : "all"}
-      trigger={
-        <Button type="button" variant="outline" className="w-full">
-          <ImageIcon className="h-4 w-4" aria-hidden="true" />
-          Choose from media library
-        </Button>
-      }
-      onSelect={(asset) => {
-        const converted = assetToRichTextAsset(asset);
-        if (converted) onSelect(converted);
-      }}
-    />
-  );
-}
-
-export function DescriptionSection({
-  shortDescription,
-  description,
-  onShortChange,
-  onDescriptionChange,
-  canUpload,
-}: {
-  shortDescription: RichTextDocument;
-  description: RichTextDocument;
-  onShortChange: (value: RichTextDocument) => void;
-  onDescriptionChange: (value: RichTextDocument) => void;
-  canUpload: boolean;
-}) {
-  return (
-    <CollapsibleSection
-      id="descriptions"
-      title="Product description"
-      description="Short summary for listings and the full description for the product page."
-      icon={<FileText className="h-4 w-4" />}
-    >
-      <div className="space-y-6">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-slate-800">Short description</Label>
-            <InfoTip>
-              One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the fallback
-              meta description.
-            </InfoTip>
-          </div>
-          <RichTextEditor
-            value={shortDescription}
-            onChange={onShortChange}
-            aria-label="Short description"
-            expandedTitle="Short description"
-            placeholder="Lightweight leather shoes for everyday wear."
-            minHeight={140}
-            maxHeight={260}
-            features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
-            toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
-            onUpload={canUpload ? uploadToMediaLibrary : undefined}
-            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-slate-800">Long description</Label>
-            <InfoTip>
-              The full product story on the product page. Images and video are picked from the shared media library, so the same asset is
-              never uploaded twice and never deleted while a description uses it.
-            </InfoTip>
-          </div>
-          <RichTextEditor
-            value={description}
-            onChange={onDescriptionChange}
-            aria-label="Long description"
-            expandedTitle="Long description"
-            placeholder="Describe the materials, sizing, care instructions… Press / for headings, lists, images and video."
-            minHeight={260}
-            expandable
-            onUpload={canUpload ? uploadToMediaLibrary : undefined}
-            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
-          />
-          <p className="text-xs text-slate-500">
-            Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting is
-            rejected on save.
-          </p>
-        </div>
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Product images                                                             */
-/* -------------------------------------------------------------------------- */
-
 export function ProductImagesSection({
   images,
   onChange,
@@ -665,271 +629,214 @@ export function AttributeValueThumb({ mediaId }: { mediaId: string }) {
 /* Pricing                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Product default pricing — level 3 of the inheritance model.
+ *
+ * Variants inherit these values; an attribute-value override (level 2) or a
+ * manual variant override (level 1) wins over them. Nothing here is written onto
+ * a variant that already has an override of its own.
+ */
+function toPaisaOrZero(value: string | null | undefined): number {
+  const parsed = Number((value ?? "").trim());
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.round(parsed * 100);
+}
+
 export function PricingSection({
-  defaultPrice,
-  taxRateBps,
-  packagingCostPaisa,
-  defaultPriceListName,
+  currentPrice,
+  discountType,
+  discountValue,
+  defaultCost,
   variantCount,
-  variantPriceCount,
+  overrideCount,
   unpricedCount,
   canViewCost,
   errors,
   onPatch,
-  onApplyDefaultPrice,
 }: {
-  defaultPrice: string;
-  taxRateBps: string;
-  packagingCostPaisa: string;
-  defaultPriceListName: string;
+  currentPrice: string;
+  discountType: "PERCENTAGE" | "FLAT" | "NONE";
+  discountValue: string;
+  defaultCost: string;
   variantCount: number;
-  variantPriceCount: number;
+  /** Variants carrying a price override of their own. */
+  overrideCount: number;
+  /** Variants that would sell for nothing because no level defines a price. */
   unpricedCount: number;
   canViewCost: boolean;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
-  /** Copies the default price onto every variant that has no price of its own. */
-  onApplyDefaultPrice: () => void;
 }) {
+  const current = toPaisaOrZero(currentPrice);
+  const pricing = calculatePricing({
+    currentPricePaisa: current,
+    discountType,
+    discountValue: Number(discountValue) || 0,
+  });
+  const discountError = validateDiscount({
+    currentPricePaisa: current,
+    discountType,
+    discountValue: Number(discountValue) || 0,
+  });
+
   return (
     <CollapsibleSection
       id="pricing"
-      title="Pricing and product data"
-      description={`Prices are stored in ${defaultPriceListName}. Variant prices override the product default.`}
+      title="Pricing"
+      description="The default price every variant starts from. Set it before generating variants — they inherit it until overridden."
       icon={<ClipboardList className="h-4 w-4" />}
-      badge={`${variantPriceCount}/${variantCount} priced`}
-      badgeTone={variantPriceCount === variantCount && variantCount > 0 ? "success" : "warning"}
+      badge={unpricedCount === 0 && variantCount > 0 ? "Every variant priced" : `${unpricedCount} unpriced`}
+      badgeTone={unpricedCount === 0 && variantCount > 0 ? "success" : "warning"}
     >
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-4">
         <FieldWithTip
-          id="default-price"
-          label="Product default price (BDT)"
-          tooltip="A convenience for new variants: press “Apply to unpriced variants” to copy it onto every variant that has no price yet. Each variant keeps its own price in the price list."
-          help="Variants with their own price are never overwritten."
-          error={errors.defaultPrice}
+          id="product-current-price"
+          label="Current price (BDT)"
+          tooltip="The price before discount — shown struck through when a discount applies. Every variant inherits it unless it carries an override."
+          error={errors.currentPricePaisa}
         >
           <Input
-            id="default-price"
+            id="product-current-price"
             inputMode="decimal"
-            value={defaultPrice}
-            onChange={(event) => onPatch({ defaultPrice: event.target.value })}
+            value={currentPrice}
             placeholder="0.00"
+            onChange={(event) => onPatch({ currentPrice: event.target.value })}
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-1"
-            disabled={!defaultPrice.trim() || unpricedCount === 0}
-            onClick={onApplyDefaultPrice}
+        </FieldWithTip>
+
+        <FieldWithTip
+          id="product-discount-type"
+          label="Discount type"
+          tooltip="Percentage takes a share of the current price off; flat subtracts an amount in BDT. “None” means the current price is the selling price."
+        >
+          <NativeSelect
+            id="product-discount-type"
+            value={discountType}
+            onChange={(event) => onPatch({ discountType: event.target.value as "PERCENTAGE" | "FLAT" | "NONE" })}
           >
-            Apply to {unpricedCount} unpriced variant(s)
-          </Button>
+            <option value="NONE">No discount</option>
+            <option value="PERCENTAGE">Percentage (%)</option>
+            <option value="FLAT">Flat amount (BDT)</option>
+          </NativeSelect>
         </FieldWithTip>
 
         <FieldWithTip
-          id="tax-rate"
-          label="Tax rate (basis points)"
-          tooltip="VAT or sales tax applied to this product at checkout. 1500 = 15%. Stored as basis points so no rounding is lost."
-          help="1500 means 15%."
+          id="product-discount-value"
+          label={discountType === "PERCENTAGE" ? "Discount (%)" : "Discount (BDT)"}
+          tooltip="A percentage is 0–100. A flat amount may not exceed the current price."
+          error={discountError.ok ? undefined : [discountError.message ?? "Invalid discount"]}
         >
           <Input
-            id="tax-rate"
-            inputMode="numeric"
-            value={taxRateBps}
-            onChange={(event) => onPatch({ taxRateBps: event.target.value })}
-          />
-        </FieldWithTip>
-
-        <FieldWithTip
-          id="packaging-cost"
-          label="Packaging cost (BDT)"
-          tooltip="Added per unit when calculating order profitability. It never changes what the shopper pays."
-          error={errors.packagingCostPaisa}
-        >
-          <Input
-            id="packaging-cost"
+            id="product-discount-value"
             inputMode="decimal"
-            value={packagingCostPaisa}
-            onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
+            value={discountValue}
+            placeholder="0"
+            disabled={discountType === "NONE"}
+            onChange={(event) => onPatch({ discountValue: event.target.value })}
           />
+        </FieldWithTip>
+
+        <FieldWithTip
+          id="product-sell-price"
+          label="Sell price (BDT)"
+          tooltip="What the shopper pays: the current price minus the discount. Calculated on the server in whole paisa — it is never taken from the browser."
+        >
+          <div className="flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-800">
+            {formatPaisa(pricing.sellPricePaisa)}
+          </div>
+          {pricing.compareAtPricePaisa != null ? (
+            <p className="text-xs text-slate-500">
+              Shows as <span className="line-through">{formatPaisa(pricing.compareAtPricePaisa)}</span> {formatPaisa(pricing.sellPricePaisa)}
+            </p>
+          ) : null}
         </FieldWithTip>
       </div>
 
-      <p className="mt-3 text-xs text-slate-500">
-        Money is stored as integer paisa — no floating point rounding. {canViewCost ? "Purchase cost is edited per variant (and in bulk) below." : "Purchase cost is hidden because your role cannot view costs."}
-      </p>
+      {canViewCost ? (
+        <div className="mt-4 max-w-xs">
+          <FieldWithTip
+            id="product-default-cost"
+            label="Default purchase cost (BDT)"
+            tooltip="Fallback unit cost for margin reporting when a variant has no cost of its own. Never shown to shoppers."
+            error={errors.defaultCostPaisa}
+          >
+            <Input
+              id="product-default-cost"
+              inputMode="decimal"
+              value={defaultCost}
+              placeholder="0.00"
+              onChange={(event) => onPatch({ defaultCost: event.target.value })}
+            />
+          </FieldWithTip>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+        <Badge variant="neutral">{overrideCount} variant override(s)</Badge>
+        <Badge variant={unpricedCount === 0 ? "success" : "warning"}>{unpricedCount} variant(s) without a price</Badge>
+        <span className="text-slate-500">
+          Changing a default never overwrites an explicit variant or attribute override — those rows keep their own price.
+        </span>
+      </div>
     </CollapsibleSection>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Inventory                                                                  */
+/* Settings, SEO and publication                                               */
 /* -------------------------------------------------------------------------- */
 
-export function InventorySection({
-  requiresShipping,
+/**
+ * Everything that is not the product's identity, price, variants or images:
+ * tax and packaging presets, preorder policy, shipping, the SEO metadata and
+ * the publication status.
+ */
+export function ProductSettingsSection({
+  status,
+  taxRateId,
+  taxRates,
+  taxRateBps,
+  packagingTemplateId,
+  packagingTemplates,
+  packagingCostPaisa,
   isPreorderEnabled,
   preorderNote,
-  rows,
-  openingStock,
-  recordOpeningStock,
-  errors,
-  onPatch,
-  onOpeningStockChange,
-}: {
-  requiresShipping: boolean;
-  isPreorderEnabled: boolean;
-  preorderNote: string;
-  rows: Array<{ key: string; name: string; sku: string }>;
-  openingStock: Record<string, string>;
-  recordOpeningStock: boolean;
-  errors: Record<string, string[]>;
-  onPatch: (patch: Record<string, unknown>) => void;
-  onOpeningStockChange: (key: string, value: string) => void;
-}) {
-  return (
-    <CollapsibleSection
-      id="inventory"
-      title="Inventory and preorder"
-      description="How stock behaves for this product and whether orders beyond stock are allowed."
-      icon={<Truck className="h-4 w-4" />}
-      badge={isPreorderEnabled ? "Preorder on" : undefined}
-      badgeTone={isPreorderEnabled ? "warning" : "neutral"}
-    >
-      <div className="space-y-4">
-        <div className="flex flex-wrap gap-4">
-          <label className="flex items-start gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 rounded border-slate-300"
-              checked={requiresShipping}
-              onChange={(event) => onPatch({ requiresShipping: event.target.checked })}
-            />
-            <span>
-              Requires shipping
-              <span className="block text-xs text-slate-500">Turn off for digital goods and services; they skip courier booking.</span>
-            </span>
-          </label>
-
-          <label className="flex items-start gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="mt-0.5 h-4 w-4 rounded border-slate-300"
-              checked={isPreorderEnabled}
-              onChange={(event) => onPatch({ isPreorderEnabled: event.target.checked })}
-            />
-            <span className="flex items-start gap-1">
-              Allow preorder when out of stock
-              <InfoTip>
-                Allows orders beyond currently available stock when preorder is enabled. The system tracks uncovered quantities and
-                allocates incoming stock according to the platform’s preorder rules.
-              </InfoTip>
-            </span>
-          </label>
-        </div>
-
-        <FieldWithTip
-          id="preorder-note"
-          label="Preorder note"
-          tooltip="Shown to customers when the item is not in stock, for example an expected delivery window."
-          help="Leave empty to use the storefront default wording."
-          error={errors.preorderNote}
-        >
-          <Input id="preorder-note" value={preorderNote} maxLength={300} onChange={(event) => onPatch({ preorderNote: event.target.value })} />
-        </FieldWithTip>
-
-        <Alert variant="warning" title="Opening stock is recorded as a stock adjustment">
-          Saving a product never creates stock by itself. Tick the box below to record the quantities you type as an opening stock
-          adjustment in the inventory ledger, or leave it unticked and receive stock later through a purchase receipt. Stock always flows
-          through the ledger, so on-hand, reservations and history stay consistent.
-        </Alert>
-
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-slate-300"
-            checked={recordOpeningStock}
-            onChange={(event) => onPatch({ recordOpeningStock: event.target.checked })}
-          />
-          Record the quantities below as opening stock when I save
-        </label>
-
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full min-w-[28rem] text-sm">
-            <caption className="sr-only">Opening stock per variant</caption>
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <tr>
-                <th scope="col" className="px-3 py-2">Variant</th>
-                <th scope="col" className="px-3 py-2">Opening quantity</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.key} className="border-t border-slate-100">
-                  <td className="px-3 py-2">
-                    <span className="block text-sm text-slate-800">{row.name || "Untitled variant"}</span>
-                    <span className="font-mono text-xs text-slate-500">{row.sku || "no code yet"}</span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <Input
-                      aria-label={`Opening stock for ${row.name}`}
-                      className="h-9 w-28"
-                      inputMode="numeric"
-                      value={openingStock[row.key] ?? ""}
-                      disabled={!recordOpeningStock}
-                      onChange={(event) => onOpeningStockChange(row.key, event.target.value)}
-                    />
-                  </td>
-                </tr>
-              ))}
-              {rows.length === 0 ? (
-                <tr>
-                  <td colSpan={2} className="px-3 py-3 text-sm text-slate-500">
-                    Generate variants first; opening stock is recorded per variant.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-
-        <p className="text-xs text-slate-500">
-          Later stock movements (receipts, damages, counts) live in{" "}
-          <Link href="/admin/inventory" className="text-brand-700 underline">
-            Inventory
-          </Link>
-          .
-        </p>
-      </div>
-    </CollapsibleSection>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* SEO                                                                        */
-/* -------------------------------------------------------------------------- */
-
-export function SeoSection({
+  requiresShipping,
+  isFeatured,
   seoTitle,
   seoDescription,
   seoKeywords,
   seoImage,
   name,
   slug,
+  productUrlPrefix,
+  canViewCost,
+  errors,
   onPatch,
   onSeoImageChange,
-  productUrlPrefix,
 }: {
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  taxRateId: string | null;
+  taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
+  taxRateBps: string;
+  packagingTemplateId: string | null;
+  packagingTemplates: Array<{ id: string; name: string; costPaisa: number; isDefault: boolean }>;
+  packagingCostPaisa: string;
+  isPreorderEnabled: boolean;
+  preorderNote: string;
+  requiresShipping: boolean;
+  isFeatured: boolean;
   seoTitle: string;
   seoDescription: string;
   seoKeywords: string;
   seoImage: MediaAssetView | null;
   name: string;
   slug: string;
+  productUrlPrefix: string | null;
+  canViewCost: boolean;
+  errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onSeoImageChange: (asset: MediaAssetView | null) => void;
-  productUrlPrefix: string | null;
 }) {
   const title = seoTitle.trim() || name;
   const description = seoDescription.trim();
@@ -937,91 +844,269 @@ export function SeoSection({
 
   return (
     <CollapsibleSection
-      id="seo"
-      title="SEO and social sharing"
-      description="How this product appears in search results and when it is shared."
+      id="settings"
+      title="Settings, SEO and publication"
+      description="Tax and packaging presets, preorder policy, search metadata and whether the product is live."
       icon={<Search className="h-4 w-4" />}
+      badge={status === "ACTIVE" ? "Published" : status === "DRAFT" ? "Draft" : "Archived"}
+      badgeTone={status === "ACTIVE" ? "success" : "neutral"}
       className="mb-10"
     >
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-4">
+      <div className="space-y-6">
+        <div className="grid gap-4 lg:grid-cols-3">
           <FieldWithTip
-            id="seo-title"
-            label="SEO title"
-            tooltip="The clickable title in search results. Leave empty to use the product name."
-            help={`${title.length}/60 characters recommended${title.length > 60 ? " — longer titles are truncated by search engines" : ""}`}
-            error={undefined}
+            id="product-tax-rate"
+            label="Tax rate"
+            tooltip="Reusable preset. Selecting one copies its rate onto this product; editing the preset later does not rewrite historical orders."
           >
-            <Input
-              id="seo-title"
-              value={seoTitle}
-              maxLength={200}
-              onChange={(event) => onPatch({ seoTitle: event.target.value })}
-              placeholder={name || "Product name"}
-            />
+            <NativeSelect
+              id="product-tax-rate"
+              value={taxRateId ?? ""}
+              onChange={(event) => {
+                const nextId = event.target.value || null;
+                const preset = taxRates.find((rate) => rate.id === nextId);
+                onPatch({ taxRateId: nextId, ...(preset ? { taxRateBps: String(preset.rateBps) } : {}) });
+              }}
+            >
+              <option value="">No tax preset</option>
+              {taxRates.map((rate) => (
+                <option key={rate.id} value={rate.id}>
+                  {rate.name} ({(rate.rateBps / 100).toFixed(2)}%)
+                </option>
+              ))}
+            </NativeSelect>
+            <div className="mt-2 flex items-center gap-2">
+              <Label htmlFor="product-tax-bps" className="text-xs text-slate-500">
+                Custom rate (basis points)
+              </Label>
+              <Input
+                id="product-tax-bps"
+                className="h-8 w-24"
+                inputMode="numeric"
+                value={taxRateBps}
+                onChange={(event) => onPatch({ taxRateBps: event.target.value })}
+              />
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Manage presets in <Link href="/admin/catalog/tax-rates" className="text-brand-700 underline">Tax rates</Link>. Tax is recorded
+              separately from discounts, inventory cost and profit.
+            </p>
           </FieldWithTip>
 
           <FieldWithTip
-            id="seo-description"
-            label="Meta description"
-            tooltip="The summary under the title in search results. Leave empty to let search engines use the short description."
-            help={`${description.length}/160 characters recommended`}
+            id="product-packaging-template"
+            label="Packaging cost template"
+            tooltip="Reusable packaging cost per unit. Used for profitability reporting only — it is never added to what the shopper pays."
           >
-            <Textarea
-              id="seo-description"
-              rows={3}
-              maxLength={400}
-              value={seoDescription}
-              onChange={(event) => onPatch({ seoDescription: event.target.value })}
-            />
+            <NativeSelect
+              id="product-packaging-template"
+              value={packagingTemplateId ?? ""}
+              onChange={(event) => {
+                const nextId = event.target.value || null;
+                const preset = packagingTemplates.find((template) => template.id === nextId);
+                onPatch({ packagingCostTemplateId: nextId, ...(preset ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) } : {}) });
+              }}
+            >
+              <option value="">No template</option>
+              {packagingTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name} — {formatPaisa(template.costPaisa)}
+                </option>
+              ))}
+            </NativeSelect>
+            <div className="mt-2 flex items-center gap-2">
+              <Label htmlFor="product-packaging-cost" className="text-xs text-slate-500">
+                Custom cost (BDT)
+              </Label>
+              <Input
+                id="product-packaging-cost"
+                className="h-8 w-24"
+                inputMode="decimal"
+                value={packagingCostPaisa}
+                onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
+              />
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Manage presets in{" "}
+              <Link href="/admin/catalog/packaging-costs" className="text-brand-700 underline">
+                Packaging costs
+              </Link>
+              .
+            </p>
           </FieldWithTip>
 
-          <FieldWithTip
-            id="seo-keywords"
-            label="Keywords"
-            tooltip="Internal keywords used by your own storefront search. Major search engines ignore this field."
-          >
-            <Input id="seo-keywords" value={seoKeywords} maxLength={400} onChange={(event) => onPatch({ seoKeywords: event.target.value })} />
-          </FieldWithTip>
-
-          <MediaField
-            label="Social sharing image"
-            value={seoImage}
-            onChange={onSeoImageChange}
-            size={96}
-            emptyLabel="Falls back to the primary product image"
-            tooltip="Shown when the product link is shared on social networks. Leave empty to use the primary product image."
-            help="Chosen from the shared media library; 1200×630 works best."
-          />
+          {canViewCost ? (
+            <div className="space-y-2 text-xs text-slate-500">
+              <p className="font-medium text-slate-700">How these are used</p>
+              <p>Packaging cost is added to the cost side of an order line when profit is reported.</p>
+              <p>Tax is stored on the product and kept on the order line; it is never treated as a discount or as stock cost.</p>
+            </div>
+          ) : null}
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-slate-800">Search preview</Label>
-            <InfoTip>
-              An approximation of how the result may look. Search engines decide the final appearance; this preview does not promise
-              indexing or ranking.
-            </InfoTip>
+        <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+          <div className="flex flex-wrap gap-4">
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                checked={isPreorderEnabled}
+                onChange={(event) => onPatch({ isPreorderEnabled: event.target.checked })}
+              />
+              <span>
+                Allow preorders on this product
+                <span className="block text-xs text-slate-500">
+                  Orders are only split into a preorder when the requested quantity exceeds available stock (or stock is zero). A variant
+                  can override this.
+                </span>
+              </span>
+            </label>
+
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                checked={requiresShipping}
+                onChange={(event) => onPatch({ requiresShipping: event.target.checked })}
+              />
+              <span>
+                Requires shipping
+                <span className="block text-xs text-slate-500">Turn off for digital goods and services; they skip courier booking.</span>
+              </span>
+            </label>
+
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                checked={isFeatured}
+                onChange={(event) => onPatch({ isFeatured: event.target.checked })}
+              />
+              <span>
+                Featured
+                <span className="block text-xs text-slate-500">Shown first in storefront collections that honour the flag.</span>
+              </span>
+            </label>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <p className="text-xs text-emerald-700">{url}</p>
-            <p className="mt-1 text-base font-medium text-sky-800">{title || "Product name"}</p>
-            <p className="mt-1 text-sm text-slate-600">
-              {description ||
-                (name
-                  ? `Shop ${name} online. Fast delivery, easy returns.`
-                  : "Add a meta description or a short description to control this text.")}
-            </p>
+
+          <FieldWithTip
+            id="preorder-note"
+            label="Preorder note"
+            tooltip="Shown to customers when the item is not in stock, for example an expected delivery window."
+            help="Leave empty to use the storefront default wording."
+            error={errors.preorderNote}
+          >
+            <Input id="preorder-note" value={preorderNote} maxLength={300} onChange={(event) => onPatch({ preorderNote: event.target.value })} />
+          </FieldWithTip>
+
+          <Alert variant="info" title="Stock comes from purchasing">
+            Saving a product never creates stock. Every unit arrives through a{" "}
+            <Link href="/admin/purchasing" className="underline">
+              purchase receipt
+            </Link>{" "}
+            or an authorised{" "}
+            <Link href="/admin/inventory/adjustments" className="underline">
+              inventory adjustment
+            </Link>
+            , both of which write their own ledger movement.
+          </Alert>
+        </div>
+
+        <div className="grid gap-4 border-t border-slate-200 pt-5 lg:grid-cols-2">
+          <div className="space-y-4">
+            <FieldWithTip
+              id="seo-title"
+              label="SEO title"
+              tooltip="The clickable title in search results. Leave empty to use the product name."
+              help={`${title.length}/60 characters recommended${title.length > 60 ? " — longer titles are truncated" : ""}`}
+            >
+              <Input
+                id="seo-title"
+                value={seoTitle}
+                maxLength={200}
+                onChange={(event) => onPatch({ seoTitle: event.target.value })}
+                placeholder={name || "Product name"}
+              />
+            </FieldWithTip>
+
+            <FieldWithTip
+              id="seo-description"
+              label="Meta description"
+              tooltip="The summary under the title in search results. Leave empty to let search engines use the short description."
+              help={`${description.length}/160 characters recommended`}
+            >
+              <Textarea
+                id="seo-description"
+                rows={3}
+                maxLength={400}
+                value={seoDescription}
+                onChange={(event) => onPatch({ seoDescription: event.target.value })}
+              />
+            </FieldWithTip>
+
+            <FieldWithTip id="seo-keywords" label="Keywords" tooltip="Internal keywords used by your own storefront search.">
+              <Input id="seo-keywords" value={seoKeywords} maxLength={400} onChange={(event) => onPatch({ seoKeywords: event.target.value })} />
+            </FieldWithTip>
+
+            <MediaField
+              label="Social sharing image"
+              value={seoImage}
+              onChange={onSeoImageChange}
+              size={96}
+              emptyLabel="Falls back to the primary product image"
+              tooltip="Shown when the product link is shared on social networks. Leave empty to use the primary product image."
+              help="Chosen from the shared media library; 1200×630 works best."
+            />
           </div>
-          <p className="flex items-start gap-1.5 text-xs text-slate-500">
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            Titles are truncated around 60 characters and descriptions around 160 in most search engines.
-          </p>
+
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Label htmlFor="product-status" className="text-slate-800">
+                  Publication
+                </Label>
+                <InfoTip>
+                  Draft keeps the product invisible on the storefront. Active publishes it (the storefront only serves active products).
+                  Archived hides it while keeping order history.
+                </InfoTip>
+              </div>
+              <NativeSelect
+                id="product-status"
+                value={status}
+                onChange={(event) => onPatch({ status: event.target.value as "DRAFT" | "ACTIVE" | "ARCHIVED" })}
+              >
+                <option value="DRAFT">Draft — not sellable yet</option>
+                <option value="ACTIVE">Active — visible and sellable</option>
+                <option value="ARCHIVED">Archived</option>
+              </NativeSelect>
+              <p className="text-xs text-slate-500">“Save as draft” always saves as a draft, whatever this says.</p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <Label className="text-slate-800">Search preview</Label>
+                <InfoTip>
+                  An approximation of how the result may look. Search engines decide the final appearance; this preview does not promise
+                  indexing or ranking.
+                </InfoTip>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <p className="text-xs text-emerald-700">{url}</p>
+                <p className="mt-1 text-base font-medium text-sky-800">{title || "Product name"}</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {description ||
+                    (name ? `Shop ${name} online. Fast delivery, easy returns.` : "Add a meta description or a short description to control this text.")}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </CollapsibleSection>
   );
 }
+
+/* -------------------------------------------------------------------------- */
 
 export function AttributesAndValues({
   attributes,

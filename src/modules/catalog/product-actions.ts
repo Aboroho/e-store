@@ -13,6 +13,7 @@ import {
   createUnitLabel,
   discardProductDraft,
   listBrandOptions,
+  listProductDrafts,
   loadProductDraft,
   saveProduct,
   saveProductDraft,
@@ -159,16 +160,16 @@ export interface SkuCheckResult {
 }
 
 /**
- * Check the parent code and every variant code in one query.
+ * Check the product code for clashes.
  *
- * Variant codes are unique across the whole platform (the schema says so), the
- * parent code is unique inside the business — the same asymmetry the create
- * transaction enforces, reported per field so the table can mark the offending row.
+ * The product code is unique inside the business. Variants are identified by
+ * their options, not by a code of their own, so no per-variant codes are sent.
  */
 export async function checkProductSkusAction(input: {
   productId?: string;
   productCode?: string;
-  variantSkus: Array<{ key: string; sku: string }>;
+  /** Legacy: variants no longer carry their own code, so this is usually empty. */
+  variantSkus?: Array<{ key: string; sku: string }>;
 }): Promise<ActionResult<SkuCheckResult>> {
   try {
     const session = await requireSession();
@@ -407,30 +408,61 @@ export async function updateSingleVariantAction(
 /* Persistent Drafts and Autosave                                             */
 /* -------------------------------------------------------------------------- */
 
+export interface ProductDraftView {
+  draftId: string;
+  productId: string | null;
+  name: string;
+  revision: number;
+  updatedAt: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Autosave the whole form.
+ *
+ * The payload is stored verbatim (it is the same shape the editor sends on
+ * submit) so resuming is exact. Nothing here publishes anything: a draft is
+ * always "unfinished work", never a sellable product.
+ */
 export async function saveProductDraftAction(input: {
   productId?: string | null;
+  draftId?: string | null;
+  revision?: number | null;
   name?: string;
   payload: Record<string, unknown>;
-}): Promise<ActionResult<{ draftId: string; updatedAt: string }>> {
+}): Promise<ActionResult<{ draftId: string; revision: number; updatedAt: string }>> {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const result = await saveProductDraft(actor, input);
     return { ok: true, data: result };
   } catch (error) {
-    return failure(error, "Unable to save working draft.");
+    return failure(error, "Unable to save the draft. Your changes are still on this page — try again in a moment.");
   }
 }
 
 export async function loadProductDraftAction(input: {
   productId?: string | null;
   draftId?: string | null;
-}): Promise<ActionResult<{ draftId: string; name: string; payload: Record<string, unknown>; updatedAt: string } | null>> {
+}): Promise<ActionResult<ProductDraftView | null>> {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const draft = await loadProductDraft(actor.businessId, { ...input, userId: actor.userId });
     return { ok: true, data: draft };
   } catch (error) {
-    return failure(error, "Unable to load working draft.");
+    return failure(error, "Unable to load the draft.");
+  }
+}
+
+/** Drafts the signed-in user can resume (used by the "resume draft" banner). */
+export async function listProductDraftsAction(input: {
+  productId?: string | null;
+}): Promise<ActionResult<ProductDraftView[]>> {
+  try {
+    const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
+    const drafts = await listProductDrafts(actor.businessId, { userId: actor.userId, productId: input.productId ?? null });
+    return { ok: true, data: drafts };
+  } catch (error) {
+    return failure(error, "Unable to list drafts.");
   }
 }
 
@@ -440,10 +472,10 @@ export async function discardProductDraftAction(input: {
 }): Promise<ActionResult<{ discarded: boolean }>> {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
-    const discarded = await discardProductDraft(actor.businessId, input);
+    const discarded = await discardProductDraft(actor.businessId, { ...input, userId: actor.userId });
     return { ok: true, data: { discarded } };
   } catch (error) {
-    return failure(error, "Unable to discard working draft.");
+    return failure(error, "Unable to discard the draft.");
   }
 }
 

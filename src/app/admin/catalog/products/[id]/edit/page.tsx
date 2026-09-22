@@ -21,6 +21,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       canViewCost: can(session, "product.view_cost"),
       canManageMedia: can(session, "media.manage"),
       canUploadMedia: can(session, "media.manage"),
+      userId: session.id,
     },
     id,
   );

@@ -15,6 +15,7 @@ import {
   saveProductAction,
   setAttributeValueImageAction,
 } from "@/modules/catalog/product-actions";
+import { DraftStatusBar, ResumeDraftBanner, useProductDraft } from "./use-product-draft";
 import {
   DEFAULT_WEIGHT_UNIT,
   combinationKey,
@@ -25,11 +26,18 @@ import {
 } from "@/modules/catalog/product-draft";
 import type { EditorAttribute, EditorCategory, ProductEditorData } from "@/modules/catalog/product-queries";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
-import { isRichTextEmpty } from "@/components/rich-text-editor/serialization";
-import { BasicInformationSection, DescriptionSection, InventorySection, OrganizationSection, PricingSection, ProductImagesSection, SeoSection } from "./sections";
-import { AttributesVariationsSection, BulkActionsSection } from "./variations";
+import {
+  BasicInformationSection,
+  OrganizationSection,
+  PricingSection,
+  ProductImagesSection,
+  ProductSettingsSection,
+} from "./sections";
+import { AttributesVariationsSection } from "./variations";
 import { useProductEditor, toDraftAttribute, type ProductEditorState } from "./use-product-editor";
 import type { MediaGalleryItem } from "@/components/media/media-field";
+import { validateDiscount } from "@/modules/catalog/pricing-rules";
+import type { PricingLevelInput } from "@/modules/catalog/inheritance";
 
 /**
  * Create / Edit Product.
@@ -62,16 +70,18 @@ function toBrandChoice(brand: ProductEditorData["brands"][number]): BrandChoice 
 
 type ErrorMap = Record<string, string[]>;
 
+/**
+ * The order of the form follows the order a merchandiser works in: describe the
+ * product, price it, file it, build the variants, dress it with images, then
+ * decide how it ships, how it is found and whether it is live.
+ */
 const SECTIONS = [
-  { id: "basic", label: "Basic information" },
-  { id: "organization", label: "Organisation" },
-  { id: "descriptions", label: "Description" },
-  { id: "images", label: "Images" },
-  { id: "attributes", label: "Attributes & variations" },
-  { id: "bulk", label: "Bulk actions" },
+  { id: "information", label: "Product information" },
   { id: "pricing", label: "Pricing" },
-  { id: "inventory", label: "Inventory" },
-  { id: "seo", label: "SEO" },
+  { id: "organization", label: "Organisation" },
+  { id: "variants", label: "Attributes & variants" },
+  { id: "images", label: "Images" },
+  { id: "settings", label: "Settings, SEO & publication" },
 ] as const;
 
 function toPaisa(value: string | null | undefined): number | null {
@@ -101,6 +111,28 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   });
   const { state } = editor;
 
+  /*
+   * Persistent working copy.
+   *
+   * Autosave happens here, not in the save button: the button publishes the
+   * product, the draft keeps the in-progress edits safe across reloads, crashes
+   * and a second tab.
+   */
+  const [saving, setSaving] = React.useState<null | "draft" | "create">(null);
+  const draft = useProductDraft({
+    productId: product?.id ?? null,
+    initialDraft: data.draft,
+    state,
+    dirty: editor.dirty,
+    onResume: (payload) => {
+      // The draft stores the whole editor state; unknown keys are dropped by
+      // `buildInitialState` defaults rather than reaching the save payload.
+      editor.reset({ ...state, ...(payload as Partial<ProductEditorState>) });
+      setSaved(false);
+    },
+    enabled: saving == null,
+  });
+
   /* Option lists that `+ Create …` dialogs extend without a page reload. */
   const [brands, setBrands] = React.useState<BrandChoice[]>(() => data.brands.map(toBrandChoice));
   const [categories, setCategories] = React.useState<EditorCategory[]>(data.categories);
@@ -112,7 +144,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   const [formError, setFormError] = React.useState<string | null>(null);
   /** Selected variant rows — UI state only, so selecting rows never marks the form dirty. */
   const [selection, setSelection] = React.useState<string[]>([]);
-  const [saving, setSaving] = React.useState<null | "draft" | "create">(null);
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
 
@@ -122,6 +153,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     suggestion: null,
   });
   const [skuState, setSkuState] = React.useState<{ checking: boolean; message: string | null }>({ checking: false, message: null });
+
 
   /* ---------------------------------------------------------------- matrix */
 
@@ -168,47 +200,22 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     };
   }, [state.slug, product?.id]);
 
-  /* -------------------------------------------------------- SKU uniqueness */
-
-  const variantSignature = state.variants.map((variant) => `${variant.key}:${normalizeSku(variant.sku)}`).join("|");
-
-  const skuCheckKey = `${state.productCode}::${variantSignature}`;
-  const [previousSkuCheckKey, setPreviousSkuCheckKey] = React.useState(skuCheckKey);
-  if (skuCheckKey !== previousSkuCheckKey) {
-    setPreviousSkuCheckKey(skuCheckKey);
-    setSkuState({ checking: true, message: null });
-  }
+  /* ------------------------------------------------- product code uniqueness */
 
   React.useEffect(() => {
-    const entries = state.variants
-      .map((variant) => ({ key: variant.key, sku: normalizeSku(variant.sku) }))
-      .filter((entry) => entry.sku.length > 0);
-
+    const code = normalizeSku(state.productCode);
+    if (!code) return;
     let cancelled = false;
     const handle = setTimeout(async () => {
-      if (entries.length === 0 && !normalizeSku(state.productCode)) {
-        setVariantErrors({});
-        setSkuState({ checking: false, message: null });
-        return;
-      }
-      const result = await checkProductSkusAction({
-        productId: product?.id,
-        productCode: normalizeSku(state.productCode) || undefined,
-        variantSkus: entries,
-      });
+      const result = await checkProductSkusAction({ productId: product?.id, productCode: code });
       if (cancelled) return;
-      if (!result.ok) {
-        setSkuState({ checking: false, message: null });
-        return;
-      }
-      const next: Record<string, string> = {};
-      for (const [key, entry] of Object.entries(result.data.variants)) {
-        if (!entry.available && entry.message) next[key] = entry.message;
-      }
-      setVariantErrors(next);
       setSkuState({
         checking: false,
-        message: result.data.productCode.available ? null : result.data.productCode.message ?? "This product code is already taken.",
+        message: !result.ok
+          ? null
+          : result.data.productCode.available
+            ? null
+            : result.data.productCode.message ?? "This product code is already taken.",
       });
     }, 600);
 
@@ -216,8 +223,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       cancelled = true;
       clearTimeout(handle);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature string captures every variant SKU
-  }, [variantSignature, state.productCode, product?.id]);
+  }, [state.productCode, product?.id]);
 
   /* ------------------------------------------------------- unsaved changes */
 
@@ -244,23 +250,56 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   const productImage = state.images[0]?.asset ?? null;
   const variantDefiningAttributes = draftAttributes.filter((attribute) => attribute.isVariantDefining !== false);
 
-  const completion = React.useMemo(() => {
-    const pricedVariants = state.variants.filter((variant) => (toPaisa(variant.price) ?? 0) > 0).length;
-    const variantSkusOk = state.variants.length > 0 && state.variants.every((variant) => normalizeSku(variant.sku).length >= 2);
-    return {
-      basic: state.name.trim().length >= 2 && state.slug.trim().length > 0 && normalizeSku(state.productCode).length >= 2,
-      organization: state.categoryIds.length > 0 && state.unitLabel.trim().length > 0 && isNonNegativeNumber(state.weightValue),
-      descriptions: !isRichTextEmpty(state.shortDescription) || !isRichTextEmpty(state.description),
-      images: state.images.length > 0,
-      attributes: variantSkusOk,
-      bulk: false,
-      pricing: state.variants.length > 0 && pricedVariants === state.variants.length,
-      inventory: true,
-      seo: Boolean(state.seoTitle.trim() || state.seoDescription.trim()),
-    } satisfies Record<(typeof SECTIONS)[number]["id"], boolean>;
-  }, [state]);
+  /** The price a row sells for: its own override, else the attribute default, else the product default. */
+  const effectivePaisa = React.useCallback(
+    (variant: DraftVariant) => {
+      const own = toPaisa(variant.currentPrice) ?? null;
+      if (own != null) return own;
+      const fromAttribute = variant.attributeValueIds
+        .map((valueId) => attributes.flatMap((attribute) => attribute.values).find((value) => value.id === valueId)?.currentPricePaisa ?? null)
+        .find((value): value is number => value != null);
+      if (fromAttribute != null) return fromAttribute;
+      return toPaisa(state.currentPrice) ?? 0;
+    },
+    [attributes, state.currentPrice],
+  );
 
-  const completedCount = SECTIONS.filter((section) => section.id !== "bulk" && completion[section.id]).length;
+  const completion = React.useMemo(() => {
+    const priced = state.variants.filter((variant) => effectivePaisa(variant) > 0).length;
+    return {
+      information: state.name.trim().length >= 2 && state.slug.trim().length > 0 && normalizeSku(state.productCode).length >= 2,
+      pricing: (toPaisa(state.currentPrice) ?? 0) > 0 || (state.variants.length > 0 && priced === state.variants.length),
+      organization: state.categoryIds.length > 0 && state.unitLabel.trim().length > 0 && isNonNegativeNumber(state.weightValue),
+      variants: state.variants.length > 0,
+      images: state.images.length > 0,
+      settings: Boolean(state.seoTitle.trim() || state.seoDescription.trim()),
+    } satisfies Record<(typeof SECTIONS)[number]["id"], boolean>;
+  }, [state, effectivePaisa]);
+
+  const completedCount = SECTIONS.filter((section) => completion[section.id]).length;
+
+  const productPricing: PricingLevelInput = React.useMemo(
+    () => ({
+      currentPricePaisa: toPaisa(state.currentPrice) ?? null,
+      discountType: state.discountType,
+      discountValue: Number(state.discountValue) || 0,
+    }),
+    [state.currentPrice, state.discountType, state.discountValue],
+  );
+
+  const overrideCount = React.useMemo(
+    () =>
+      state.variants.filter((variant) => (toPaisa(variant.currentPrice) ?? null) != null).length +
+      attributes.reduce(
+        (total, attribute) => total + attribute.values.filter((value) => value.currentPricePaisa != null).length,
+        0,
+      ),
+    [state.variants, attributes],
+  );
+  const unpricedCount = React.useMemo(
+    () => state.variants.filter((variant) => effectivePaisa(variant) <= 0).length,
+    [state.variants, effectivePaisa],
+  );
 
   /** Client-side validation that mirrors what the server enforces. */
   const validate = (): { errors: ErrorMap; variantErrors: Record<string, string> } => {
@@ -283,33 +322,46 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     }
     if (state.variants.length === 0) next.variants = ["A product needs at least one variant."];
     if (state.variants.length > 500) next.variants = ["Split products with more than 500 variants into several products."];
+    if (!isNonNegativeNumber(state.currentPrice)) next.currentPricePaisa = ["Current price must be a number of 0 or more."];
+    if (!isNonNegativeNumber(state.defaultCost)) next.defaultCostPaisa = ["Default cost must be a number of 0 or more."];
+    if (!isNonNegativeNumber(state.packagingCostPaisa)) next.packagingCostPaisa = ["Packaging cost must be a number of 0 or more."];
+    const productDiscount = validateDiscount({
+      currentPricePaisa: toPaisa(state.currentPrice) ?? 0,
+      discountType: state.discountType,
+      discountValue: Number(state.discountValue) || 0,
+    });
+    if (!productDiscount.ok) next.discountValue = [productDiscount.message ?? "Invalid discount."];
 
-    const seenSkus = new Map<string, string[]>();
     const seenCombos = new Map<string, string[]>();
     for (const variant of state.variants) {
-      const sku = normalizeSku(variant.sku);
-      if (sku.length < 2) rowErrors[variant.key] = "Enter a code of at least 2 characters.";
-      else if (!/^[A-Za-z0-9._\-/]+$/.test(sku)) rowErrors[variant.key] = "Use letters, numbers, dot, dash, underscore and slash only.";
-      else if (sku === normalizeSku(state.productCode)) rowErrors[variant.key] = "This code is the product code — variants need their own code.";
-      seenSkus.set(sku, [...(seenSkus.get(sku) ?? []), variant.key]);
-
       if (variant.attributeValueIds.length > 0) {
         const key = combinationKey(variant.attributeValueIds);
         seenCombos.set(key, [...(seenCombos.get(key) ?? []), variant.key]);
       }
-      if (!isNonNegativeNumber(variant.price ?? "")) rowErrors[variant.key] = "Price must be a number of 0 or more.";
-      else if ((toPaisa(variant.price) ?? 0) <= 0 && state.status !== "DRAFT") {
-        rowErrors[variant.key] = "Set a price before publishing, or save the product as a draft.";
+
+      const current = toPaisa(variant.currentPrice);
+      if (variant.currentPrice?.trim() && !isNonNegativeNumber(variant.currentPrice)) {
+        rowErrors[variant.key] = "Current price must be a number of 0 or more.";
+      } else if (variant.discountType && variant.discountType !== "NONE" && current != null) {
+        const check = validateDiscount({
+          currentPricePaisa: current,
+          discountType: variant.discountType,
+          discountValue: Number(variant.discountValue) || 0,
+        });
+        if (!check.ok) rowErrors[variant.key] = check.message ?? "Invalid discount.";
       }
       if (!isNonNegativeNumber(variant.compareAt ?? "")) rowErrors[variant.key] = "Compare-at price must be a number of 0 or more.";
+      if (!isNonNegativeNumber(variant.cost ?? "")) rowErrors[variant.key] = "Cost must be a number of 0 or more.";
       if (!isNonNegativeNumber(variant.weight ?? "")) rowErrors[variant.key] = "Weight must be a number of 0 or more.";
-    }
+      if (!isNonNegativeNumber(variant.packagingCost ?? "")) rowErrors[variant.key] = "Packaging cost must be a number of 0 or more.";
 
-    for (const [sku, keys] of seenSkus) {
-      if (keys.length > 1) for (const key of keys) rowErrors[key] = `${sku} is used by more than one variant.`;
-    }
-    for (const keys of seenCombos.values()) {
-      if (keys.length > 1) for (const key of keys) rowErrors[key] = "Two variants cannot have the same combination of options.";
+      if (
+        !rowErrors[variant.key] &&
+        state.status !== "DRAFT" &&
+        (current ?? effectivePaisa(variant)) <= 0
+      ) {
+        rowErrors[variant.key] = "Set a price before publishing, or save the product as a draft.";
+      }
     }
 
     // Surface the worst row problem at section level too, so the summary is never silent.
@@ -326,6 +378,8 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     return {
       productId: product?.id,
       expectedUpdatedAt: product?.updatedAt,
+      draftId: draft.draftId,
+      draftRevision: draft.revision,
       name: state.name.trim(),
       slug: state.slug.trim(),
       productCode: normalizeSku(state.productCode),
@@ -334,6 +388,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       status: saveAsDraft && !product ? ("DRAFT" as const) : state.status,
       brandId: state.brandId,
       unitLabel: state.unitLabel.trim(),
+      unitLabelId: state.unitLabelId,
       categoryIds: state.categoryIds,
       primaryCategoryId: state.primaryCategoryId,
       attributeIds: state.attributeIds,
@@ -347,31 +402,35 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       ) as Record<string, string>,
       weightValue: state.weightValue.trim() ? Number(state.weightValue) : null,
       weightUnit: state.weightUnit ?? DEFAULT_WEIGHT_UNIT,
+      taxRateId: state.taxRateId,
       taxRateBps: state.taxRateBps.trim() ? Number(state.taxRateBps) : 0,
+      packagingCostTemplateId: state.packagingCostTemplateId,
       packagingCostPaisa: toPaisa(state.packagingCostPaisa) ?? 0,
-      defaultPricePaisa: toPaisa(state.defaultPrice),
+      currentPricePaisa: toPaisa(state.currentPrice),
+      discountType: state.discountType,
+      discountValue: Number(state.discountValue) || 0,
+      defaultCostPaisa: toPaisa(state.defaultCost),
       requiresShipping: state.requiresShipping,
       isFeatured: state.isFeatured,
       isPreorderEnabled: state.isPreorderEnabled,
       preorderNote: state.preorderNote.trim() || undefined,
-      openingStock: Object.entries(state.openingStock)
-        .map(([variantKey, quantity]) => ({ variantKey, quantity: Number(quantity) }))
-        .filter((entry) => Number.isFinite(entry.quantity) && entry.quantity > 0),
-      recordOpeningStock: state.recordOpeningStock,
       seoTitle: state.seoTitle.trim() || undefined,
       seoDescription: state.seoDescription.trim() || undefined,
       seoKeywords: state.seoKeywords.trim() || undefined,
       variants: state.variants.map((variant: DraftVariant) => ({
         id: variant.id,
-        name: variant.name.trim() || variant.sku || "Variant",
-        sku: normalizeSku(variant.sku),
+        name: variant.name.trim() || "Variant",
         barcode: variant.barcode?.trim() || undefined,
-        pricePaisa: toPaisa(variant.price) ?? 0,
+        currentPricePaisa: toPaisa(variant.currentPrice) ?? undefined,
+        discountType: variant.discountType ?? "NONE",
+        discountValue: Number(variant.discountValue) || 0,
         compareAtPricePaisa: toPaisa(variant.compareAt) ?? undefined,
         costPaisa: toPaisa(variant.cost) ?? undefined,
+        packagingCostPaisa: toPaisa(variant.packagingCost) ?? undefined,
+        clearPackagingCostOverride: variant.clearPackagingCostOverride ?? undefined,
         weightGrams: toWeightGrams(variant.weight ?? "", variant.weightUnit ?? state.weightUnit) ?? undefined,
         weightUnit: variant.weightUnit ?? state.weightUnit,
-        isPreorderEnabled: Boolean(variant.isPreorderEnabled),
+        isPreorderEnabled: variant.isPreorderEnabled ?? undefined,
         imageMediaId: variant.imageMediaId,
         galleryMediaIds: variant.galleryMediaIds,
         attributeValueIds: variant.attributeValueIds,
@@ -390,7 +449,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
     if (Object.keys(clientValidation.errors).length > 0) {
       toast.error("Please fix the highlighted fields before saving.");
-      document.getElementById("basic")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById("information")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
 
@@ -398,6 +457,9 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     const result = await saveProductAction(buildPayload(saveAsDraft));
     if (result.ok) {
       setSaved(true);
+      // The product record is now the source of truth; the working copy it came
+      // from has served its purpose.
+      void draft.clear();
       const { data: savedResult } = result;
       toast.success(
         savedResult.created
@@ -464,12 +526,14 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         </Alert>
       ) : null}
 
+      <ResumeDraftBanner draft={draft} onResume={draft.resume} onDiscard={draft.discard} />
+
       <CollapsibleGroup
-        defaultOpen={["basic", "organization"]}
+        defaultOpen={["information", "pricing"]}
         header={
           <div className="mr-auto flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant={completedCount === SECTIONS.length - 1 ? "success" : "neutral"}>
-              {completedCount}/{SECTIONS.length - 1} sections complete
+            <Badge variant={completedCount === SECTIONS.length ? "success" : "neutral"}>
+              {completedCount}/{SECTIONS.length} sections complete
             </Badge>
             <span className="flex flex-wrap items-center gap-1.5">
               {SECTIONS.map((section) => (
@@ -501,19 +565,22 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           slugTouched={state.slugTouched}
           productCode={state.productCode}
           barcode={state.barcode}
-          status={state.status}
           productUrlPrefix={data.productUrlPrefix}
           slugState={slugState}
           skuState={{ checking: skuState.checking, message: skuState.message ?? undefined }}
           errors={errors}
+          shortDescription={state.shortDescription}
+          description={state.description}
+          canUpload={data.media.canUpload && data.media.configured}
           onNameChange={editor.setName}
           onSlugChange={(value, options) => editor.setSlug(value, options)}
           onRegenerateSlug={() => {
-            const slug = editor.regenerateSlug();
+            editor.regenerateSlug();
             setSlugState({ checking: true, available: null, suggestion: null });
-            void slug;
           }}
           onPatch={(value) => patch(value)}
+          onShortDescriptionChange={(value: RichTextDocument) => patch({ shortDescription: value })}
+          onDescriptionChange={(value: RichTextDocument) => patch({ description: value })}
         />
 
         <OrganizationSection
@@ -549,14 +616,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           }
         />
 
-        <DescriptionSection
-          shortDescription={state.shortDescription}
-          description={state.description}
-          canUpload={data.media.canUpload && data.media.configured}
-          onShortChange={(value: RichTextDocument) => patch({ shortDescription: value })}
-          onDescriptionChange={(value: RichTextDocument) => patch({ description: value })}
-        />
-
         <ProductImagesSection
           images={images}
           errors={errors}
@@ -568,6 +627,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         />
 
         <AttributesVariationsSection
+          productId={product?.id ?? null}
           attributes={attributes}
           state={state}
           plan={plan}
@@ -575,7 +635,9 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           rowErrors={variantErrors}
           selection={selection}
           productImage={productImage}
+          productPricing={productPricing}
           canViewCost={data.canViewCost}
+          onApplied={() => router.refresh()}
           onPatch={(value) => patch(value as Partial<ProductEditorState>)}
           onAttributeCreated={(attribute) => setAttributes((current) => (current.some((entry) => entry.id === attribute.id) ? current : [...current, attribute]))}
           onValueAdded={(attributeId, value) =>
@@ -598,49 +660,31 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           onSelectionChange={setSelection}
         />
 
-        <BulkActionsSection
-          productId={product?.id ?? null}
-          state={state}
-          selection={selection}
-          attributes={attributes}
-          productImage={productImage}
-          canViewCost={data.canViewCost}
-          onApplied={() => router.refresh()}
-        />
-
         <PricingSection
-          defaultPrice={state.defaultPrice}
-          taxRateBps={state.taxRateBps}
-          packagingCostPaisa={state.packagingCostPaisa}
-          defaultPriceListName={data.priceListName}
+          currentPrice={state.currentPrice}
+          discountType={state.discountType}
+          discountValue={state.discountValue}
+          defaultCost={state.defaultCost}
           variantCount={state.variants.length}
-          variantPriceCount={state.variants.filter((variant) => (toPaisa(variant.price) ?? 0) > 0).length}
-          unpricedCount={state.variants.filter((variant) => (toPaisa(variant.price) ?? 0) <= 0).length}
+          overrideCount={overrideCount}
+          unpricedCount={unpricedCount}
           canViewCost={data.canViewCost}
           errors={errors}
           onPatch={(value) => patch(value as Partial<ProductEditorState>)}
-          onApplyDefaultPrice={() =>
-            patch({
-              variants: state.variants.map((variant) =>
-                (toPaisa(variant.price) ?? 0) > 0 ? variant : { ...variant, price: state.defaultPrice.trim() },
-              ),
-            })
-          }
         />
 
-        <InventorySection
-          requiresShipping={state.requiresShipping}
+        <ProductSettingsSection
+          status={state.status}
+          taxRateId={state.taxRateId}
+          taxRates={data.taxRates}
+          taxRateBps={state.taxRateBps}
+          packagingTemplateId={state.packagingCostTemplateId}
+          packagingTemplates={data.packagingTemplates}
+          packagingCostPaisa={state.packagingCostPaisa}
           isPreorderEnabled={state.isPreorderEnabled}
           preorderNote={state.preorderNote}
-          rows={state.variants.map((variant) => ({ key: variant.key, name: variant.name, sku: variant.sku || "" }))}
-          openingStock={state.openingStock}
-          recordOpeningStock={state.recordOpeningStock}
-          errors={errors}
-          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
-          onOpeningStockChange={(key, value) => patch({ openingStock: { ...state.openingStock, [key]: value } })}
-        />
-
-        <SeoSection
+          requiresShipping={state.requiresShipping}
+          isFeatured={state.isFeatured}
           seoTitle={state.seoTitle}
           seoDescription={state.seoDescription}
           seoKeywords={state.seoKeywords}
@@ -648,6 +692,8 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           name={state.name}
           slug={state.slug}
           productUrlPrefix={data.productUrlPrefix}
+          canViewCost={data.canViewCost}
+          errors={errors}
           onPatch={(value) => patch(value as Partial<ProductEditorState>)}
           onSeoImageChange={(asset) => patch({ seoImage: asset })}
         />
@@ -656,26 +702,29 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       {/* Sticky action bar ------------------------------------------------ */}
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:pl-64">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
-          <p className="flex items-center gap-1.5 text-xs text-slate-600" aria-live="polite">
-            {saving ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                {saving === "draft" ? "Saving draft…" : product ? "Saving changes…" : "Creating product…"}
-              </>
-            ) : dirty ? (
-              <>
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
-                You have unsaved changes
-              </>
-            ) : saved ? (
-              <>
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
-                Saved
-              </>
-            ) : (
-              `${variantDefiningAttributes.length} variation attribute(s) · ${state.variants.length} variant(s)`
-            )}
-          </p>
+          <div className="flex flex-col gap-0.5">
+            <p className="flex items-center gap-1.5 text-xs text-slate-600" aria-live="polite">
+              {saving ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  {saving === "draft" ? "Saving draft…" : product ? "Saving changes…" : "Creating product…"}
+                </>
+              ) : dirty ? (
+                <>
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+                  You have unsaved changes
+                </>
+              ) : saved ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                  Saved
+                </>
+              ) : (
+                `${variantDefiningAttributes.length} variation attribute(s) · ${state.variants.length} variant(s)`
+              )}
+            </p>
+            <DraftStatusBar draft={draft} onRetry={draft.retry} onDiscard={draft.discard} />
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="ghost" onClick={() => (dirty ? setCancelOpen(true) : router.push("/admin/catalog/products"))} disabled={Boolean(saving)}>
@@ -696,13 +745,29 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <DialogContent
-          title="Discard your changes?"
-          description="This form has changes that have not been saved. Leaving now discards them."
+          title="Leave without publishing?"
+          description={
+            draft.lastSavedAt
+              ? "Your work is stored as a draft, so you can pick it up from the product list. Choosing “Discard draft” deletes that copy."
+              : "This form has changes that have not been saved to the product yet."
+          }
           className="max-w-md"
         >
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setCancelOpen(false)}>
               Keep editing
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCancelOpen(false);
+                setSaved(true);
+                void draft.saveNow();
+                router.push("/admin/catalog/products");
+              }}
+            >
+              Save draft and leave
             </Button>
             <Button
               type="button"
@@ -710,10 +775,11 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
               onClick={() => {
                 setCancelOpen(false);
                 setSaved(true);
+                void draft.discard();
                 router.push("/admin/catalog/products");
               }}
             >
-              Discard and leave
+              Discard draft and leave
             </Button>
           </div>
         </DialogContent>

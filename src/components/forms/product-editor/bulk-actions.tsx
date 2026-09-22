@@ -9,6 +9,9 @@ import { InfoTip } from "@/components/ui/tooltip";
 import { MediaPicker } from "@/components/media/media-picker";
 import type { MediaAssetView } from "@/modules/media/service";
 import { bulkVariantActionAction } from "@/modules/catalog/product-actions";
+import { formatPaisa } from "@/lib/money";
+import { calculatePricing } from "@/modules/catalog/pricing-rules";
+import { describeOverrideTarget } from "@/modules/catalog/inheritance";
 import {
   DEFAULT_WEIGHT_UNIT,
   WEIGHT_UNITS,
@@ -45,7 +48,9 @@ type BulkAction =
   | "clear-price-override"
   | "clear-cost-override"
   | "clear-weight-override"
-  | "clear-preorder-override";
+  | "clear-preorder-override"
+  | "clear-image-override"
+  | "clear-packaging-cost-override";
 
 interface ActionDefinition {
   value: BulkAction;
@@ -56,6 +61,8 @@ interface ActionDefinition {
   /** Confirmation strength: "danger" requires ticking a box. */
   confirm?: "standard" | "destructive";
   destructiveHint?: string;
+  /** Actions that only remove an override, restoring inheritance. */
+  restoresInheritance?: boolean;
 }
 
 const ACTIONS: ActionDefinition[] = [
@@ -79,7 +86,12 @@ const ACTIONS: ActionDefinition[] = [
     confirm: "destructive",
     destructiveHint: "Variant images in the target group will be removed.",
   },
-  { value: "set-price", label: "Set price", hint: "Write a new price for every target variant. Prices live in the default price list.", input: "price" },
+  {
+    value: "set-price",
+    label: "Set price",
+    hint: "Set a current price and an optional discount. Choose where it is written: on each variant, on the matched attribute value (so future variants inherit it) or on the product default.",
+    input: "price",
+  },
   { value: "set-compare-at", label: "Set compare-at price", hint: "The “was” price shown struck through next to the selling price.", input: "compareAt" },
   { value: "set-cost", label: "Set purchase cost", hint: "Used for margin reporting. Requires the “view purchase cost” permission.", input: "cost" },
   { value: "set-weight", label: "Set weight", hint: "Overrides the product weight for the target variants.", input: "weight" },
@@ -89,24 +101,42 @@ const ACTIONS: ActionDefinition[] = [
     label: "Restore inherited price",
     hint: "Clears variant price overrides in the target group, restoring attribute-level or product default price inheritance.",
     input: "none",
+    restoresInheritance: true,
   },
   {
     value: "clear-cost-override",
     label: "Restore inherited cost",
     hint: "Clears variant purchase cost overrides in the target group.",
     input: "none",
+    restoresInheritance: true,
   },
   {
     value: "clear-weight-override",
     label: "Restore inherited weight",
     hint: "Clears variant weight overrides in the target group.",
     input: "none",
+    restoresInheritance: true,
   },
   {
     value: "clear-preorder-override",
     label: "Restore inherited preorder status",
     hint: "Clears variant preorder overrides in the target group.",
     input: "none",
+    restoresInheritance: true,
+  },
+  {
+    value: "clear-image-override",
+    label: "Restore inherited image",
+    hint: "Clears variant image overrides so the attribute-value or product image is used again.",
+    input: "none",
+    restoresInheritance: true,
+  },
+  {
+    value: "clear-packaging-cost-override",
+    label: "Restore inherited packaging cost",
+    hint: "Clears variant packaging cost overrides so the product default applies again.",
+    input: "none",
+    restoresInheritance: true,
   },
   {
     value: "clear-gallery",
@@ -143,7 +173,10 @@ export function VariantBulkActions({
   const [targetKind, setTargetKind] = React.useState<BulkTarget["kind"]>(selectedKeys.length > 0 ? "selected" : "all");
   const [criteria, setCriteria] = React.useState<BulkTargetCriteria[]>([]);
   const [media, setMedia] = React.useState<MediaAssetView | null>(null);
-  const [price, setPrice] = React.useState("");
+  const [currentPrice, setCurrentPrice] = React.useState("");
+  const [discountType, setDiscountType] = React.useState<"PERCENTAGE" | "FLAT" | "NONE">("NONE");
+  const [discountValue, setDiscountValue] = React.useState("");
+  const [overrideTarget, setOverrideTarget] = React.useState<"variant" | "attribute" | "product" | "clear">("variant");
   const [compareAt, setCompareAt] = React.useState("");
   const [cost, setCost] = React.useState("");
   const [weight, setWeight] = React.useState("");
@@ -202,7 +235,7 @@ export function VariantBulkActions({
 
   const missingInput =
     (definition.input === "image" && !media) ||
-    (definition.input === "price" && !price.trim()) ||
+    (definition.input === "price" && !currentPrice.trim()) ||
     (definition.input === "cost" && !cost.trim()) ||
     (definition.input === "compareAt" && !compareAt.trim()) ||
     (definition.input === "weight" && !weight.trim()) ||
@@ -220,7 +253,12 @@ export function VariantBulkActions({
     // can never be written by accident.
     const payload: Record<string, unknown> = { productId, action, target, replaceOverrides };
     if (definition.input === "image" && media) payload.mediaId = media.id;
-    if (action === "set-price") payload.pricePaisa = moneyToPaisa(price);
+    if (action === "set-price") {
+      payload.overrideTarget = overrideTarget;
+      if (currentPrice.trim()) payload.currentPricePaisa = moneyToPaisa(currentPrice);
+      payload.discountType = discountType;
+      if (discountValue.trim()) payload.discountValue = Number(discountValue);
+    }
     if (action === "set-compare-at") payload.compareAtPricePaisa = moneyToPaisa(compareAt);
     if (action === "set-cost") payload.costPaisa = moneyToPaisa(cost);
     if (action === "set-weight") {
@@ -351,7 +389,77 @@ export function VariantBulkActions({
       ) : null}
 
       {definition.input === "price" ? (
-        <MoneyInput id="bulk-price" label="New price (BDT)" value={price} onChange={setPrice} tip="Written to every target variant and to the default price list." />
+        <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <MoneyInput
+              id="bulk-price"
+              label="Current price (BDT)"
+              value={currentPrice}
+              onChange={setCurrentPrice}
+              tip="The price before discount. Leave empty and fill “Sell price” to write a price without a discount."
+            />
+            <div className="space-y-1">
+              <Label htmlFor="bulk-discount-type" className="text-xs">
+                Discount type
+              </Label>
+              <NativeSelect
+                id="bulk-discount-type"
+                className="h-9 w-32"
+                value={discountType}
+                onChange={(event) => setDiscountType(event.target.value as "PERCENTAGE" | "FLAT" | "NONE")}
+              >
+                <option value="NONE">No discount</option>
+                <option value="PERCENTAGE">Percentage (%)</option>
+                <option value="FLAT">Flat amount (BDT)</option>
+              </NativeSelect>
+            </div>
+            <MoneyInput
+              id="bulk-discount-value"
+              label={discountType === "PERCENTAGE" ? "Discount (%)" : "Discount (BDT)"}
+              value={discountValue}
+              onChange={setDiscountValue}
+              tip="A percentage is 0–100; a flat amount is taken off the current price, in BDT."
+            />
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex items-center gap-1">
+              <Label htmlFor="bulk-override-target" className="text-xs">
+                Write the price to
+              </Label>
+              <InfoTip>
+                A variant override affects only the target rows. An attribute override is inherited by every variant of the matched value —
+                including variants generated later. The product default changes what every variant without an override sells for.
+              </InfoTip>
+            </div>
+            <NativeSelect
+              id="bulk-override-target"
+              className="h-9 w-full max-w-md"
+              value={overrideTarget}
+              onChange={(event) => {
+                setOverrideTarget(event.target.value as "variant" | "attribute" | "product" | "clear");
+                invalidateConfirmation();
+              }}
+            >
+              <option value="variant">Variant override (only the target variants)</option>
+              <option value="attribute" disabled={targetKind !== "attribute"}>
+                Attribute-level override (needs an attribute filter)
+              </option>
+              <option value="product">Product default (variants without an override follow it)</option>
+              <option value="clear">Clear the override and restore inheritance</option>
+            </NativeSelect>
+          </div>
+
+          {discountType !== "NONE" && currentPrice.trim() ? (
+            <p className="text-xs text-slate-600">
+              Sell price:{" "}
+              <strong className="text-slate-800">
+                {formatPaisa(calculatePricing({ currentPricePaisa: moneyToPaisa(currentPrice), discountType, discountValue: Number(discountValue) || 0 }).sellPricePaisa)}
+              </strong>{" "}
+              · compare-at {formatPaisa(moneyToPaisa(currentPrice))}
+            </p>
+          ) : null}
+        </div>
       ) : null}
       {definition.input === "compareAt" ? (
         <MoneyInput
@@ -471,6 +579,36 @@ export function VariantBulkActions({
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Overrides</dt>
               <dd className="text-right font-medium text-slate-800">{replaceOverrides ? "Replaced" : "Preserved"}</dd>
+            </div>
+            {action === "set-price" ? (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="text-slate-500">Written to</dt>
+                <dd className="text-right font-medium text-slate-800">{describeOverrideTarget(overrideTarget)}</dd>
+              </div>
+            ) : null}
+            {definition.restoresInheritance ? (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="text-slate-500">After the change</dt>
+                <dd className="text-right font-medium text-slate-800">The value is inherited again (product default → attribute override)</dd>
+              </div>
+            ) : null}
+            <div className="flex items-start justify-between gap-4">
+              <dt className="text-slate-500">Variants affected</dt>
+              <dd className="max-w-[18rem] text-right text-slate-800">
+                {matched.length === 0 ? (
+                  <span className="text-amber-700">No variants match — nothing will change.</span>
+                ) : (
+                  <>
+                    <span className="block text-xs text-slate-500">
+                      {matched
+                        .slice(0, 8)
+                        .map((row) => row.name || "Untitled variant")
+                        .join(", ")}
+                      {matched.length > 8 ? ` and ${matched.length - 8} more` : ""}
+                    </span>
+                  </>
+                )}
+              </dd>
             </div>
             {attributeActions && targetKind === "attribute" ? (
               <div className="flex items-start justify-between gap-4">

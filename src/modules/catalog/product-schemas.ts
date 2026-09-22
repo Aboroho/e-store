@@ -78,6 +78,7 @@ export const productVariantInputSchema = z.object({
   clearWeightOverride: z.boolean().optional(),
   clearPreorderOverride: z.boolean().optional(),
   clearImageOverride: z.boolean().optional(),
+  clearPackagingCostOverride: z.boolean().optional(),
 });
 
 export const productDraftSchema = z.object({
@@ -93,6 +94,8 @@ export const productDraftSchema = z.object({
 
   brandId: zId.nullable().optional(),
   unitLabel: z.string().trim().min(1, "Enter a unit label").max(24, "Unit labels are limited to 24 characters"),
+  /** Saved unit label the product points at (the text column stays in sync for the storefront). */
+  unitLabelId: zId.nullable().optional(),
   categoryIds: z.array(zId).max(50).default([]),
   primaryCategoryId: zId.nullable().optional(),
   attributeIds: z.array(zId).max(30).default([]),
@@ -121,6 +124,8 @@ export const productDraftSchema = z.object({
   discountValue: z.coerce.number().min(0).max(1_000_000).default(0),
   /** Product-level default price (sell price) offered to variants that have none of their own. */
   defaultPricePaisa: zMoneyPaisa.nullable().optional(),
+  /** Product-level default purchase cost (permission-gated in the UI). */
+  defaultCostPaisa: zMoneyPaisa.nullable().optional(),
 
   requiresShipping: z.boolean().default(true),
   isFeatured: z.boolean().default(false),
@@ -133,16 +138,9 @@ export const productDraftSchema = z.object({
 
   variants: z.array(productVariantInputSchema).min(1, "A product needs at least one variant").max(500, "Split products with more than 500 variants"),
 
-  /** Optional programmatic opening stock (excluded from product editor UI). */
-  recordOpeningStock: z.boolean().default(false),
-  openingStock: z
-    .array(
-      z.object({
-        variantKey: z.string(),
-        quantity: z.number().int().min(0),
-      }),
-    )
-    .default([]),
+  /** Draft autosave bookkeeping (see `saveProductDraft`). */
+  draftId: zId.optional(),
+  draftRevision: z.coerce.number().int().min(0).optional(),
 
   /** Optimistic concurrency: the `updatedAt` the form was rendered with. */
   expectedUpdatedAt: z.string().trim().optional(),
@@ -248,6 +246,8 @@ export const BULK_VARIANT_ACTIONS = [
   "clear-cost-override",
   "clear-weight-override",
   "clear-preorder-override",
+  "clear-image-override",
+  "clear-packaging-cost-override",
 ] as const;
 
 export type BulkVariantAction = (typeof BULK_VARIANT_ACTIONS)[number];
@@ -257,6 +257,11 @@ export const bulkVariantActionSchema = z.object({
   action: z.enum(BULK_VARIANT_ACTIONS),
   target: bulkTargetSchema,
   /** Money in paisa; weight in grams (already normalised by the form). */
+  currentPricePaisa: zMoneyPaisa.nullable().optional(),
+  discountType: z.enum(["PERCENTAGE", "FLAT", "NONE"]).optional(),
+  discountValue: z.coerce.number().min(0).max(1_000_000).optional(),
+  /** Where the change is written: variant override, attribute default, product default or "clear". */
+  overrideTarget: z.enum(["variant", "attribute", "product", "clear"]).default("variant"),
   pricePaisa: zMoneyPaisa.optional(),
   compareAtPricePaisa: zMoneyPaisa.nullable().optional(),
   costPaisa: zMoneyPaisa.nullable().optional(),
@@ -292,6 +297,11 @@ export type PackagingCostTemplateInput = z.infer<typeof packagingCostTemplateInp
 
 export const singleVariantUpdateSchema = z.object({
   variantId: zId,
+  /** Discount-aware override. `currentPricePaisa` + discount are authoritative;
+      `priceOverridePaisa` may be sent when the caller already knows the result. */
+  currentPricePaisa: zMoneyPaisa.nullable().optional(),
+  discountType: z.enum(["PERCENTAGE", "FLAT", "NONE"]).optional(),
+  discountValue: z.coerce.number().min(0).max(1_000_000).optional(),
   priceOverridePaisa: zMoneyPaisa.nullable().optional(),
   compareAtPricePaisa: zMoneyPaisa.nullable().optional(),
   costPaisa: zMoneyPaisa.nullable().optional(),
@@ -304,6 +314,10 @@ export const singleVariantUpdateSchema = z.object({
   clearWeightOverride: z.boolean().optional(),
   clearPreorderOverride: z.boolean().optional(),
   clearImageOverride: z.boolean().optional(),
+  clearPackagingCostOverride: z.boolean().optional(),
+  /** Name and barcode shown for the variant in the catalogue. */
+  name: z.string().trim().min(1, "Give the variant a name").max(160).optional(),
+  barcode: zOptionalText(64),
 });
 
 export type SingleVariantUpdateInput = z.infer<typeof singleVariantUpdateSchema>;

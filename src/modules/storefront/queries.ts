@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/client";
 import { AppError } from "@/lib/errors";
 import { mediaUrlFor } from "@/modules/media/service";
 import type { Prisma } from "@/generated/prisma/client";
+import { effectiveImage, effectivePricing, effectivePreorder, loadProductVariantRows } from "@/modules/catalog/variant-pricing";
 
 /**
  * Public storefront queries.
@@ -363,15 +364,44 @@ async function priceFilteredProductIds(storefront: StorefrontContext, query: Cat
     .map(([productId]) => productId);
 }
 
+/**
+ * One sellable row of a product.
+ *
+ * Every money and eligibility field here was resolved on the server from the
+ * inheritance model (variant → attribute value → product default); the browser
+ * only ever picks which row it wants and how many.
+ */
 export interface StorefrontVariant {
   id: string;
+  /** The product's SKU — variants share it, they do not own one. */
   sku: string;
   name: string;
   pricePaisa: number;
   compareAtPricePaisa: number | null;
   available: number;
   isPreorderEnabled: boolean;
+  /** Attribute values this row carries, in attribute order. Used to match a selection. */
+  attributeValueIds: string[];
   attributes: Array<{ name: string; value: string }>;
+  /** Effective image: variant override → attribute-value default → product primary. */
+  imageUrl: string | null;
+  imageAlt: string;
+  imageSource: "variant" | "attribute" | "product" | "none";
+}
+
+const IMAGE_SOURCE_BY_LEVEL = { VARIANT: "variant", ATTRIBUTE: "attribute", PRODUCT: "product", NONE: "none" } as const;
+
+/** A selectable option group on the product page. */
+export interface StorefrontProductOption {
+  id: string;
+  name: string;
+  values: Array<{
+    id: string;
+    value: string;
+    colorHex: string | null;
+    /** True when at least one in-stock (or preorderable) row offers this value. */
+    purchasable: boolean;
+  }>;
 }
 
 export interface StorefrontProductDetail {
@@ -389,30 +419,33 @@ export interface StorefrontProductDetail {
   categories: Array<{ id: string; name: string; slug: string }>;
   images: Array<{ url: string | null; alt: string }>;
   variants: StorefrontVariant[];
+  /** Option groups the shopper picks from, built from the sellable rows only. */
+  options: StorefrontProductOption[];
   ratingAverage: number | null;
   reviewCount: number;
   related: ProductCard[];
 }
 
 export async function storefrontProduct(storefront: StorefrontContext, slug: string): Promise<StorefrontProductDetail | null> {
-  const product = await prisma.product.findFirst({
+  const full = await prisma.product.findFirst({
     where: { businessId: storefront.businessId, slug, status: "ACTIVE", deletedAt: null },
     include: {
       categories: { include: { category: true } },
       images: { orderBy: { position: "asc" }, include: { media: true } },
-      variants: {
-        where: { status: "ACTIVE" },
-        orderBy: { position: "asc" },
-        include: { attributeValues: { include: { attribute: true, attributeValue: true } } },
-      },
     },
   });
-  if (!product) return null;
+  if (!full) return null;
 
-  const [prices, availability, rating] = await Promise.all([
-    priceMapFor(storefront, product.variants.map((variant) => variant.id)),
-    availabilityMap(product.variants.map((variant) => variant.id), storefront.locationId),
-    ratingMap([product.id]),
+  /*
+   * Variants, prices, images and preorder eligibility all come from the shared
+   * inheritance resolver, never from the browser: the shopper's device chooses a
+   * combination, the server decides what it costs and whether it can be bought.
+   */
+  const rows = await loadProductVariantRows(prisma, { productId: full.id });
+  const [availability, rating, channelPrices] = await Promise.all([
+    availabilityMap(rows.map((row) => row.id), storefront.locationId),
+    ratingMap([full.id]),
+    priceMapFor(storefront, rows.map((row) => row.id)),
   ]);
 
   const relatedIds = (
@@ -421,8 +454,8 @@ export async function storefrontProduct(storefront: StorefrontContext, slug: str
         businessId: storefront.businessId,
         status: "ACTIVE",
         deletedAt: null,
-        id: { not: product.id },
-        ...(product.categories.length > 0 ? { categories: { some: { categoryId: { in: product.categories.map((entry) => entry.categoryId) } } } } : {}),
+        id: { not: full.id },
+        ...(full.categories.length > 0 ? { categories: { some: { categoryId: { in: full.categories.map((entry) => entry.categoryId) } } } } : {}),
       },
       take: 4,
       orderBy: [{ isFeatured: "desc" }, { publishedAt: "desc" }],
@@ -432,46 +465,112 @@ export async function storefrontProduct(storefront: StorefrontContext, slug: str
   const relatedCards = await productCards(storefront, relatedIds);
 
   const images = await Promise.all(
-    product.images.map(async (image) => ({
+    full.images.map(async (image) => ({
       url: await mediaUrlFor({
         objectKey: image.media.objectKey,
         visibility: image.media.visibility,
         originalName: image.media.originalName,
         extension: image.media.extension,
       }),
-      alt: image.altText ?? image.media.altText ?? product.name,
+      alt: image.altText ?? image.media.altText ?? full.name,
     })),
   );
 
-  return {
-    id: product.id,
-    name: product.name,
-    slug: product.slug,
-    shortDescription: product.shortDescription,
-    description: product.description,
-    brand: product.brand,
-    unitLabel: product.unitLabel,
-    isPreorderEnabled: product.isPreorderEnabled && storefront.preorderEnabled,
-    preorderNote: product.preorderNote,
-    seoTitle: product.seoTitle,
-    seoDescription: product.seoDescription,
-    categories: product.categories.map((entry) => ({ id: entry.category.id, name: entry.category.name, slug: entry.category.slug })),
-    images,
-    variants: product.variants.map((variant) => {
-      const price = prices.get(variant.id);
-      return {
-        id: variant.id,
-        sku: variant.sku ?? "",
-        name: variant.name,
-        pricePaisa: price?.pricePaisa ?? variant.priceOverridePaisa ?? 0,
-        compareAtPricePaisa: price?.compareAtPricePaisa ?? variant.compareAtPricePaisa,
-        available: availability.get(variant.id) ?? 0,
-        isPreorderEnabled: product.isPreorderEnabled && storefront.preorderEnabled,
-        attributes: variant.attributeValues.map((value) => ({ name: value.attribute.name, value: value.attributeValue.value })),
-      };
+  // One URL per media id, resolved once — a product with 30 variants must not
+  // ask the storage layer 30 times for the same image.
+  const mediaIds = new Set<string>();
+  for (const row of rows) {
+    const resolved = effectiveImage(row);
+    if (resolved.value) mediaIds.add(resolved.value);
+  }
+  const urlByMediaId = new Map<string, string | null>();
+  await Promise.all(
+    [...mediaIds].map(async (mediaId) => {
+      const asset = await prisma.mediaAsset.findUnique({
+        where: { id: mediaId },
+        select: { objectKey: true, visibility: true, originalName: true, extension: true, altText: true },
+      });
+      if (!asset) {
+        urlByMediaId.set(mediaId, null);
+        return;
+      }
+      urlByMediaId.set(
+        mediaId,
+        await mediaUrlFor({
+          objectKey: asset.objectKey,
+          visibility: asset.visibility,
+          originalName: asset.originalName,
+          extension: asset.extension,
+        }),
+      );
     }),
-    ratingAverage: rating.get(product.id)?.average ?? null,
-    reviewCount: rating.get(product.id)?.count ?? 0,
+  );
+
+  const storefrontAllowsPreorder = storefront.preorderEnabled && full.isPreorderEnabled;
+
+  const variants: StorefrontVariant[] = rows.map((row) => {
+    const pricing = effectivePricing(row);
+    const image = effectiveImage(row);
+    const channel = channelPrices.get(row.id);
+    const available = Math.max(0, availability.get(row.id) ?? 0);
+    return {
+      id: row.id,
+      sku: full.sku ?? "",
+      name: row.name,
+      // A channel price list still wins where one is configured; otherwise the
+      // inherited price is the price.
+      pricePaisa: channel?.pricePaisa ?? pricing.value.pricePaisa,
+      compareAtPricePaisa: channel?.compareAtPricePaisa ?? pricing.value.compareAtPricePaisa,
+      available,
+      isPreorderEnabled: effectivePreorder(row, { storefrontEnabled: storefrontAllowsPreorder }),
+      attributeValueIds: row.attributeValues.map((link) => link.attributeValue.id),
+      attributes: row.attributeValues.map((link) => ({ name: link.attribute.name, value: link.attributeValue.value })),
+      imageUrl: image.value ? urlByMediaId.get(image.value) ?? null : null,
+      imageAlt: `${full.name} — ${row.name}`,
+      imageSource: image.value ? IMAGE_SOURCE_BY_LEVEL[image.level] : "none",
+    };
+  });
+
+  /* Option groups: every attribute that actually distinguishes a sellable row. */
+  const optionMap = new Map<string, StorefrontProductOption>();
+  for (const row of rows) {
+    for (const link of row.attributeValues) {
+      const group = optionMap.get(link.attribute.id) ?? { id: link.attribute.id, name: link.attribute.name, values: [] };
+      if (!group.values.some((value) => value.id === link.attributeValue.id)) {
+        group.values.push({ id: link.attributeValue.id, value: link.attributeValue.value, colorHex: null, purchasable: false });
+      }
+      optionMap.set(link.attribute.id, group);
+    }
+  }
+  for (const variant of variants) {
+    if (variant.available > 0 || variant.isPreorderEnabled) {
+      for (const valueId of variant.attributeValueIds) {
+        for (const group of optionMap.values()) {
+          const value = group.values.find((entry) => entry.id === valueId);
+          if (value) value.purchasable = true;
+        }
+      }
+    }
+  }
+
+  return {
+    id: full.id,
+    name: full.name,
+    slug: full.slug,
+    shortDescription: full.shortDescription,
+    description: full.description,
+    brand: full.brand,
+    unitLabel: full.unitLabel,
+    isPreorderEnabled: storefrontAllowsPreorder,
+    preorderNote: full.preorderNote,
+    seoTitle: full.seoTitle,
+    seoDescription: full.seoDescription,
+    categories: full.categories.map((entry) => ({ id: entry.category.id, name: entry.category.name, slug: entry.category.slug })),
+    images,
+    variants,
+    options: [...optionMap.values()].sort((left, right) => left.name.localeCompare(right.name)),
+    ratingAverage: rating.get(full.id)?.average ?? null,
+    reviewCount: rating.get(full.id)?.count ?? 0,
     related: [...relatedCards.values()],
   };
 }

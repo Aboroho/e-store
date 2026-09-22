@@ -8,6 +8,8 @@
  * the matrix the backend persists.
  */
 
+import { resolveImage as resolveImageShared } from "@/modules/catalog/inheritance";
+
 /* -------------------------------------------------------------------------- */
 /* Slugs                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -113,8 +115,11 @@ export interface DraftAttributeValue {
   colorHex?: string | null;
   /** Default image for this value (attribute-value level inheritance). */
   mediaId?: string | null;
-  /** Attribute-level price override in paisa (precedence: variant > attribute > product). */
+  /** Attribute-level pricing override (precedence: variant > attribute > product). */
   priceOverridePaisa?: number | null;
+  currentPricePaisa?: number | null;
+  discountType?: DiscountType;
+  discountValue?: number | null;
 }
 
 export interface DraftAttribute {
@@ -129,13 +134,15 @@ export interface DraftAttribute {
 export interface DraftVariant {
   /** Stable client key; the persisted variant id once it exists. */
   key: string;
+  /** Persisted variant id. This — not a SKU — is the variant's identity. */
   id?: string;
-  sku?: string;
   name: string;
   barcode?: string;
+  /** Level-1 pricing override. Empty means "inherit the attribute/product price". */
   currentPrice?: string;
-  discountType?: "PERCENTAGE" | "FLAT" | "NONE";
+  discountType?: DiscountType;
   discountValue?: string;
+  /** Explicit sell price (derived from current price + discount when empty). */
   price?: string;
   compareAt?: string;
   cost?: string;
@@ -155,6 +162,7 @@ export interface DraftVariant {
   clearWeightOverride?: boolean;
   clearPreorderOverride?: boolean;
   clearImageOverride?: boolean;
+  clearPackagingCostOverride?: boolean;
 }
 
 /** Deterministic key of a combination, independent of the order values were picked in. */
@@ -193,6 +201,8 @@ export function variantLabel(attributes: DraftAttribute[], attributeValueIds: st
     .join(" / ");
 }
 
+export type DiscountType = "PERCENTAGE" | "FLAT" | "NONE";
+
 export interface MatrixPlan {
   /** Rows that already exist and still belong to the matrix. */
   kept: DraftVariant[];
@@ -220,7 +230,7 @@ export function planMatrix(
   attributes: DraftAttribute[],
   selectedValueIds: string[],
   existing: DraftVariant[],
-  options: { skuPrefix: string; keepOrphans?: boolean } = { skuPrefix: "SKU" },
+  options: { skuPrefix?: string; keepOrphans?: boolean } = {},
 ): MatrixPlan {
   const combinations = buildCombinations(attributes, selectedValueIds);
   const existingByKey = new Map(existing.map((row) => [combinationKey(row.attributeValueIds), row]));
@@ -240,14 +250,17 @@ export function planMatrix(
     }
     added.push({
       key: `new-${key}-${index}`,
-      sku: `${options.skuPrefix || "SKU"}-${index + 1}`,
       name: variantLabel(attributes, combination),
+      currentPrice: "",
+      discountType: "NONE",
+      discountValue: "",
       price: "",
       compareAt: "",
       cost: "",
       weight: "",
       weightUnit: DEFAULT_WEIGHT_UNIT,
-      isPreorderEnabled: false,
+      isPreorderEnabled: undefined,
+      packagingCost: "",
       imageMediaId: null,
       galleryMediaIds: [],
       attributeValueIds: combination,
@@ -292,28 +305,10 @@ export function clearVariantPropertyOverride(
     case "image":
       return { ...variant, imageMediaId: null, clearImageOverride: true };
     case "packagingCost":
-      return { ...variant, packagingCost: "" };
+      return { ...variant, packagingCost: "", clearPackagingCostOverride: true };
     default:
       return variant;
   }
-}
-
-/** Suggest a unique SKU per row from the product code, skipping the ones already used. */
-export function suggestVariantSkus(rows: DraftVariant[], prefix: string, startAt = 1): DraftVariant[] {
-  const base = (prefix || "SKU").toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "") || "SKU";
-  const used = new Set(rows.map((row) => (row.sku ?? "").trim().toUpperCase()).filter(Boolean));
-  let counter = startAt;
-  return rows.map((row) => {
-    if ((row.sku ?? "").trim()) return row;
-    let candidate = `${base}-${counter}`;
-    while (used.has(candidate)) {
-      counter += 1;
-      candidate = `${base}-${counter}`;
-    }
-    used.add(candidate);
-    counter += 1;
-    return { ...row, sku: candidate };
-  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -327,7 +322,6 @@ export interface ResolvedImage {
   kind: ImageSourceKind;
   /** Human label used by the table, the picker and the API ("Inherited from Color: Black"). */
   label: string;
-  /** Attribute value the image was inherited from, when applicable. */
   attributeValueId?: string;
   attributeName?: string;
   attributeValue?: string;
@@ -336,10 +330,9 @@ export interface ResolvedImage {
 /**
  * Precedence: variant override → attribute-value default → product image → none.
  *
- * Attribute values are visited in the order the product lists its attributes, so a
- * product with Color and Size uses the colour image when both values define one.
- * This is the single definition of "which image does this variant show" — the
- * variant table, the variant picker and the storefront all read it.
+ * Thin wrapper around the shared resolver (`modules/catalog/inheritance.ts`) so
+ * the editor, the storefront and the API can never disagree about which image a
+ * variant shows.
  */
 export function resolveVariantImage(input: {
   imageMediaId?: string | null;
@@ -347,31 +340,29 @@ export function resolveVariantImage(input: {
   productImageMediaId: string | null;
   attributes: DraftAttribute[];
 }): ResolvedImage {
-  if (input.imageMediaId) {
-    return { mediaId: input.imageMediaId, kind: "variant", label: "Custom variant image" };
-  }
+  const resolved = resolveImageShared({
+    variantImageMediaId: input.imageMediaId ?? null,
+    attributeValues: input.attributes.flatMap((attribute) =>
+      attribute.values
+        .filter((value) => input.attributeValueIds.includes(value.id))
+        .map((value) => ({
+          attributeValueId: value.id,
+          attributeName: attribute.name,
+          valueLabel: value.value,
+          value: value.mediaId ?? null,
+        })),
+    ),
+    productImageMediaId: input.productImageMediaId,
+  });
 
-  for (const attribute of input.attributes) {
-    const valueId = input.attributeValueIds.find((id) => attribute.values.some((value) => value.id === id));
-    if (!valueId) continue;
-    const value = attribute.values.find((entry) => entry.id === valueId);
-    if (value?.mediaId) {
-      return {
-        mediaId: value.mediaId,
-        kind: "attribute",
-        label: `Inherited from ${attribute.name}: ${value.value}`,
-        attributeValueId: value.id,
-        attributeName: attribute.name,
-        attributeValue: value.value,
-      };
-    }
-  }
-
-  if (input.productImageMediaId) {
-    return { mediaId: input.productImageMediaId, kind: "product", label: "Inherited from product" };
-  }
-
-  return { mediaId: null, kind: "none", label: "No image" };
+  return {
+    mediaId: resolved.mediaId,
+    kind: resolved.level === "VARIANT" ? "variant" : resolved.level === "ATTRIBUTE" ? "attribute" : resolved.level === "PRODUCT" ? "product" : "none",
+    label: resolved.label,
+    ...(resolved.attributeValueId ? { attributeValueId: resolved.attributeValueId } : {}),
+    ...(resolved.attributeName ? { attributeName: resolved.attributeName } : {}),
+    ...(resolved.attributeValueLabel ? { attributeValue: resolved.attributeValueLabel } : {}),
+  };
 }
 
 /* -------------------------------------------------------------------------- */

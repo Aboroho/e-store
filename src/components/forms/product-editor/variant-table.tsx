@@ -1,12 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Archive, ImageIcon, RotateCcw, Search, Star } from "lucide-react";
+import { Archive, ImageIcon, RotateCcw, Search } from "lucide-react";
 import { Badge, Button, Input, Label, NativeSelect } from "@/components/ui/primitives";
 import { InfoTip } from "@/components/ui/tooltip";
 import { MediaThumb } from "@/components/media/media-field";
 import { MediaPicker } from "@/components/media/media-picker";
 import { cn } from "@/lib/utils";
+import { formatPaisa } from "@/lib/money";
 import { browseMediaAction } from "@/modules/media/actions";
 import type { MediaAssetView } from "@/modules/media/service";
 import {
@@ -18,18 +19,21 @@ import {
   type DraftVariant,
   type WeightUnit,
 } from "@/modules/catalog/product-draft";
+import { resolvePricing, type PricingLevelInput } from "@/modules/catalog/inheritance";
 
 /**
  * The variant table.
  *
- * Beyond editing rows, two things matter here:
+ * Beyond editing rows, three things matter here:
  *
- *  - **why** a variant shows the image it shows (variant override / attribute-value
- *    default / product default), so inheritance is never mistaken for a missing
- *    image, and a one-click reset restores it;
- *  - **staying responsive** with hundreds of rows: images are resolved once per page
- *    through a single media query, rows are memoised, and the list is filtered and
- *    paginated instead of rendering everything.
+ *  - **no variant SKU**: the product owns the SKU, so a row is identified by its
+ *    options (and its persisted id once saved);
+ *  - **why** a row shows the price and image it shows — the badge under each
+ *    value says whether it is a manual override, an attribute-level override or
+ *    the product default, and one click restores inheritance;
+ *  - **staying responsive** with hundreds of rows: images are resolved once per
+ *    page through a single media query, rows are memoised, and the list is
+ *    filtered and paginated instead of rendering everything.
  *
  * Every change here is local form state. Nothing is written until the product is
  * saved, and a row that is removed is archived (never deleted) on save.
@@ -41,8 +45,10 @@ export interface VariantTableProps {
   /** Keys that no longer belong to the generated matrix (kept, never dropped silently). */
   orphanKeys?: string[];
   productImage: MediaAssetView | null;
+  /** Product default pricing — level 3 of the inheritance model. */
+  productPricing: PricingLevelInput;
   selectedKeys: string[];
-  /** Per-row validation messages, keyed by variant key (SKU clashes, bad prices…). */
+  /** Per-row validation messages, keyed by variant key (bad prices, duplicates…). */
   rowErrors?: Record<string, string>;
   onSelectionChange: (keys: string[]) => void;
   onUpdate: (key: string, patch: Partial<DraftVariant>, options?: { touched?: boolean }) => void;
@@ -52,11 +58,63 @@ export interface VariantTableProps {
 
 const PAGE_SIZES = [25, 50, 100, 250];
 
+function toPaisa(value: string | null | undefined): number | null {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 100);
+}
+
+/** The pricing override this row carries (empty values mean "inherit"). */
+function overrideFor(row: DraftVariant): PricingLevelInput | null {
+  const currentPricePaisa = toPaisa(row.currentPrice);
+  const pricePaisa = toPaisa(row.price);
+  if ((currentPricePaisa == null || currentPricePaisa <= 0) && (pricePaisa == null || pricePaisa <= 0)) return null;
+  return {
+    currentPricePaisa,
+    discountType: row.discountType ?? "NONE",
+    discountValue: row.discountValue ? Number(row.discountValue) : 0,
+    pricePaisa,
+    compareAtPricePaisa: toPaisa(row.compareAt),
+  };
+}
+
+/** Effective price of a row, resolved with the same rule the server uses. */
+export function effectiveRowPrice(
+  row: DraftVariant,
+  attributes: DraftAttribute[],
+  productPricing: PricingLevelInput,
+) {
+  return resolvePricing({
+    productDefault: productPricing,
+    attributeValues: attributes.flatMap((attribute) =>
+      attribute.values
+        .filter((value) => row.attributeValueIds.includes(value.id))
+        .filter((value) => (value.priceOverridePaisa ?? 0) > 0 || (value.currentPricePaisa ?? 0) > 0)
+        .map((value) => ({
+          attributeValueId: value.id,
+          attributeName: attribute.name,
+          valueLabel: value.value,
+          value: {
+            currentPricePaisa: value.currentPricePaisa ?? null,
+            discountType: (value.discountType ?? "NONE") as PricingLevelInput["discountType"],
+            discountValue: value.discountValue ?? 0,
+            pricePaisa: value.priceOverridePaisa ?? null,
+          },
+        })),
+    ),
+    variantOverride: overrideFor(row),
+    clearOverride: row.clearPriceOverride,
+  });
+}
+
 export function VariantTable({
   rows,
   attributes,
   orphanKeys = [],
   productImage,
+  productPricing,
   selectedKeys,
   rowErrors = {},
   onSelectionChange,
@@ -99,8 +157,6 @@ export function VariantTable({
     return [...ids];
   }, [rows, attributes, productImageId]);
 
-  // The product primary image is already in memory — seed it into the thumbnail map
-  // as soon as it changes (render-time adjustment, no effect round-trip).
   const [previousProductImage, setPreviousProductImage] = React.useState(productImage);
   if (productImage !== previousProductImage) {
     setPreviousProductImage(productImage);
@@ -114,7 +170,6 @@ export function VariantTable({
     if (missing.length === 0) return;
 
     let live = true;
-    const controller = new AbortController();
     void (async () => {
       try {
         const result = await browseMediaAction({ page: 1, pageSize: 200, mimeGroup: "image" });
@@ -127,7 +182,6 @@ export function VariantTable({
     })();
     return () => {
       live = false;
-      controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- assets is read only to skip already-known ids
   }, [neededIds.join("|"), productImageId, productImage]);
@@ -137,12 +191,7 @@ export function VariantTable({
     return rows.filter((row) => {
       if (valueFilter && !row.attributeValueIds.includes(valueFilter)) return false;
       if (!needle) return true;
-      const haystack = [
-        row.sku,
-        row.name,
-        row.barcode ?? "",
-        ...row.attributeValueIds.map((id) => valueLabels.get(id)?.value ?? ""),
-      ]
+      const haystack = [row.name, row.barcode ?? "", ...row.attributeValueIds.map((id) => valueLabels.get(id)?.value ?? "")]
         .join(" ")
         .toLowerCase();
       return haystack.includes(needle);
@@ -185,6 +234,7 @@ export function VariantTable({
     assets,
     orphanKeys,
     rowErrors,
+    productPricing,
     onUpdate,
     onRemove,
     canViewCost,
@@ -207,7 +257,7 @@ export function VariantTable({
                 setQuery(event.target.value);
                 setPage(1);
               }}
-              placeholder="SKU, barcode or option"
+              placeholder="Option or barcode"
             />
           </div>
         </div>
@@ -217,7 +267,9 @@ export function VariantTable({
             <Label htmlFor="variant-filter" className="text-xs">
               Only variants with
             </Label>
-            <InfoTip>Narrow the table to one attribute value, for example every Black variant, before selecting them in bulk.</InfoTip>
+            <InfoTip>
+              Narrow the table to one attribute value — for example every Black variant — before selecting them for a bulk change.
+            </InfoTip>
           </div>
           <NativeSelect
             id="variant-filter"
@@ -274,7 +326,7 @@ export function VariantTable({
 
       {/* Desktop table */}
       <div className="hidden overflow-x-auto rounded-lg border border-slate-200 md:block">
-        <table className="w-full min-w-[66rem] text-sm">
+        <table className="w-full min-w-[70rem] text-sm">
           <caption className="sr-only">Product variants</caption>
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -287,15 +339,29 @@ export function VariantTable({
                   aria-label="Select every variant on this page"
                 />
               </th>
-              <th scope="col" className="px-3 py-2">Variant</th>
-              <th scope="col" className="px-3 py-2">Image</th>
-              <th scope="col" className="px-3 py-2">Code (SKU)</th>
-              <th scope="col" className="px-3 py-2">Price</th>
-              <th scope="col" className="px-3 py-2">Compare at</th>
-              {canViewCost ? <th scope="col" className="px-3 py-2">Cost</th> : null}
-              <th scope="col" className="px-3 py-2">Weight</th>
-              <th scope="col" className="px-3 py-2">Preorder</th>
-              <th scope="col" className="px-3 py-2">Actions</th>
+              <th scope="col" className="px-3 py-2">
+                Variant
+              </th>
+              <th scope="col" className="px-3 py-2">
+                Image
+              </th>
+              <th scope="col" className="px-3 py-2">
+                Price override
+              </th>
+              {canViewCost ? (
+                <th scope="col" className="px-3 py-2">
+                  Cost
+                </th>
+              ) : null}
+              <th scope="col" className="px-3 py-2">
+                Weight
+              </th>
+              <th scope="col" className="px-3 py-2">
+                Preorder
+              </th>
+              <th scope="col" className="px-3 py-2">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -363,6 +429,7 @@ interface RowSharedProps {
   orphanKeys: string[];
   rowErrors: Record<string, string>;
   productImageId: string | null;
+  productPricing: PricingLevelInput;
   selected: boolean;
   onSelect: (checked: boolean) => void;
   onUpdate: VariantTableProps["onUpdate"];
@@ -401,12 +468,12 @@ function VariantImageCell({ row, attributes, assets, productImageId, onUpdate }:
         )}
       </div>
       <div className="min-w-0 space-y-1">
-        <MediaSourceBadge source={resolved.label} inline />
+        <SourceBadge label={resolved.label} />
         <div className="flex items-center gap-1">
           <MediaPicker
-            title={`Image for ${row.name || row.sku || "variant"}`}
+            title={`Image for ${row.name || "this variant"}`}
             mimeGroup="image"
-            onSelect={(chosen) => onUpdate(row.key, { imageMediaId: chosen.id }, { touched: true })}
+            onSelect={(chosen) => onUpdate(row.key, { imageMediaId: chosen.id, clearImageOverride: false }, { touched: true })}
             trigger={
               <Button type="button" variant="ghost" size="sm" className="h-7 px-1.5 text-[11px]">
                 {row.imageMediaId ? "Replace" : "Set image"}
@@ -419,7 +486,8 @@ function VariantImageCell({ row, attributes, assets, productImageId, onUpdate }:
               variant="ghost"
               size="sm"
               className="h-7 px-1.5 text-[11px]"
-              onClick={() => onUpdate(row.key, { imageMediaId: null }, { touched: true })}
+              title="Drop the variant image so the attribute or product image is inherited again"
+              onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
             >
               Inherit
             </Button>
@@ -430,26 +498,94 @@ function VariantImageCell({ row, attributes, assets, productImageId, onUpdate }:
   );
 }
 
-/** Small text badge naming the source of the effective image. */
-function MediaSourceBadge({ source, inline }: { source: string; inline?: boolean }) {
-  const isOverride = source.startsWith("Custom variant");
+/** Small badge naming where an effective value came from. */
+export function SourceBadge({ label }: { label: string }) {
+  const tone = label.startsWith("Custom variant")
+    ? "bg-violet-50 text-violet-700"
+    : label.startsWith("Inherited from product")
+      ? "bg-slate-100 text-slate-600"
+      : label.startsWith("Inherited from")
+        ? "bg-sky-50 text-sky-700"
+        : "bg-slate-100 text-slate-500";
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-        isOverride ? "bg-violet-50 text-violet-700" : "bg-slate-100 text-slate-600",
-        inline && "whitespace-nowrap",
-      )}
-      title={source}
-    >
-      {isOverride ? <Star className="h-2.5 w-2.5" aria-hidden="true" /> : null}
-      <span className="max-w-[11rem] truncate">{source}</span>
+    <span className={cn("inline-flex max-w-[13rem] items-center truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium", tone)} title={label}>
+      {label}
     </span>
   );
 }
 
+/**
+ * Price cell: the override inputs plus the *effective* price underneath, so the
+ * inherited value is visible without having to save and reopen the product.
+ */
+function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowSharedProps) {
+  const effective = effectiveRowPrice(row, attributes, productPricing);
+  const hasOverride = Boolean(overrideFor(row)) && !row.clearPriceOverride;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1">
+        <Input
+          aria-label={`Override price for ${row.name}`}
+          className="h-9 w-24"
+          inputMode="decimal"
+          placeholder="Inherit"
+          value={row.currentPrice ?? ""}
+          onChange={(event) =>
+            onUpdate(row.key, { currentPrice: event.target.value, clearPriceOverride: false, price: "" }, { touched: true })
+          }
+        />
+        <NativeSelect
+          aria-label={`Discount type for ${row.name}`}
+          className="h-9 w-16 px-1"
+          value={row.discountType ?? "NONE"}
+          onChange={(event) =>
+            onUpdate(
+              row.key,
+              { discountType: event.target.value as DraftVariant["discountType"], clearPriceOverride: false },
+              { touched: true },
+            )
+          }
+        >
+          <option value="NONE">—</option>
+          <option value="PERCENTAGE">%</option>
+          <option value="FLAT">৳</option>
+        </NativeSelect>
+        <Input
+          aria-label={`Discount value for ${row.name}`}
+          className="h-9 w-16"
+          inputMode="decimal"
+          placeholder="0"
+          disabled={(row.discountType ?? "NONE") === "NONE"}
+          value={row.discountValue ?? ""}
+          onChange={(event) => onUpdate(row.key, { discountValue: event.target.value, clearPriceOverride: false }, { touched: true })}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="text-xs font-medium text-slate-700">{formatPaisa(effective.value.pricePaisa)}</span>
+        <SourceBadge label={effective.label} />
+        {hasOverride ? (
+          <button
+            type="button"
+            className="text-[11px] font-medium text-brand-700 underline"
+            onClick={() =>
+              onUpdate(
+                row.key,
+                { currentPrice: "", discountType: "NONE", discountValue: "", price: "", compareAt: "", clearPriceOverride: true },
+                { touched: true },
+              )
+            }
+          >
+            Inherit
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
-  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost, attributes, assets, productImageId } = props;
+  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost } = props;
   const isOrphan = orphanKeys.includes(row.key);
   const error = rowErrors[row.key];
 
@@ -461,74 +597,40 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
           className="h-4 w-4 rounded border-slate-300"
           checked={selected}
           onChange={(event) => onSelect(event.target.checked)}
-          aria-label={`Select variant ${row.sku || row.name}`}
+          aria-label={`Select variant ${row.name || "row"}`}
         />
       </td>
       <td className="max-w-[16rem] px-3 py-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <p className="truncate text-sm font-medium text-slate-800">{row.name || "Untitled variant"}</p>
           {isOrphan ? (
-            <Badge variant="warning" title="This variant is no longer part of the generated combinations. It keeps its data and is archived only if you remove it.">
+            <Badge
+              variant="warning"
+              title="This variant is no longer part of the generated combinations. It keeps its data and is archived only if you remove it."
+            >
               Not in matrix
             </Badge>
           ) : null}
           {row.id ? null : <Badge variant="brand">New</Badge>}
         </div>
         <p className="text-xs text-slate-500">{optionSummary(row, valueLabels)}</p>
-        {row.id ? <p className="font-mono text-[10px] text-slate-400">{row.id.slice(0, 8)}</p> : null}
+        {error ? <p className="mt-1 max-w-[14rem] text-[11px] text-red-600">{error}</p> : null}
       </td>
       <td className="px-3 py-2">
-        <VariantImageCell
-          row={row}
-          attributes={attributes}
-          assets={assets}
-          productImageId={productImageId}
-          onUpdate={onUpdate}
-          valueLabels={valueLabels}
-          orphanKeys={orphanKeys}
-          rowErrors={rowErrors}
-          selected={selected}
-          onSelect={onSelect}
-          onRemove={onRemove}
-          canViewCost={canViewCost}
-        />
+        <VariantImageCell {...props} />
       </td>
       <td className="px-3 py-2">
-        <Input
-          aria-label={`Variant code for ${row.name}`}
-          className={cn("h-9 w-40", error && "border-red-400")}
-          value={row.sku}
-          aria-invalid={error ? true : undefined}
-          onChange={(event) => onUpdate(row.key, { sku: event.target.value })}
-        />
-        {error ? <p className="mt-1 max-w-[12rem] text-[11px] text-red-600">{error}</p> : null}
-      </td>
-      <td className="px-3 py-2">
-        <Input
-          aria-label={`Price for ${row.name}`}
-          className="h-9 w-28"
-          inputMode="decimal"
-          value={row.price ?? ""}
-          onChange={(event) => onUpdate(row.key, { price: event.target.value })}
-        />
-      </td>
-      <td className="px-3 py-2">
-        <Input
-          aria-label={`Compare-at price for ${row.name}`}
-          className="h-9 w-28"
-          inputMode="decimal"
-          value={row.compareAt ?? ""}
-          onChange={(event) => onUpdate(row.key, { compareAt: event.target.value })}
-        />
+        <VariantPriceCell {...props} />
       </td>
       {canViewCost ? (
         <td className="px-3 py-2">
           <Input
             aria-label={`Cost for ${row.name}`}
-            className="h-9 w-28"
+            className="h-9 w-24"
             inputMode="decimal"
+            placeholder="Inherit"
             value={row.cost ?? ""}
-            onChange={(event) => onUpdate(row.key, { cost: event.target.value })}
+            onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
           />
         </td>
       ) : null}
@@ -538,8 +640,9 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
             aria-label={`Weight for ${row.name}`}
             className="h-9 w-20"
             inputMode="decimal"
+            placeholder="Inherit"
             value={row.weight ?? ""}
-            onChange={(event) => onUpdate(row.key, { weight: event.target.value })}
+            onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
           />
           <NativeSelect
             aria-label={`Weight unit for ${row.name}`}
@@ -556,13 +659,25 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
         </div>
       </td>
       <td className="px-3 py-2">
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-slate-300"
-          checked={Boolean(row.isPreorderEnabled)}
-          onChange={(event) => onUpdate(row.key, { isPreorderEnabled: event.target.checked })}
-          aria-label={`Allow preorder for ${row.name}`}
-        />
+        <NativeSelect
+          aria-label={`Preorder for ${row.name}`}
+          className="h-9 w-28"
+          value={row.isPreorderEnabled === undefined ? "INHERIT" : row.isPreorderEnabled ? "ON" : "OFF"}
+          onChange={(event) =>
+            onUpdate(
+              row.key,
+              {
+                isPreorderEnabled: event.target.value === "INHERIT" ? undefined : event.target.value === "ON",
+                clearPreorderOverride: event.target.value === "INHERIT",
+              },
+              { touched: true },
+            )
+          }
+        >
+          <option value="INHERIT">Inherit</option>
+          <option value="ON">Allowed</option>
+          <option value="OFF">Not allowed</option>
+        </NativeSelect>
       </td>
       <td className="px-3 py-2">
         <div className="flex items-center gap-1">
@@ -573,7 +688,7 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
             className="h-8 w-8"
             aria-label={`Reset the image of ${row.name} to the inherited one`}
             disabled={!row.imageMediaId}
-            onClick={() => onUpdate(row.key, { imageMediaId: null }, { touched: true })}
+            onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
           </Button>
@@ -595,7 +710,7 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
 });
 
 const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
-  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost, attributes, assets, productImageId } = props;
+  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost } = props;
   const isOrphan = orphanKeys.includes(row.key);
   const error = rowErrors[row.key];
 
@@ -607,71 +722,35 @@ const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
           className="mt-1 h-4 w-4 rounded border-slate-300"
           checked={selected}
           onChange={(event) => onSelect(event.target.checked)}
-          aria-label={`Select variant ${row.sku || row.name}`}
+          aria-label={`Select variant ${row.name || "row"}`}
         />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-slate-800">{row.name || "Untitled variant"}</p>
           <p className="text-xs text-slate-500">{optionSummary(row, valueLabels)}</p>
           {isOrphan ? <Badge variant="warning">Not in matrix</Badge> : null}
+          {error ? <p className="mt-1 text-[11px] text-red-600">{error}</p> : null}
         </div>
-        <VariantImageCell
-          row={row}
-          attributes={attributes}
-          assets={assets}
-          productImageId={productImageId}
-          onUpdate={onUpdate}
-          valueLabels={valueLabels}
-          orphanKeys={orphanKeys}
-          rowErrors={rowErrors}
-          selected={selected}
-          onSelect={onSelect}
-          onRemove={onRemove}
-          canViewCost={canViewCost}
-        />
+        <VariantImageCell {...props} />
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
-        <div>
-          <Input
-            aria-label={`Variant code for ${row.name}`}
-            className={cn(error && "border-red-400")}
-            value={row.sku}
-            placeholder="SKU"
-            aria-invalid={error ? true : undefined}
-            onChange={(event) => onUpdate(row.key, { sku: event.target.value })}
-          />
-          {error ? <p className="mt-1 text-[11px] text-red-600">{error}</p> : null}
-        </div>
-        <Input
-          aria-label={`Price for ${row.name}`}
-          inputMode="decimal"
-          value={row.price ?? ""}
-          placeholder="Price"
-          onChange={(event) => onUpdate(row.key, { price: event.target.value })}
-        />
-        <Input
-          aria-label={`Compare-at price for ${row.name}`}
-          inputMode="decimal"
-          value={row.compareAt ?? ""}
-          placeholder="Compare at"
-          onChange={(event) => onUpdate(row.key, { compareAt: event.target.value })}
-        />
+        <VariantPriceCell {...props} />
         {canViewCost ? (
           <Input
             aria-label={`Cost for ${row.name}`}
             inputMode="decimal"
+            placeholder="Cost (inherit)"
             value={row.cost ?? ""}
-            placeholder="Cost"
-            onChange={(event) => onUpdate(row.key, { cost: event.target.value })}
+            onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
           />
         ) : null}
         <div className="flex items-center gap-1">
           <Input
             aria-label={`Weight for ${row.name}`}
             inputMode="decimal"
-            value={row.weight ?? ""}
             placeholder="Weight"
-            onChange={(event) => onUpdate(row.key, { weight: event.target.value })}
+            value={row.weight ?? ""}
+            onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
           />
           <NativeSelect
             aria-label={`Weight unit for ${row.name}`}
@@ -688,22 +767,32 @@ const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-xs text-slate-600">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-slate-300"
-            checked={Boolean(row.isPreorderEnabled)}
-            onChange={(event) => onUpdate(row.key, { isPreorderEnabled: event.target.checked })}
-          />
-          Allow preorder
-        </label>
+        <NativeSelect
+          aria-label={`Preorder for ${row.name}`}
+          className="h-9 w-32"
+          value={row.isPreorderEnabled === undefined ? "INHERIT" : row.isPreorderEnabled ? "ON" : "OFF"}
+          onChange={(event) =>
+            onUpdate(
+              row.key,
+              {
+                isPreorderEnabled: event.target.value === "INHERIT" ? undefined : event.target.value === "ON",
+                clearPreorderOverride: event.target.value === "INHERIT",
+              },
+              { touched: true },
+            )
+          }
+        >
+          <option value="INHERIT">Preorder: inherit</option>
+          <option value="ON">Preorder: allowed</option>
+          <option value="OFF">Preorder: off</option>
+        </NativeSelect>
         <div className="flex items-center gap-1">
           <Button
             type="button"
             variant="outline"
             size="sm"
             disabled={!row.imageMediaId}
-            onClick={() => onUpdate(row.key, { imageMediaId: null }, { touched: true })}
+            onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
             Reset image

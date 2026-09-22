@@ -361,13 +361,13 @@ describe.skipIf(!reachable)("product editor (database)", () => {
         slug: "archival-tee",
         attributeIds: [attribute.id],
         variants: [
-          { name: "Keep", sku: "KEEP-1", pricePaisa: 100, attributeValueIds: [black.id] },
-          { name: "Drop", sku: "DROP-1", pricePaisa: 100, attributeValueIds: [white.id] },
+          { name: "Keep", currentPricePaisa: 100, attributeValueIds: [black.id] },
+          { name: "Drop", currentPricePaisa: 100, attributeValueIds: [white.id] },
         ],
       }),
     );
     const variants = await prisma.variant.findMany({ where: { productId: created.productId } });
-    const keep = variants.find((variant) => variant.sku === "KEEP-1")!;
+    const keep = variants.find((variant) => variant.name === "Keep")!;
 
     const again = await saveProduct(
       actor(),
@@ -376,12 +376,12 @@ describe.skipIf(!reachable)("product editor (database)", () => {
         slug: "archival-tee",
         attributeIds: [attribute.id],
         productCode: (await prisma.product.findUniqueOrThrow({ where: { id: created.productId } })).sku!,
-        variants: [{ id: keep.id, name: keep.name, sku: keep.sku, pricePaisa: 100, attributeValueIds: [black.id] }],
+        variants: [{ id: keep.id, name: keep.name, currentPricePaisa: 100, attributeValueIds: [black.id] }],
       }),
     );
-    expect(again.warnings.join(" ")).toContain("DROP-1");
+    expect(again.warnings.join(" ")).toContain("Drop");
 
-    const archived = await prisma.variant.findFirst({ where: { productId: created.productId, sku: "DROP-1" } });
+    const archived = await prisma.variant.findFirst({ where: { productId: created.productId, name: "Drop" } });
     expect(archived).not.toBeNull(); // the row stays for order history
     expect(archived!.status).toBe("ARCHIVED");
   });
@@ -411,41 +411,41 @@ describe.skipIf(!reachable)("product editor (database)", () => {
     expect((await prisma.product.findUniqueOrThrow({ where: { id: created.productId } })).name).toBe("Locked rename");
   });
 
-  it("records opening stock exactly once per variant, through the ledger", async () => {
-    const sku = `OPEN-${randomUUID().slice(0, 6)}`;
+  it("never creates stock: saving a product leaves the ledger untouched", async () => {
+    // Stock only ever arrives through a purchase receipt or an authorised
+    // adjustment. A product save — create or edit, with or without prices —
+    // must not write a single movement, so the editor has no way to invent
+    // inventory.
     const created = await saveProduct(
       actor(),
       draftInput({
         slug: "stocked-tee",
-        recordOpeningStock: true,
-        openingStock: [{ variantKey: sku, quantity: 5 }],
-        variants: [{ name: "Std", sku, pricePaisa: 100 }],
+        currentPricePaisa: 12_000,
+        variants: [{ name: "Std", attributeValueIds: [] }],
       }),
     );
-    expect(created.openingStockRecorded).toBe(1);
+    expect(created.openingStockRecorded).toBe(0);
+
     const variant = await prisma.variant.findFirstOrThrow({ where: { productId: created.productId } });
-    const balance = () => prisma.inventoryBalance.findFirstOrThrow({ where: { variantId: variant.id } });
-    const movements = () => prisma.inventoryMovement.count({ where: { variantId: variant.id, type: "OPENING" } });
+    const product = await prisma.product.findUniqueOrThrow({ where: { id: created.productId } });
 
-    expect((await balance()).onHand).toBe(5);
-    expect(await movements()).toBe(1);
+    await expect(prisma.inventoryMovement.count({ where: { variantId: variant.id } })).resolves.toBe(0);
+    const balance = await prisma.inventoryBalance.findFirst({ where: { variantId: variant.id } });
+    expect(balance?.onHand ?? 0).toBe(0);
 
-    // A resubmitted form (double submit / retry after success) replays the same
-    // idempotency key, so the ledger refuses the second movement.
-    const replay = await saveProduct(
+    // Editing and re-saving the same product is still quiet.
+    const again = await saveProduct(
       actor(),
       draftInput({
         productId: created.productId,
         slug: "stocked-tee",
-        productCode: (await prisma.product.findUniqueOrThrow({ where: { id: created.productId } })).sku!,
-        recordOpeningStock: true,
-        openingStock: [{ variantKey: variant.id, quantity: 5 }],
-        variants: [{ id: variant.id, name: variant.name, sku, pricePaisa: 100 }],
+        productCode: product.sku!,
+        currentPricePaisa: 13_000,
+        variants: [{ id: variant.id, name: "Std" }],
       }),
     );
-    expect(replay.openingStockRecorded).toBe(1); // the intent was processed…
-    expect((await balance()).onHand).toBe(5); // …but the balance did not move twice
-    expect(await movements()).toBe(1);
+    expect(again.openingStockRecorded).toBe(0);
+    await expect(prisma.inventoryMovement.count({ where: { variantId: variant.id } })).resolves.toBe(0);
   });
 
   describe("on-the-go creation helpers", () => {

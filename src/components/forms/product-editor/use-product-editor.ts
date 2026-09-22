@@ -11,6 +11,7 @@ import {
   planMatrix,
   suggestSlug,
   toWeightGrams,
+  type DiscountType,
   type DraftAttribute,
   type DraftVariant,
   type WeightUnit,
@@ -24,7 +25,11 @@ import type { EditorAttribute, EditorImage, EditorProduct } from "@/modules/cata
  *  - collapsing a section, opening a dialog or expanding the rich-text editor can
  *    never touch it (the data lives here, not inside those components);
  *  - "is this dirty?" is a comparison against the snapshot the form opened with;
- *  - the slug keeps following the name until a person edits it, and only then stops.
+ *  - the slug keeps following the name until a person edits it, and only then stops;
+ *  - one serialisable object is everything autosave needs to persist.
+ *
+ * SKU belongs to the product (`productCode`); variant rows never carry one — they
+ * are identified by their persisted id and their attribute combination.
  */
 
 export interface EditorImageItem {
@@ -37,11 +42,13 @@ export interface ProductEditorState {
   name: string;
   slug: string;
   slugTouched: boolean;
+  /** The product's SKU — the only SKU in the workflow. */
   productCode: string;
   barcode: string;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   brandId: string | null;
   unitLabel: string;
+  unitLabelId: string | null;
   weightValue: string;
   weightUnit: WeightUnit;
   categoryIds: string[];
@@ -55,16 +62,23 @@ export interface ProductEditorState {
   images: EditorImageItem[];
   seoImage: MediaAssetView | null;
   attributeValueImages: Record<string, string | null>;
+
+  /* Product default pricing — level 3 of the inheritance model. */
+  currentPrice: string;
+  discountType: DiscountType;
+  discountValue: string;
+  /** Derived sell price (shown read-only; sent so the server can cross-check). */
   defaultPrice: string;
-  compareAtPrice: string;
+  defaultCost: string;
+
+  taxRateId: string | null;
   taxRateBps: string;
+  packagingCostTemplateId: string | null;
   packagingCostPaisa: string;
   requiresShipping: boolean;
   isFeatured: boolean;
   isPreorderEnabled: boolean;
   preorderNote: string;
-  openingStock: Record<string, string>;
-  recordOpeningStock: boolean;
   seoTitle: string;
   seoDescription: string;
   seoKeywords: string;
@@ -75,7 +89,12 @@ export interface ProductEditorInitial {
   product: EditorProduct | null;
   attributes: EditorAttribute[];
   categories: Array<{ id: string }>;
-  unitLabels: Array<{ name: string; isDefault: boolean }>;
+  unitLabels: Array<{ id: string | null; name: string; isDefault: boolean }>;
+}
+
+function paisaToInput(paisa: number | null | undefined): string {
+  if (paisa == null) return "";
+  return (paisa / 100).toFixed(2);
 }
 
 function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
@@ -85,15 +104,18 @@ function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
     ? product.variants.map((variant) => ({
         key: variant.id,
         id: variant.id,
-        sku: variant.sku,
         name: variant.name,
         barcode: variant.barcode ?? "",
-        price: variant.pricePaisa != null ? (variant.pricePaisa / 100).toFixed(2) : "",
-        compareAt: variant.compareAtPricePaisa != null ? (variant.compareAtPricePaisa / 100).toFixed(2) : "",
-        cost: variant.costPaisa != null ? (variant.costPaisa / 100).toFixed(2) : "",
+        currentPrice: paisaToInput(variant.currentPricePaisa),
+        discountType: variant.discountType ?? "NONE",
+        discountValue: variant.discountValue ? String(variant.discountValue) : "",
+        price: paisaToInput(variant.priceOverridePaisa),
+        compareAt: paisaToInput(variant.compareAtPricePaisa),
+        cost: paisaToInput(variant.costPaisa),
         weight: fromWeightGrams(variant.weightGrams, isWeightUnit(variant.weightUnit) ? variant.weightUnit : DEFAULT_WEIGHT_UNIT),
         weightUnit: isWeightUnit(variant.weightUnit) ? variant.weightUnit : DEFAULT_WEIGHT_UNIT,
-        isPreorderEnabled: Boolean(variant.isPreorderEnabled),
+        isPreorderEnabled: variant.isPreorderEnabled ?? undefined,
+        packagingCost: paisaToInput(variant.packagingCostPaisa),
         imageMediaId: variant.imageMediaId,
         galleryMediaIds: variant.gallery.map((asset) => asset.id),
         attributeValueIds: variant.attributeValueIds,
@@ -116,6 +138,7 @@ function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
     status: (product?.status as ProductEditorState["status"]) ?? "DRAFT",
     brandId: product?.brandId ?? null,
     unitLabel: product?.unitLabel ?? initial.unitLabels.find((label) => label.isDefault)?.name ?? "piece",
+    unitLabelId: product?.unitLabelId ?? null,
     weightValue: product?.weightGrams != null ? fromWeightGrams(product.weightGrams, isWeightUnit(product.weightUnit) ? product.weightUnit : DEFAULT_WEIGHT_UNIT) : "",
     weightUnit: isWeightUnit(product?.weightUnit) ? product.weightUnit : DEFAULT_WEIGHT_UNIT,
     categoryIds: product?.categoryIds ?? [],
@@ -127,16 +150,19 @@ function buildInitialState(initial: ProductEditorInitial): ProductEditorState {
     images,
     seoImage: product?.seoImage ?? null,
     attributeValueImages: defaultAttributeValueImages(initial.attributes),
-    defaultPrice: product?.defaultPricePaisa != null ? (product.defaultPricePaisa / 100).toFixed(2) : "",
-    compareAtPrice: "",
+    currentPrice: paisaToInput(product?.currentPricePaisa),
+    discountType: product?.discountType ?? "NONE",
+    discountValue: product?.discountValue ? String(product.discountValue) : "",
+    defaultPrice: paisaToInput(product?.defaultPricePaisa),
+    defaultCost: paisaToInput(product?.defaultCostPaisa),
     taxRateBps: String(product?.taxRateBps ?? 0),
+    taxRateId: product?.taxRateId ?? null,
+    packagingCostTemplateId: product?.packagingCostTemplateId ?? null,
     packagingCostPaisa: product ? (product.packagingCostPaisa / 100).toFixed(2) : "0.00",
     requiresShipping: product?.requiresShipping ?? true,
     isFeatured: product?.isFeatured ?? false,
     isPreorderEnabled: product?.isPreorderEnabled ?? false,
     preorderNote: product?.preorderNote ?? "",
-    openingStock: {},
-    recordOpeningStock: false,
     seoTitle: product?.seoTitle ?? "",
     seoDescription: product?.seoDescription ?? "",
     seoKeywords: product?.seoKeywords ?? "",
@@ -151,7 +177,16 @@ export function toDraftAttribute(attribute: EditorAttribute): DraftAttribute {
     slug: attribute.slug,
     type: attribute.type,
     isVariantDefining: attribute.isVariantDefining,
-    values: attribute.values.map((value) => ({ id: value.id, value: value.value, colorHex: value.colorHex, mediaId: value.mediaId })),
+    values: attribute.values.map((value) => ({
+      id: value.id,
+      value: value.value,
+      colorHex: value.colorHex,
+      mediaId: value.mediaId,
+      priceOverridePaisa: value.priceOverridePaisa ?? null,
+      currentPricePaisa: value.currentPricePaisa ?? null,
+      discountType: value.discountType ?? "NONE",
+      discountValue: value.discountValue ?? 0,
+    })),
   };
 }
 
@@ -169,14 +204,17 @@ function defaultAttributeValueImages(attributes: EditorAttribute[]): Record<stri
 function emptyVariant(key: string, attributeValueIds: string[]): DraftVariant {
   return {
     key,
-    sku: "",
     name: "",
+    currentPrice: "",
+    discountType: "NONE",
+    discountValue: "",
     price: "",
     compareAt: "",
     cost: "",
     weight: "",
     weightUnit: DEFAULT_WEIGHT_UNIT,
-    isPreorderEnabled: false,
+    isPreorderEnabled: undefined,
+    packagingCost: "",
     imageMediaId: null,
     galleryMediaIds: [],
     attributeValueIds,
@@ -273,7 +311,6 @@ export function useProductEditor(initial: ProductEditorInitial): ProductEditorAp
           .map(toDraftAttribute)
           .filter((attribute) => current.attributeIds.includes(attribute.id));
         const plan = planMatrix(attributes, current.selectedValueIds, current.variants, {
-          skuPrefix: current.productCode || suggestSlug(current.name).toUpperCase() || "SKU",
           keepOrphans: options?.keepOrphans ?? true,
         });
         summary = { added: plan.added.length, kept: plan.kept.length, orphans: plan.orphans.length };
