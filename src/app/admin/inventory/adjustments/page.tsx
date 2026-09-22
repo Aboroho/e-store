@@ -40,7 +40,7 @@ export default async function AdjustmentsPage({
       <StockAdjustmentForm
         variants={variants.map((variant) => ({
           id: variant.id,
-          sku: variant.sku,
+          sku: variant.sku ?? "",
           label: `${variant.product.name} — ${variant.name}`,
           available: variant.inventory.reduce((sum, balance) => sum + availableQuantity(balance), 0),
         }))}

@@ -190,7 +190,7 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       preparedItems.push({
         variantId: variant.id,
         productId: variant.product.id,
-        sku: variant.sku,
+        sku: variant.sku ?? "",
         productName: variant.product.name,
         variantName: variant.name,
         variantAttributes: variant.attributeValues.map((value) => ({

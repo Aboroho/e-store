@@ -632,7 +632,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           requiresShipping={state.requiresShipping}
           isPreorderEnabled={state.isPreorderEnabled}
           preorderNote={state.preorderNote}
-          rows={state.variants.map((variant) => ({ key: variant.key, name: variant.name, sku: variant.sku }))}
+          rows={state.variants.map((variant) => ({ key: variant.key, name: variant.name, sku: variant.sku || "" }))}
           openingStock={state.openingStock}
           recordOpeningStock={state.recordOpeningStock}
           errors={errors}

@@ -47,7 +47,7 @@ export default async function NewPurchaseOrderPage() {
         suppliers={activeSuppliers.map((supplier) => ({ id: supplier.id, name: supplier.name }))}
         variants={variants.map((variant) => ({
           id: variant.id,
-          sku: variant.sku,
+          sku: variant.sku ?? "",
           label: `${variant.product.name} — ${variant.name}`,
           costPaisa: variant.costPaisa,
         }))}

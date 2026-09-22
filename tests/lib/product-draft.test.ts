@@ -191,7 +191,7 @@ describe("variant matrix", () => {
     const suggested = suggestVariantSkus(rows, "Tee Shirt");
     const skus = suggested.map((row) => row.sku);
     expect(skus[0]).toBe("TEE-1");
-    expect(new Set(skus.map((sku) => sku.toUpperCase())).size).toBe(4);
+    expect(new Set(skus.map((sku) => sku?.toUpperCase())).size).toBe(4);
     expect(skus[1]).toMatch(/^TEE-SHIRT-/);
     expect(skus[3]).toMatch(/^TEE-SHIRT-/);
   });

@@ -113,6 +113,8 @@ export interface DraftAttributeValue {
   colorHex?: string | null;
   /** Default image for this value (attribute-value level inheritance). */
   mediaId?: string | null;
+  /** Attribute-level price override in paisa (precedence: variant > attribute > product). */
+  priceOverridePaisa?: number | null;
 }
 
 export interface DraftAttribute {
@@ -128,15 +130,19 @@ export interface DraftVariant {
   /** Stable client key; the persisted variant id once it exists. */
   key: string;
   id?: string;
-  sku: string;
+  sku?: string;
   name: string;
   barcode?: string;
+  currentPrice?: string;
+  discountType?: "PERCENTAGE" | "FLAT" | "NONE";
+  discountValue?: string;
   price?: string;
   compareAt?: string;
   cost?: string;
   weight?: string;
   weightUnit?: WeightUnit;
   isPreorderEnabled?: boolean;
+  packagingCost?: string;
   /** Variant-level image override; `null` means "inherit". */
   imageMediaId: string | null;
   galleryMediaIds: string[];
@@ -144,6 +150,11 @@ export interface DraftVariant {
   attributeValueIds: string[];
   /** True once a person edited any field by hand. */
   touched?: boolean;
+  clearPriceOverride?: boolean;
+  clearCostOverride?: boolean;
+  clearWeightOverride?: boolean;
+  clearPreorderOverride?: boolean;
+  clearImageOverride?: boolean;
 }
 
 /** Deterministic key of a combination, independent of the order values were picked in. */
@@ -254,13 +265,46 @@ export function planMatrix(
   };
 }
 
+/**
+ * Clear a specific override on a variant, restoring inheritance from attribute or product default.
+ */
+export function clearVariantPropertyOverride(
+  variant: DraftVariant,
+  property: "price" | "cost" | "weight" | "preorder" | "image" | "packagingCost",
+): DraftVariant {
+  switch (property) {
+    case "price":
+      return {
+        ...variant,
+        price: "",
+        compareAt: "",
+        currentPrice: "",
+        discountValue: "",
+        discountType: "NONE",
+        clearPriceOverride: true,
+      };
+    case "cost":
+      return { ...variant, cost: "", clearCostOverride: true };
+    case "weight":
+      return { ...variant, weight: "", clearWeightOverride: true };
+    case "preorder":
+      return { ...variant, isPreorderEnabled: undefined, clearPreorderOverride: true };
+    case "image":
+      return { ...variant, imageMediaId: null, clearImageOverride: true };
+    case "packagingCost":
+      return { ...variant, packagingCost: "" };
+    default:
+      return variant;
+  }
+}
+
 /** Suggest a unique SKU per row from the product code, skipping the ones already used. */
 export function suggestVariantSkus(rows: DraftVariant[], prefix: string, startAt = 1): DraftVariant[] {
   const base = (prefix || "SKU").toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "") || "SKU";
-  const used = new Set(rows.map((row) => row.sku.trim().toUpperCase()).filter(Boolean));
+  const used = new Set(rows.map((row) => (row.sku ?? "").trim().toUpperCase()).filter(Boolean));
   let counter = startAt;
   return rows.map((row) => {
-    if (row.sku.trim()) return row;
+    if ((row.sku ?? "").trim()) return row;
     let candidate = `${base}-${counter}`;
     while (used.has(candidate)) {
       counter += 1;

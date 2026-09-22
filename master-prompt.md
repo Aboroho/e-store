@@ -344,29 +344,36 @@ Multiple storefronts must reference shared products, customers, and inventory.
 
 Design models for:
 
-* Products.
-* Product categories.
-* Category hierarchy.
+* Products (primary catalog entity; owns the product SKU and code).
+* Product categories and category hierarchy.
 * Product-category relationships.
-* Product attributes.
-* Attribute values.
+* Product attributes and attribute values (with optional attribute-level price overrides and default media).
 * Product attribute assignments.
-* Product variants.
-* Variant attribute combinations.
-* Variant images.
-* Product images.
-* Product status and publication state.
-* Product slugs.
-* Product metadata and SEO fields.
-* Product cost and packaging configuration, where applicable.
+* Product variants (belonging strictly to a parent product; stable internal identity independently of variant SKU).
+* Variant attribute combinations (deterministic option keys).
+* Variant images and gallery associations.
+* Centralized media manager integration (single primary product image, variant effective image inheritance, gallery ordering).
+* Product status and publication state (DRAFT, ACTIVE, ARCHIVED).
+* Product slugs (business-scoped uniqueness).
+* Product metadata, unit labels, and SEO fields.
+* Packaging cost templates and tax rate presets.
+* Persistent working drafts and autosave state for product authoring.
 
-Support simple products and variable products.
+Support simple products and variable products with a shared, unified creation and editing UX.
 
-A simple product must be represented consistently with the inventory and order model.
-
-Each sellable variant must have a stable identity and SKU.
-
-Enforce business-global SKU uniqueness unless a documented existing business requirement dictates otherwise.
+**Architectural Rules for Catalog & Variants:**
+* **SKU Ownership:** The SKU belongs to the main product. Variant-specific SKU fields are removed from the management workflow; variants do not require a separate SKU. Variant internal identity remains stable independently of SKU for inventory, orders, and historical records. Product is the primary catalog entity; variants belong to a product and never appear as independent top-level products.
+* **Three-Level Property Inheritance:** Manual variant override > Attribute-level override > Product default. This applies to price, cost, images, weight, and preorder flags. Clearing manual overrides restores attribute-level or product-level default inheritance.
+* **Product Creation/Editing Flow:** Product creation and editing share the exact same UI workflow structured in sequence:
+  1. Product Information (Title/Name, SKU/Product Code, Barcode, Descriptions).
+  2. Pricing Defaults (Current Price, Discount Type & Value, Calculated Sell Price, Unit Label).
+  3. Product Organization & Configuration (Brand, Categories, Tax Rate Presets, Packaging Cost Templates, Shipping/Weight).
+  4. Attributes & Variant Generation (Select attributes, add/remove values with attribute price overrides, generate variant combinations).
+  5. Variant Overrides & Bulk Editing (Integrated view of variants, filters, inline overrides, bulk actions dialog, clear overrides — no separate section).
+  6. Product Images / Media Gallery (Single primary image, gallery images, reordering).
+  7. Remaining Settings & Publishing (SEO, Preorder rules/notes, Status, Save Draft, Publish).
+* **Inventory & Purchasing Integration:** No initial-stock-entry option in product creation or editing. All normal product-in stock comes through purchase receiving. Creating a product creates zeroed balances, never stock.
+* **Navigation Grouping:** Manage Unit Labels, Tax Rates, Packaging Costs, and Brands grouped cleanly under the Product/Catalog navigation.
 
 Prevent duplicate variant combinations for the same product.
 
@@ -374,18 +381,13 @@ Prevent duplicate variant combinations for the same product.
 
 Design models for:
 
-* Price lists.
-* Price list entries.
-* Storefront-specific prices.
-* Customer or customer-group prices.
-* Reseller prices.
-* Variant-level pricing.
-* Pricing validity periods, if required.
-* Discount rules or explicit order adjustments.
+* Price lists and price list entries.
+* Storefront-specific prices, customer/group prices, and reseller prices.
+* Variant-level pricing with 3-level inheritance resolution: Price List -> Manual variant override -> Attribute-level override -> Product default.
+* Pricing calculations: Current price, discount (percentage or flat amount), and calculated sell price in integer paisa.
+* Discount rules and promotional pricing.
 
-Support configurable prices for storefront customers and resellers.
-
-Do not assume all channels have the same selling price.
+Always calculate order totals and prices server-side; never trust client-submitted prices or totals.
 
 Define the precedence of pricing rules and make it deterministic.
 
@@ -1934,16 +1936,17 @@ Audit financial and inventory changes especially carefully.
 
 Implement and test the following end-to-end workflows.
 
-## Workflow A: Catalog creation
+## Workflow A: Catalog creation & product authoring
 
-1. Admin creates a product.
-2. Admin adds attributes.
-3. Admin creates variants.
-4. Admin assigns SKUs.
-5. Admin assigns images.
-6. Admin configures pricing.
-7. Admin publishes the product.
-8. Product appears on the appropriate storefront.
+1. Admin creates a product (specifying Title/Name, Product SKU/Code, Barcode, and Descriptions).
+2. Admin sets Pricing Defaults (Current Price, Discount Type & Value, Calculated Sell Price, Unit Label).
+3. Admin configures Product Organization (Brand, Categories, Tax Rate Presets, Packaging Cost Templates, Shipping/Weight).
+4. Admin configures Attributes & generates Variant combinations (optionally assigning attribute-level pricing or default images).
+5. Admin reviews Variant Overrides and applies Bulk Actions (editing prices, costs, or clearing overrides to restore inheritance).
+6. Admin assigns Product Images and Gallery Media (with automatic fallback to attribute or product primary media).
+7. Admin configures Settings, SEO, and Preorder rules, then saves as Draft or Publishes.
+8. Stock is never created during product creation; stock is received solely through purchasing or authorized adjustments.
+9. Product and variants appear on the appropriate storefront with server-side price resolution and inventory checks.
 
 ## Workflow B: Purchase and stock receiving
 

@@ -186,6 +186,40 @@ model UnitLabel {
   @@index([businessId, position])
 }
 
+model TaxRate {
+  id         String   @id @default(uuid())
+  businessId String
+  name       String
+  rateBps    Int      @default(0)
+  isDefault  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+}
+
+model PackagingCostTemplate {
+  id         String   @id @default(uuid())
+  businessId String
+  name       String
+  costPaisa  Int      @default(0)
+  isDefault  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+}
+
 model Product {
   id               String        @id @default(uuid())
   businessId       String
@@ -210,7 +244,9 @@ model Product {
   /// the create/edit UI no longer writes it and no business rule reads it.
   preorderExpectedAt DateTime?
   taxRateBps       Int           @default(0)
+  taxRateId        String?
   packagingCostPaisa Int         @default(0)
+  packagingCostTemplateId String?
   attributesSummary Json?
   seoTitle         String?
   seoDescription   String?
@@ -227,6 +263,8 @@ model Product {
 
   business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   brandRef   Brand?              @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  taxRate    TaxRate?            @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  packagingCostTemplate PackagingCostTemplate? @relation(fields: [packagingCostTemplateId], references: [id], onDelete: SetNull)
   seoImage   MediaAsset?         @relation("ProductSeoImage", fields: [seoImageMediaId], references: [id], onDelete: SetNull)
   categories ProductCategory[]
   images     ProductImage[]
@@ -236,6 +274,7 @@ model Product {
   priceItems PriceListItem[]
   orderItems OrderItem[]
   mediaUsages MediaUsage[]
+  drafts     ProductDraft[]
 
   @@unique([businessId, slug])
   @@index([businessId, status, createdAt])
@@ -292,6 +331,8 @@ model AttributeValue {
   /// Default image for this value. Variants that carry this value inherit it unless
   /// they have their own override, so one asset serves every matching variant.
   mediaId     String?
+  /// Optional attribute-level price override in paisa (precedence: manual variant > attribute-level > product default).
+  priceOverridePaisa Int?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -323,7 +364,8 @@ model ProductAttribute {
 model Variant {
   id             String        @id @default(uuid())
   productId      String
-  sku            String        @unique
+  /// SKU belongs to the main product; variants may carry an internal code but it is never required.
+  sku            String?
   barcode        String?
   name           String
   /// Deterministic key of the attribute combination, e.g. "color=red|size=xl".
@@ -361,7 +403,26 @@ model Variant {
 
   @@unique([productId, optionKey])
   @@index([productId, status])
+  @@index([productId, sku])
   @@index([status])
+}
+
+/// Persistent autosave drafts for product creation and editing.
+model ProductDraft {
+  id         String   @id @default(uuid())
+  businessId String
+  productId  String?
+  userId     String?
+  name       String   @default("")
+  payload    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product  Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, productId])
+  @@index([businessId, userId])
 }
 
 model VariantAttributeValue {

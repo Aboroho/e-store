@@ -260,7 +260,7 @@ model Customer {
   lastOrderAt       DateTime?
   isResellerCustomer Boolean       @default(false)
   referredByResellerId String?
-  tags              String[]
+  tags              String[]       @default([])
   notes             String?
   createdByUserId   String?
   createdAt         DateTime       @default(now())

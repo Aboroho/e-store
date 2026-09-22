@@ -11,10 +11,28 @@ import {
   bulkApplyVariantAction,
   createBrand,
   createUnitLabel,
+  discardProductDraft,
   listBrandOptions,
+  loadProductDraft,
   saveProduct,
+  saveProductDraft,
   setAttributeValueImage,
+  updateSingleVariant,
 } from "@/modules/catalog/product-service";
+import {
+  createBrandPreset,
+  createPackagingCostTemplate,
+  createTaxRate,
+  createUnitLabelPreset,
+  deleteBrandPreset,
+  deletePackagingCostTemplate,
+  deleteTaxRate,
+  deleteUnitLabelPreset,
+  updateBrandPreset,
+  updatePackagingCostTemplate,
+  updateTaxRate,
+  updateUnitLabelPreset,
+} from "@/modules/catalog/presets-service";
 import {
   attributeInputSchema,
   categoryInputSchema,
@@ -24,9 +42,12 @@ import {
   attributeValueInputSchema,
   brandInputSchema,
   bulkVariantActionSchema,
+  packagingCostTemplateInputSchema,
   productDraftSchema,
+  singleVariantUpdateSchema,
   skuCheckSchema,
   slugCheckSchema,
+  taxRateInputSchema,
   unitLabelInputSchema,
 } from "@/modules/catalog/product-schemas";
 import { nextAvailableSlug, suggestSlug } from "@/modules/catalog/product-draft";
@@ -358,5 +379,238 @@ export async function bulkVariantActionAction(input: unknown): Promise<ActionRes
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to apply the bulk change.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Single Variant Editing                                                     */
+/* -------------------------------------------------------------------------- */
+
+export async function updateSingleVariantAction(
+  input: unknown,
+): Promise<ActionResult<{ variantId: string; productName: string; variantName: string }>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = singleVariantUpdateSchema.parse(input);
+    if (parsed.costPaisa !== undefined && !can(actor.session, "product.view_cost")) {
+      throw AppError.forbidden("You do not have permission to change purchase cost");
+    }
+    const result = await updateSingleVariant(actor, parsed);
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update the variant.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Persistent Drafts and Autosave                                             */
+/* -------------------------------------------------------------------------- */
+
+export async function saveProductDraftAction(input: {
+  productId?: string | null;
+  name?: string;
+  payload: Record<string, unknown>;
+}): Promise<ActionResult<{ draftId: string; updatedAt: string }>> {
+  try {
+    const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
+    const result = await saveProductDraft(actor, input);
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to save working draft.");
+  }
+}
+
+export async function loadProductDraftAction(input: {
+  productId?: string | null;
+  draftId?: string | null;
+}): Promise<ActionResult<{ draftId: string; name: string; payload: Record<string, unknown>; updatedAt: string } | null>> {
+  try {
+    const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
+    const draft = await loadProductDraft(actor.businessId, { ...input, userId: actor.userId });
+    return { ok: true, data: draft };
+  } catch (error) {
+    return failure(error, "Unable to load working draft.");
+  }
+}
+
+export async function discardProductDraftAction(input: {
+  productId?: string | null;
+  draftId?: string | null;
+}): Promise<ActionResult<{ discarded: boolean }>> {
+  try {
+    const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
+    const discarded = await discardProductDraft(actor.businessId, input);
+    return { ok: true, data: { discarded } };
+  } catch (error) {
+    return failure(error, "Unable to discard working draft.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presets: Tax Rates                                                         */
+/* -------------------------------------------------------------------------- */
+
+export async function createTaxRateAction(input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = taxRateInputSchema.parse(input);
+    const result = await createTaxRate(actor, parsed);
+    revalidatePath("/admin/catalog/tax-rates");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to create tax rate.");
+  }
+}
+
+export async function updateTaxRateAction(id: string, input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = taxRateInputSchema.partial().parse(input);
+    const result = await updateTaxRate(actor, id, parsed);
+    revalidatePath("/admin/catalog/tax-rates");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update tax rate.");
+  }
+}
+
+export async function deleteTaxRateAction(id: string): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await deleteTaxRate(actor, id);
+    revalidatePath("/admin/catalog/tax-rates");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to delete tax rate.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presets: Packaging Cost Templates                                          */
+/* -------------------------------------------------------------------------- */
+
+export async function createPackagingCostTemplateAction(input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = packagingCostTemplateInputSchema.parse(input);
+    const result = await createPackagingCostTemplate(actor, parsed);
+    revalidatePath("/admin/catalog/packaging-costs");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to create packaging cost template.");
+  }
+}
+
+export async function updatePackagingCostTemplateAction(id: string, input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = packagingCostTemplateInputSchema.partial().parse(input);
+    const result = await updatePackagingCostTemplate(actor, id, parsed);
+    revalidatePath("/admin/catalog/packaging-costs");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update packaging cost template.");
+  }
+}
+
+export async function deletePackagingCostTemplateAction(id: string): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await deletePackagingCostTemplate(actor, id);
+    revalidatePath("/admin/catalog/packaging-costs");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to delete packaging cost template.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presets: Unit Labels                                                       */
+/* -------------------------------------------------------------------------- */
+
+export async function createUnitLabelPresetAction(input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = unitLabelInputSchema.parse(input);
+    const result = await createUnitLabelPreset(actor, parsed);
+    revalidatePath("/admin/catalog/unit-labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to create unit label.");
+  }
+}
+
+export async function updateUnitLabelPresetAction(id: string, input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = unitLabelInputSchema.parse(input);
+    const result = await updateUnitLabelPreset(actor, id, parsed);
+    revalidatePath("/admin/catalog/unit-labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update unit label.");
+  }
+}
+
+export async function deleteUnitLabelPresetAction(id: string): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await deleteUnitLabelPreset(actor, id);
+    revalidatePath("/admin/catalog/unit-labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to delete unit label.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presets: Brands                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function createBrandPresetAction(input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = brandInputSchema.parse(input);
+    const result = await createBrandPreset(actor, parsed);
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to create brand.");
+  }
+}
+
+export async function updateBrandPresetAction(id: string, input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = brandInputSchema.parse(input);
+    const result = await updateBrandPreset(actor, id, parsed);
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update brand.");
+  }
+}
+
+export async function deleteBrandPresetAction(id: string): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await deleteBrandPreset(actor, id);
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to delete brand.");
   }
 }

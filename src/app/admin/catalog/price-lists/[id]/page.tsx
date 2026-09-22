@@ -45,7 +45,7 @@ export default async function PriceListDetailPage({ params }: { params: Promise<
         priceListId={priceList.id}
         variants={variants.map((variant) => ({
           id: variant.id,
-          sku: variant.sku,
+          sku: variant.sku ?? "",
           name: variant.name,
           productName: variant.product.name,
           currentPricePaisa: variant.priceItems[0]?.pricePaisa ?? variant.priceOverridePaisa ?? null,

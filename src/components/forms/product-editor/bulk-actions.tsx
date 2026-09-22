@@ -41,7 +41,11 @@ type BulkAction =
   | "set-weight"
   | "set-preorder"
   | "reset-image"
-  | "clear-gallery";
+  | "clear-gallery"
+  | "clear-price-override"
+  | "clear-cost-override"
+  | "clear-weight-override"
+  | "clear-preorder-override";
 
 interface ActionDefinition {
   value: BulkAction;
@@ -80,6 +84,30 @@ const ACTIONS: ActionDefinition[] = [
   { value: "set-cost", label: "Set purchase cost", hint: "Used for margin reporting. Requires the “view purchase cost” permission.", input: "cost" },
   { value: "set-weight", label: "Set weight", hint: "Overrides the product weight for the target variants.", input: "weight" },
   { value: "set-preorder", label: "Set preorder", hint: "Allow or refuse preorders for the target variants.", input: "preorder" },
+  {
+    value: "clear-price-override",
+    label: "Restore inherited price",
+    hint: "Clears variant price overrides in the target group, restoring attribute-level or product default price inheritance.",
+    input: "none",
+  },
+  {
+    value: "clear-cost-override",
+    label: "Restore inherited cost",
+    hint: "Clears variant purchase cost overrides in the target group.",
+    input: "none",
+  },
+  {
+    value: "clear-weight-override",
+    label: "Restore inherited weight",
+    hint: "Clears variant weight overrides in the target group.",
+    input: "none",
+  },
+  {
+    value: "clear-preorder-override",
+    label: "Restore inherited preorder status",
+    hint: "Clears variant preorder overrides in the target group.",
+    input: "none",
+  },
   {
     value: "clear-gallery",
     label: "Clear gallery images",
