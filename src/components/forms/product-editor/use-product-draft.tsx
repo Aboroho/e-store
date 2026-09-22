@@ -3,6 +3,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { discardProductDraftAction, saveProductDraftAction } from "@/modules/catalog/product-actions";
+import { shouldAutosaveDraft } from "@/modules/catalog/product-draft";
 import type { ProductEditorState } from "./use-product-editor";
 
 /**
@@ -12,8 +13,9 @@ import type { ProductEditorState } from "./use-product-editor";
  * work survives a change of device, a crashed tab or a login on another machine.
  * The rules:
  *
- *  - autosave is debounced (2.5 s after the last keystroke) and skipped while
- *    nothing has changed;
+ *  - autosave ticks every 8 s while the form is dirty, skipped when the payload
+ *    has not changed since the last save, and for a new product waits until
+ *    title and SKU are both filled;
  *  - every save carries the `revision` it started from; if another tab saved in
  *    between the server refuses and the editor surfaces a recoverable conflict
  *    instead of overwriting the newer work;
@@ -80,6 +82,9 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
   const revisionRef = React.useRef(revision);
   const draftIdRef = React.useRef(draftId);
   const savingRef = React.useRef(false);
+  const lastSavedFingerprintRef = React.useRef<string | null>(
+    initialDraft ? JSON.stringify(initialDraft.payload) : null,
+  );
 
   React.useEffect(() => {
     stateRef.current = state;
@@ -87,8 +92,23 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
     draftIdRef.current = draftId;
   }, [state, revision, draftId]);
 
-  const save = React.useCallback(async () => {
+  const save = React.useCallback(async (force = false) => {
     if (savingRef.current) return;
+    const snapshot = stateRef.current;
+    const fingerprint = JSON.stringify(snapshot);
+    if (
+      !force &&
+      !shouldAutosaveDraft({
+        dirty: true,
+        name: snapshot.name,
+        productCode: snapshot.productCode,
+        productId: productId ?? persistedProductId,
+        fingerprint,
+        lastSavedFingerprint: lastSavedFingerprintRef.current,
+      })
+    ) {
+      return;
+    }
     savingRef.current = true;
     setStatus("saving");
     setError(null);
@@ -97,8 +117,8 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
         productId: productId ?? null,
         draftId: draftIdRef.current,
         revision: draftIdRef.current ? revisionRef.current : null,
-        name: stateRef.current.name.trim() || undefined,
-        payload: stateRef.current as unknown as Record<string, unknown>,
+        name: snapshot.name.trim() || undefined,
+        payload: snapshot as unknown as Record<string, unknown>,
       });
       if (!result.ok) {
         // A conflict means another tab owns a newer draft: stop and let the
@@ -107,6 +127,7 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
         setError(result.message);
         return;
       }
+      lastSavedFingerprintRef.current = fingerprint;
       setDraftId(result.data.draftId);
       setRevision(result.data.revision);
       setLastSavedAt(result.data.updatedAt);
@@ -119,9 +140,9 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
     } finally {
       savingRef.current = false;
     }
-  }, [productId]);
+  }, [productId, persistedProductId]);
 
-  /* Debounced autosave ---------------------------------------------------- */
+  /* Interval autosave — one request every 8s while dirty, never per keystroke. */
   React.useEffect(() => {
     if (!enabled || !dirty || status === "conflict") return;
     // Do not autosave a product that has not been touched yet, and never
@@ -129,20 +150,22 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
     // discarded — that would overwrite work the user has not seen yet.
     if (pending) return;
 
-    const handle = setTimeout(() => {
+    const tick = () => {
       void save();
-    }, AUTOSAVE_DELAY_MS + Math.min(attempt * 2_000, 8_000));
-    return () => clearTimeout(handle);
-  }, [enabled, dirty, status, pending, attempt, save, state]);
+    };
+    const delay = AUTOSAVE_INTERVAL_MS + Math.min(attempt * 2_000, 8_000);
+    const handle = setInterval(tick, delay);
+    return () => clearInterval(handle);
+  }, [enabled, dirty, status, pending, attempt, save]);
 
   const retry = React.useCallback(() => {
     setAttempt(0);
-    void save();
+    void save(true);
   }, [save]);
 
   const saveNow = React.useCallback(() => {
     setAttempt(0);
-    void save();
+    void save(true);
   }, [save]);
 
   const resume = React.useCallback(() => {
@@ -194,7 +217,7 @@ export function useProductDraft(options: UseProductDraftOptions): ProductDraftAp
 
 const STATUS_TEXT: Record<DraftStatus, string> = {
   idle: "Autosave on",
-  dirty: "Unsaved changes — saving shortly",
+  dirty: "Unsaved changes — saving within 8 seconds",
   saving: "Saving draft…",
   saved: "Draft saved",
   error: "Draft not saved",

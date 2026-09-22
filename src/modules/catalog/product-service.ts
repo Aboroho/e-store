@@ -2161,12 +2161,126 @@ export async function listLabelOptions(businessId: string): Promise<LabelOption[
 /* Bin: restore / permanently delete                                          */
 /* -------------------------------------------------------------------------- */
 
+export type BinEntityType = "product" | "brand" | "label" | "category";
+
+export interface BinItem {
+  id: string;
+  type: BinEntityType;
+  name: string;
+  sku: string | null;
+  slug: string | null;
+  status: string;
+  removedAt: Date;
+}
+
 export async function listBinnedProducts(businessId: string) {
   return prisma.product.findMany({
     where: { businessId, OR: [{ deletedAt: { not: null } }, { status: "ARCHIVED" }] },
     orderBy: { updatedAt: "desc" },
     take: 200,
     select: { id: true, name: true, sku: true, slug: true, status: true, deletedAt: true, archivedAt: true, updatedAt: true },
+  });
+}
+
+/** Everything currently in the bin: products, brands, labels and categories. */
+export async function listBinnedItems(businessId: string): Promise<BinItem[]> {
+  const [products, brands, labels, categories] = await Promise.all([
+    prisma.product.findMany({
+      where: { businessId, OR: [{ deletedAt: { not: null } }, { status: "ARCHIVED" }] },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      select: { id: true, name: true, sku: true, slug: true, status: true, deletedAt: true, archivedAt: true, updatedAt: true },
+    }),
+    prisma.brand.findMany({
+      where: { businessId, deletedAt: { not: null } },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      select: { id: true, name: true, slug: true, deletedAt: true, updatedAt: true },
+    }),
+    prisma.label.findMany({
+      where: { businessId, deletedAt: { not: null } },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      select: { id: true, name: true, slug: true, deletedAt: true, updatedAt: true },
+    }),
+    prisma.category.findMany({
+      where: { businessId, deletedAt: { not: null } },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      select: { id: true, name: true, slug: true, deletedAt: true, updatedAt: true },
+    }),
+  ]);
+
+  const items: BinItem[] = [
+    ...products.map((row) => ({
+      id: row.id,
+      type: "product" as const,
+      name: row.name,
+      sku: row.sku,
+      slug: row.slug,
+      status: row.status.toLowerCase(),
+      removedAt: row.deletedAt ?? row.archivedAt ?? row.updatedAt,
+    })),
+    ...brands.map((row) => ({
+      id: row.id,
+      type: "brand" as const,
+      name: row.name,
+      sku: null,
+      slug: row.slug,
+      status: "deleted",
+      removedAt: row.deletedAt ?? row.updatedAt,
+    })),
+    ...labels.map((row) => ({
+      id: row.id,
+      type: "label" as const,
+      name: row.name,
+      sku: null,
+      slug: row.slug,
+      status: "deleted",
+      removedAt: row.deletedAt ?? row.updatedAt,
+    })),
+    ...categories.map((row) => ({
+      id: row.id,
+      type: "category" as const,
+      name: row.name,
+      sku: null,
+      slug: row.slug,
+      status: "deleted",
+      removedAt: row.deletedAt ?? row.updatedAt,
+    })),
+  ];
+  return items.sort((a, b) => b.removedAt.getTime() - a.removedAt.getTime());
+}
+
+export async function moveProductsToBin(actor: CatalogActor, productIds: string[]) {
+  const uniqueIds = [...new Set(productIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return { moved: 0 };
+  const products = await prisma.product.findMany({
+    where: { id: { in: uniqueIds }, businessId: actor.businessId, deletedAt: null },
+    select: { id: true },
+  });
+  if (products.length === 0) throw AppError.notFound("No matching products");
+  const ids = products.map((row) => row.id);
+  const now = new Date();
+  await prisma.product.updateMany({
+    where: { id: { in: ids } },
+    data: { deletedAt: now, archivedAt: now, status: "ARCHIVED", updatedByUserId: actor.userId },
+  });
+  await prisma.variant.updateMany({ where: { productId: { in: ids } }, data: { status: "ARCHIVED" } });
+  return { moved: ids.length };
+}
+
+export async function setProductPublication(actor: CatalogActor, productId: string, published: boolean) {
+  const product = await prisma.product.findFirst({
+    where: { id: productId, businessId: actor.businessId, deletedAt: null },
+    select: { id: true, publishedAt: true, status: true },
+  });
+  if (!product) throw AppError.notFound("Product not found");
+  return prisma.product.update({
+    where: { id: product.id },
+    data: published
+      ? { status: "ACTIVE", publishedAt: product.publishedAt ?? new Date(), archivedAt: null }
+      : { status: "DRAFT" },
   });
 }
 
@@ -2192,5 +2306,54 @@ export async function permanentlyDeleteProduct(actor: CatalogActor, productId: s
     throw AppError.invalidState("Move the product to the bin before permanently deleting it.");
   }
   await prisma.product.delete({ where: { id: product.id } });
+  return { deleted: true as const };
+}
+
+export async function restoreBinnedItem(actor: CatalogActor, type: BinEntityType, id: string) {
+  if (type === "product") return restoreBinnedProduct(actor, id);
+
+  if (type === "brand") {
+    const row = await prisma.brand.findFirst({ where: { id, businessId: actor.businessId, deletedAt: { not: null } }, select: { id: true } });
+    if (!row) throw AppError.notFound("Brand not found");
+    await prisma.brand.update({ where: { id: row.id }, data: { deletedAt: null, isActive: true } });
+    return { id: row.id };
+  }
+  if (type === "label") {
+    const row = await prisma.label.findFirst({ where: { id, businessId: actor.businessId, deletedAt: { not: null } }, select: { id: true } });
+    if (!row) throw AppError.notFound("Label not found");
+    await prisma.label.update({ where: { id: row.id }, data: { deletedAt: null, isActive: true } });
+    return { id: row.id };
+  }
+  const row = await prisma.category.findFirst({ where: { id, businessId: actor.businessId, deletedAt: { not: null } }, select: { id: true } });
+  if (!row) throw AppError.notFound("Category not found");
+  await prisma.category.update({ where: { id: row.id }, data: { deletedAt: null, isActive: true } });
+  return { id: row.id };
+}
+
+export async function permanentlyDeleteBinnedItem(actor: CatalogActor, type: BinEntityType, id: string) {
+  if (type === "product") return permanentlyDeleteProduct(actor, id);
+
+  if (type === "brand") {
+    const row = await prisma.brand.findFirst({ where: { id, businessId: actor.businessId, deletedAt: { not: null } }, select: { id: true } });
+    if (!row) throw AppError.notFound("Brand not found");
+    await prisma.product.updateMany({ where: { brandId: row.id }, data: { brandId: null } });
+    await prisma.brand.delete({ where: { id: row.id } });
+    return { deleted: true as const };
+  }
+  if (type === "label") {
+    const row = await prisma.label.findFirst({ where: { id, businessId: actor.businessId, deletedAt: { not: null } }, select: { id: true } });
+    if (!row) throw AppError.notFound("Label not found");
+    await prisma.productLabel.deleteMany({ where: { labelId: row.id } });
+    await prisma.label.delete({ where: { id: row.id } });
+    return { deleted: true as const };
+  }
+  const row = await prisma.category.findFirst({
+    where: { id, businessId: actor.businessId, deletedAt: { not: null } },
+    include: { _count: { select: { products: true, children: true } } },
+  });
+  if (!row) throw AppError.notFound("Category not found");
+  if (row._count.children > 0) throw AppError.conflict("This category still has sub-categories. Restore it or move them first.");
+  await prisma.productCategory.deleteMany({ where: { categoryId: row.id } });
+  await prisma.category.delete({ where: { id: row.id } });
   return { deleted: true as const };
 }

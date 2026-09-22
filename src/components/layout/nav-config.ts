@@ -22,6 +22,8 @@ export interface NavItem {
 export interface NavSection {
   title: string;
   items: NavItem[];
+  /** When true the section heading toggles its items open/closed. */
+  collapsible?: boolean;
 }
 
 export const ADMIN_NAV: NavSection[] = [
@@ -34,18 +36,13 @@ export const ADMIN_NAV: NavSection[] = [
   },
   {
     title: "Product",
+    collapsible: true,
     items: [
       { label: "Products", href: "/admin/catalog/products", permission: "product.view", icon: "Package", stage: 2 },
-      { label: "Labels", href: "/admin/catalog/labels", permission: "product.view", icon: "Tags", stage: 2 },
-      { label: "Bin", href: "/admin/bin", permission: "product.view", icon: "Trash2", stage: 2 },
-    ],
-  },
-  {
-    title: "Catalog",
-    items: [
       { label: "Categories", href: "/admin/catalog/categories", permission: "product.view", icon: "FolderTree", stage: 2 },
       { label: "Attributes", href: "/admin/catalog/attributes", permission: "product.view", icon: "Palette", stage: 2 },
       { label: "Brands", href: "/admin/catalog/brands", permission: "product.view", icon: "Bookmark", stage: 2 },
+      { label: "Labels", href: "/admin/catalog/labels", permission: "product.view", icon: "Tags", stage: 2 },
       { label: "Price lists", href: "/admin/catalog/price-lists", permission: "pricing.manage", icon: "Tags", stage: 2 },
       { label: "Tax rates", href: "/admin/catalog/tax-rates", permission: "product.view", icon: "Percent", stage: 2 },
       { label: "Packaging costs", href: "/admin/catalog/packaging-costs", permission: "product.view", icon: "Box", stage: 2 },
@@ -106,6 +103,7 @@ export const ADMIN_NAV: NavSection[] = [
       { label: "API keys", href: "/admin/api-keys", permission: "api_key.manage", icon: "KeyRound", stage: 5 },
       { label: "Plugins", href: "/admin/plugins", permission: "plugin.manage", icon: "Puzzle", stage: 5 },
       { label: "Background jobs", href: "/admin/jobs", permission: "job.manage", icon: "Activity", stage: 5 },
+      { label: "Bin", href: "/admin/bin", permission: "product.view", icon: "Trash2", stage: 2 },
       { label: "Audit log", href: "/admin/audit", permission: "audit.view", icon: "ScrollText", stage: 1 },
       { label: "Users", href: "/admin/users", permission: "user.manage", icon: "UserCog", stage: 1 },
       { label: "Roles", href: "/admin/roles", permission: "role.manage", icon: "ShieldCheck", stage: 1 },

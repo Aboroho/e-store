@@ -56,10 +56,11 @@ function bdtToPaisa(value: unknown): number | undefined {
 
 
 export async function archiveProductAction(productId: string, reasonOrForm?: string | FormData): Promise<void> {
-  const context = await actor("product.archive");
+  const context = await actor("product.delete");
   const reason = typeof reasonOrForm === "string" ? reasonOrForm : undefined;
   await archiveProduct(context, productId, reason);
   revalidatePath("/admin/catalog/products");
+  revalidatePath("/admin/bin");
   redirect("/admin/catalog/products");
 }
 
@@ -170,6 +171,7 @@ export async function deleteCategoryAction(categoryId: string): Promise<void> {
   const context = await actor("category.manage");
   await deleteCategory(context, categoryId);
   revalidatePath("/admin/catalog/categories");
+  revalidatePath("/admin/bin");
 }
 
 // ------------------------------------------------------------------ attributes

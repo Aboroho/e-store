@@ -449,30 +449,65 @@ export function OrganizationSection({
           }
         />
 
-        <Combobox
-          id="product-labels"
-          label="Labels"
-          multiple
-          placeholder="Search labels…"
-          tooltip="Merchandising tags such as New, Sale or Featured. Labels work like brands and categories: create one here without leaving the form."
-          help="Optional. The same label can be used on many products."
-          options={labels.map((label) => ({
-            value: label.id,
-            label: label.name,
-            hint: `${label.productCount} product(s)`,
-            imageUrl: label.image?.url ?? null,
-          }))}
-          value={selectedLabelIds}
-          onChange={(value) => onPatch({ labelIds: value })}
-          emptyMessage="No label matches that search."
-          error={errors.labelIds}
-          footer={
-            <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setLabelDialog(true)}>
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              Create label
-            </Button>
-          }
-        />
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="product-labels" className="text-slate-800">
+              Labels
+            </Label>
+            <InfoTip>Merchandising tags such as New, Sale or Featured. Optional. The same label can be used on many products.</InfoTip>
+          </div>
+          <NativeSelect
+            id="product-labels"
+            value=""
+            onChange={(event) => {
+              const nextId = event.target.value;
+              if (!nextId || selectedLabelIds.includes(nextId)) return;
+              onPatch({ labelIds: [...selectedLabelIds, nextId] });
+            }}
+          >
+            <option value="">Add a label…</option>
+            {labels
+              .filter((label) => !selectedLabelIds.includes(label.id))
+              .map((label) => (
+                <option key={label.id} value={label.id}>
+                  {label.name}
+                </option>
+              ))}
+          </NativeSelect>
+          {selectedLabelIds.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {selectedLabelIds.map((id) => {
+                const label = labels.find((entry) => entry.id === id);
+                return (
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs text-slate-700"
+                  >
+                    {label?.colorHex ? (
+                      <span className="h-2.5 w-2.5 rounded-full border border-slate-300" style={{ backgroundColor: label.colorHex }} aria-hidden="true" />
+                    ) : null}
+                    {label?.name ?? id}
+                    <button
+                      type="button"
+                      className="text-slate-400 hover:text-slate-700"
+                      onClick={() => onPatch({ labelIds: selectedLabelIds.filter((entry) => entry !== id) })}
+                      aria-label={`Remove ${label?.name ?? "label"}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Optional. Pick a label from the list, or create one.</p>
+          )}
+          {errors.labelIds ? <p className="text-xs text-red-600">{errors.labelIds[0]}</p> : null}
+          <Button type="button" variant="ghost" size="sm" className="justify-start px-0" onClick={() => setLabelDialog(true)}>
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            Create label
+          </Button>
+        </div>
 
         <Combobox
           id="product-categories"
@@ -923,7 +958,7 @@ export function ProductSettingsSection({
   name,
   slug,
   productUrlPrefix,
-  canViewCost,
+  showPackagingCost = false,
   errors,
   onPatch,
   onSeoImageChange,
@@ -943,7 +978,7 @@ export function ProductSettingsSection({
   name: string;
   slug: string;
   productUrlPrefix: string | null;
-  canViewCost: boolean;
+  showPackagingCost?: boolean;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onSeoImageChange: (asset: MediaAssetView | null) => void;
@@ -963,56 +998,51 @@ export function ProductSettingsSection({
       className="mb-10"
     >
       <div className="space-y-6">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <FieldWithTip
-            id="product-packaging-template"
-            label="Packaging cost template"
-            tooltip="Reusable packaging cost per unit. Used for profitability reporting only — it is never added to what the shopper pays."
-          >
-            <NativeSelect
+        {showPackagingCost ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <FieldWithTip
               id="product-packaging-template"
-              value={packagingTemplateId ?? ""}
-              onChange={(event) => {
-                const nextId = event.target.value || null;
-                const preset = packagingTemplates.find((template) => template.id === nextId);
-                onPatch({ packagingCostTemplateId: nextId, ...(preset ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) } : {}) });
-              }}
+              label="Packaging cost template"
+              tooltip="Reusable packaging cost per unit. Used for profitability reporting only — it is never added to what the shopper pays."
             >
-              <option value="">No template</option>
-              {packagingTemplates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name} — {formatPaisa(template.costPaisa)}
-                </option>
-              ))}
-            </NativeSelect>
-            <div className="mt-2 flex items-center gap-2">
-              <Label htmlFor="product-packaging-cost" className="text-xs text-slate-500">
-                Custom cost (BDT)
-              </Label>
-              <Input
-                id="product-packaging-cost"
-                className="h-8 w-24"
-                inputMode="decimal"
-                value={packagingCostPaisa}
-                onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
-              />
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              Manage presets in{" "}
-              <Link href="/admin/catalog/packaging-costs" className="text-brand-700 underline">
-                Packaging costs
-              </Link>
-              .
-            </p>
-          </FieldWithTip>
-
-          {canViewCost ? (
-            <div className="space-y-2 text-xs text-slate-500">
-              <p className="font-medium text-slate-700">How packaging cost is used</p>
-              <p>Packaging cost is added to the cost side of an order line when profit is reported. It is never added to what the shopper pays.</p>
-            </div>
-          ) : null}
-        </div>
+              <NativeSelect
+                id="product-packaging-template"
+                value={packagingTemplateId ?? ""}
+                onChange={(event) => {
+                  const nextId = event.target.value || null;
+                  const preset = packagingTemplates.find((template) => template.id === nextId);
+                  onPatch({ packagingCostTemplateId: nextId, ...(preset ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) } : {}) });
+                }}
+              >
+                <option value="">No template</option>
+                {packagingTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name} — {formatPaisa(template.costPaisa)}
+                  </option>
+                ))}
+              </NativeSelect>
+              <div className="mt-2 flex items-center gap-2">
+                <Label htmlFor="product-packaging-cost" className="text-xs text-slate-500">
+                  Custom cost (BDT)
+                </Label>
+                <Input
+                  id="product-packaging-cost"
+                  className="h-8 w-24"
+                  inputMode="decimal"
+                  value={packagingCostPaisa}
+                  onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
+                />
+              </div>
+              <p className="mt-1 text-xs text-slate-400">
+                Manage presets in{" "}
+                <Link href="/admin/catalog/packaging-costs" className="text-brand-700 underline">
+                  Packaging costs
+                </Link>
+                .
+              </p>
+            </FieldWithTip>
+          </div>
+        ) : null}
 
         <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
           <div className="flex flex-wrap gap-4">

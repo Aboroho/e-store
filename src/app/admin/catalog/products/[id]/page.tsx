@@ -35,7 +35,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const product = await getProductForEdit(session.businessId, id);
   if (!product) notFound();
   const canUpdate = can(session, "product.update");
-  const canArchive = can(session, "product.archive");
+  const canArchive = can(session, "product.delete");
   const archiveProduct = archiveProductAction.bind(null, product.id);
   const restoreProduct = restoreProductAction.bind(null, product.id);
 
@@ -100,7 +100,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               <TableRow>
                 <TableHead>Variant</TableHead>
                 <TableHead className="text-right">Price</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -111,9 +110,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {variant.priceOverridePaisa != null ? formatPaisa(variant.priceOverridePaisa) : "—"}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {variant.costPaisa != null ? formatPaisa(variant.costPaisa) : "—"}
                   </TableCell>
                 </TableRow>
               ))}

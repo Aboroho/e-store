@@ -14,6 +14,7 @@ import {
   planMatrix,
   resolveBulkTarget,
   resolveVariantImage,
+  shouldAutosaveDraft,
   suggestSlug,
   toWeightGrams,
   variantLabel,
@@ -114,6 +115,57 @@ describe("weight conversion", () => {
     expect(fromWeightGrams(1500, "kg")).toBe("1.5");
     expect(fromWeightGrams(500, "g")).toBe("500");
     expect(fromWeightGrams(null, "kg")).toBe("");
+  });
+});
+
+describe("draft autosave gating", () => {
+  it("waits for title and SKU before creating the first draft of a new product", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: true,
+        name: "Shoes",
+        productCode: "",
+        productId: null,
+        fingerprint: "a",
+        lastSavedFingerprint: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutosaveDraft({
+        dirty: true,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: null,
+        fingerprint: "a",
+        lastSavedFingerprint: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips a request when nothing changed since the last save", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: true,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: null,
+        fingerprint: "same",
+        lastSavedFingerprint: "same",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not save when the form is clean", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: false,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: "prod-1",
+        fingerprint: "a",
+        lastSavedFingerprint: null,
+      }),
+    ).toBe(false);
   });
 });
 

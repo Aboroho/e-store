@@ -542,6 +542,62 @@ export function VariantBulkActions({
         {missingInput ? <span className="text-xs text-slate-500">Choose a value for this action first.</span> : null}
       </div>
 
+      <div className="rounded-lg border border-slate-200 bg-white">
+        <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Selected variants</p>
+          <span className="text-xs text-slate-500">{matched.length} in the current target</span>
+        </div>
+        {matched.length === 0 ? (
+          <p className="px-3 py-3 text-xs text-slate-500">No variants in this target yet. Choose a group above.</p>
+        ) : (
+          <div className="max-h-56 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                <tr>
+                  <th className="px-3 py-1.5 text-left font-medium">Variant</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Current price</th>
+                  <th className="px-3 py-1.5 text-left font-medium">Discount</th>
+                  <th className="px-3 py-1.5 text-right font-medium">Sell price</th>
+                  <th className="px-3 py-1.5 text-left font-medium">Image</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {matched.map((row) => {
+                  const currentPaisa = row.currentPrice?.trim() ? moneyToPaisa(row.currentPrice) : null;
+                  const discountType = row.discountType ?? "NONE";
+                  const discountValue = Number(row.discountValue) || 0;
+                  const sell =
+                    currentPaisa != null
+                      ? calculatePricing({ currentPricePaisa: currentPaisa, discountType, discountValue }).sellPricePaisa
+                      : null;
+                  const image = resolveVariantImage({
+                    imageMediaId: row.imageMediaId,
+                    attributeValueIds: row.attributeValueIds,
+                    productImageMediaId: productImageId,
+                    attributes,
+                  });
+                  return (
+                    <tr key={row.key}>
+                      <td className="px-3 py-1.5 font-medium text-slate-800">{row.name || "Untitled variant"}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{currentPaisa != null ? formatPaisa(currentPaisa) : "Inherited"}</td>
+                      <td className="px-3 py-1.5 text-slate-600">
+                        {discountType === "NONE"
+                          ? "None"
+                          : discountType === "PERCENTAGE"
+                            ? `${discountValue}%`
+                            : formatPaisa(Math.round(discountValue * 100))}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{sell != null ? formatPaisa(sell) : "Inherited"}</td>
+                      <td className="px-3 py-1.5 text-slate-500">{image.label}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent
           title="Confirm bulk change"

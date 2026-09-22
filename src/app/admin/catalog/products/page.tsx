@@ -4,22 +4,14 @@ import { Package, Plus } from "lucide-react";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
 import { parseListQuery } from "@/lib/validation";
-import { formatPaisa } from "@/lib/money";
 import { listCategoryOptions, listProducts } from "@/modules/catalog/queries";
-import { PageHeader, Badge, Card, CardContent, EmptyState, buttonVariants } from "@/components/ui/primitives";
+import { PageHeader, Card, CardContent, EmptyState, buttonVariants } from "@/components/ui/primitives";
 import { FilterSelect, SearchForm } from "@/components/ui/interactive";
 import { Pagination } from "@/components/ui/pagination";
 import { ProductListTable } from "./product-list-table";
-import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Products" };
 export const dynamic = "force-dynamic";
-
-const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
-  ACTIVE: "success",
-  DRAFT: "warning",
-  ARCHIVED: "neutral",
-};
 
 export default async function ProductsPage({
   searchParams,
@@ -104,7 +96,7 @@ export default async function ProductsPage({
           <ProductListTable
             products={rows}
             canEdit={can(session, "product.update")}
-            canViewCost={can(session, "product.view_cost")}
+            canDelete={can(session, "product.delete") || can(session, "product.update")}
           />
         )}
 

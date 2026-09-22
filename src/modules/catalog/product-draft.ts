@@ -553,6 +553,27 @@ export function isValidSku(value: string): boolean {
   return trimmed.length >= 2 && trimmed.length <= 64 && SKU_PATTERN.test(trimmed);
 }
 
+/**
+ * Should the product editor persist a working copy?
+ *
+ * A first create-product draft is only written once title *and* SKU exist.
+ * Later ticks skip the network when the payload has not changed since the
+ * last successful save.
+ */
+export function shouldAutosaveDraft(input: {
+  dirty: boolean;
+  name: string;
+  productCode: string;
+  productId: string | null;
+  fingerprint: string;
+  lastSavedFingerprint: string | null;
+}): boolean {
+  if (!input.dirty) return false;
+  if (input.fingerprint === input.lastSavedFingerprint) return false;
+  if (!input.productId && (!input.name.trim() || !input.productCode.trim())) return false;
+  return true;
+}
+
 /** Duplicate SKUs inside one submission (case-insensitive). */
 export function duplicateSkus(skus: Array<string | null | undefined>): string[] {
   const seen = new Map<string, number>();

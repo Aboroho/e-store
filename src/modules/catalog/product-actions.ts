@@ -17,8 +17,12 @@ import {
   listLabelOptions,
   listProductDrafts,
   loadProductDraft,
+  permanentlyDeleteBinnedItem,
   permanentlyDeleteProduct,
+  restoreBinnedItem,
   restoreBinnedProduct,
+  moveProductsToBin,
+  setProductPublication,
   saveProduct,
   saveProductDraft,
   setAttributeValueImage,
@@ -650,6 +654,7 @@ export async function deleteBrandPresetAction(id: string): Promise<ActionResult<
     const result = await deleteBrandPreset(actor, id);
     revalidatePath("/admin/catalog/brands");
     revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/bin");
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to delete brand.");
@@ -692,6 +697,7 @@ export async function deleteLabelPresetAction(id: string): Promise<ActionResult<
     const result = await deleteLabelPreset(actor, id);
     revalidatePath("/admin/catalog/labels");
     revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/bin");
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to delete label.");
@@ -704,7 +710,7 @@ export async function deleteLabelPresetAction(id: string): Promise<ActionResult<
 
 export async function restoreBinnedProductAction(productId: string): Promise<ActionResult<{ id: string }>> {
   try {
-    const actor = await actorFor(["product.update", "product.archive"]);
+    const actor = await actorFor(["product.update", "product.delete"]);
     const result = await restoreBinnedProduct(actor, productId);
     revalidatePath("/admin/bin");
     revalidatePath("/admin/catalog/products");
@@ -716,12 +722,72 @@ export async function restoreBinnedProductAction(productId: string): Promise<Act
 
 export async function permanentlyDeleteProductAction(productId: string): Promise<ActionResult<{ deleted: true }>> {
   try {
-    const actor = await actorFor(["product.update", "product.archive"]);
+    const actor = await actorFor(["product.update", "product.delete"]);
     const result = await permanentlyDeleteProduct(actor, productId);
     revalidatePath("/admin/bin");
     revalidatePath("/admin/catalog/products");
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to permanently delete the product.");
+  }
+}
+
+export async function restoreBinnedItemAction(input: {
+  type: "product" | "brand" | "label" | "category";
+  id: string;
+}): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete", "category.manage"]);
+    const result = await restoreBinnedItem(actor, input.type, input.id);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/categories");
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error, "Unable to restore that item.");
+  }
+}
+
+export async function permanentlyDeleteBinnedItemAction(input: {
+  type: "product" | "brand" | "label" | "category";
+  id: string;
+}): Promise<ActionResult<{ deleted: true }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete", "category.manage"]);
+    const result = await permanentlyDeleteBinnedItem(actor, input.type, input.id);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/categories");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to permanently delete that item.");
+  }
+}
+
+export async function moveProductsToBinAction(productIds: string[]): Promise<ActionResult<{ moved: number }>> {
+  try {
+    const actor = await actorFor(["product.delete", "product.update"]);
+    const result = await moveProductsToBin(actor, productIds);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/bin");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to move those products to the bin.");
+  }
+}
+
+export async function setProductPublicationAction(productId: string, published: boolean): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await setProductPublication(actor, productId, published);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath(`/admin/catalog/products/${productId}`);
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error, published ? "Unable to publish the product." : "Unable to unpublish the product.");
   }
 }

@@ -2,11 +2,14 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, Edit3, Layers } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronDown, ChevronRight, Edit3, Layers, Trash2 } from "lucide-react";
 import { formatPaisa } from "@/lib/money";
 import type { ProductListRow } from "@/modules/catalog/queries";
+import { moveProductsToBinAction, setProductPublicationAction } from "@/modules/catalog/product-actions";
 import {
   Badge,
+  Button,
   Table,
   TableBody,
   TableCell,
@@ -14,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/primitives";
+import { Dialog, DialogContent } from "@/components/ui/interactive";
 
 const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
   ACTIVE: "success",
@@ -24,18 +28,24 @@ const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
 /**
  * Product list. Edit always opens the product editor (`/:id/edit`); there is no
  * intermediate variant page. Inventory is a separate module, so this table does
- * not show on-hand or available quantities.
+ * not show on-hand or available quantities. Purchase cost is not shown here.
  */
 export function ProductListTable({
   products,
   canEdit,
-  canViewCost,
+  canDelete,
 }: {
   products: ProductListRow[];
   canEdit: boolean;
-  canViewCost: boolean;
+  canDelete: boolean;
 }) {
+  const router = useRouter();
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = React.useState<string[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [publishingId, setPublishingId] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   const toggleExpand = (id: string) => {
     setExpanded((prev) => {
@@ -46,11 +56,81 @@ export function ProductListTable({
     });
   };
 
+  const allIds = products.map((product) => product.id);
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(allIds));
+  };
+
+  const moveToBin = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setLoading(true);
+    setError(null);
+    const result = await moveProductsToBinAction(ids);
+    setLoading(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setConfirmDelete(null);
+    setSelected(new Set());
+    router.refresh();
+  };
+
+  const publish = async (id: string, published: boolean) => {
+    setPublishingId(id);
+    setError(null);
+    const result = await setProductPublicationAction(id, published);
+    setPublishingId(null);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    router.refresh();
+  };
+
+  const colSpan = 7;
+
   return (
     <div className="space-y-4">
+      {error ? <p className="px-4 text-sm text-rose-600">{error}</p> : null}
+
+      {canDelete && selected.size > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2">
+          <p className="text-sm text-slate-700">
+            <span className="font-medium">{selected.size}</span> selected
+          </p>
+          <Button type="button" variant="destructive" size="sm" onClick={() => setConfirmDelete([...selected])}>
+            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+            Move to bin
+          </Button>
+        </div>
+      ) : null}
+
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-10">
+              {canDelete ? (
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label="Select all products on this page"
+                />
+              ) : null}
+            </TableHead>
             <TableHead className="w-10"></TableHead>
             <TableHead>Product</TableHead>
             <TableHead>Status</TableHead>
@@ -63,10 +143,22 @@ export function ProductListTable({
           {products.map((product) => {
             const isExpanded = expanded.has(product.id);
             const hasMultipleVariants = product.variants.length > 1;
+            const isSelected = selected.has(product.id);
 
             return (
               <React.Fragment key={product.id}>
                 <TableRow className={isExpanded ? "bg-slate-50/70 border-b-0" : undefined}>
+                  <TableCell className="w-10 pr-0">
+                    {canDelete ? (
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300"
+                        checked={isSelected}
+                        onChange={() => toggleOne(product.id)}
+                        aria-label={`Select ${product.name}`}
+                      />
+                    ) : null}
+                  </TableCell>
                   <TableCell className="w-10 pr-0">
                     {product.variants.length > 0 && (
                       <button
@@ -125,7 +217,30 @@ export function ProductListTable({
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
+                      {canEdit ? (
+                        product.status === "ACTIVE" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            disabled={publishingId === product.id}
+                            onClick={() => void publish(product.id, false)}
+                          >
+                            Unpublish
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={publishingId === product.id}
+                            onClick={() => void publish(product.id, true)}
+                          >
+                            {publishingId === product.id ? "Publishing…" : "Publish"}
+                          </Button>
+                        )
+                      ) : null}
                       {canEdit ? (
                         <Link
                           href={`/admin/catalog/products/${product.id}/edit`}
@@ -141,13 +256,24 @@ export function ProductListTable({
                           View
                         </Link>
                       )}
+                      {canDelete ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="text-rose-600 hover:bg-rose-50"
+                          onClick={() => setConfirmDelete([product.id])}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </Button>
+                      ) : null}
                     </div>
                   </TableCell>
                 </TableRow>
 
                 {isExpanded && (
                   <TableRow className="bg-slate-50/50 hover:bg-slate-50/50">
-                    <TableCell colSpan={6} className="p-0 border-t border-slate-200/80">
+                    <TableCell colSpan={colSpan} className="p-0 border-t border-slate-200/80">
                       <div className="py-3 px-6 bg-slate-50/60 border-l-4 border-l-brand-500">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
@@ -165,7 +291,6 @@ export function ProductListTable({
                               <tr>
                                 <th className="px-3 py-2 text-left">Variant</th>
                                 <th className="px-3 py-2 text-right">Price</th>
-                                {canViewCost && <th className="px-3 py-2 text-right">Cost</th>}
                                 <th className="px-3 py-2 text-center">Preorder</th>
                               </tr>
                             </thead>
@@ -192,11 +317,6 @@ export function ProductListTable({
                                         )}
                                       </div>
                                     </td>
-                                    {canViewCost && (
-                                      <td className="px-3 py-2 text-right text-slate-600">
-                                        {variant.costPaisa != null ? formatPaisa(variant.costPaisa) : "—"}
-                                      </td>
-                                    )}
                                     <td className="px-3 py-2 text-center">
                                       {variant.isPreorderEnabled === null ? (
                                         <span className="text-slate-400 text-[11px]">
@@ -232,6 +352,31 @@ export function ProductListTable({
           })}
         </TableBody>
       </Table>
+
+      {confirmDelete ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
+          <DialogContent
+            title={confirmDelete.length === 1 ? "Move this product to the bin?" : `Move ${confirmDelete.length} products to the bin?`}
+            description="They leave the catalogue and can be restored from the bin. Permanent deletion happens only from the bin."
+            className="max-w-md"
+          >
+            {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
+            <p className="text-sm text-slate-600">
+              {confirmDelete.length === 1
+                ? `Move “${products.find((product) => product.id === confirmDelete[0])?.name ?? "this product"}” to the bin?`
+                : `${confirmDelete.length} products will be moved to the bin.`}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setConfirmDelete(null)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" disabled={loading} onClick={() => void moveToBin(confirmDelete)}>
+                {loading ? "Moving…" : "Move to bin"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

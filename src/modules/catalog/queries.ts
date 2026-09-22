@@ -195,7 +195,7 @@ export async function listCategoryOptions(businessId: string) {
 
 export async function listAttributes(businessId: string) {
   return prisma.attribute.findMany({
-    where: { businessId },
+    where: { businessId, deletedAt: null },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     include: {
       values: { orderBy: [{ position: "asc" }, { value: "asc" }], select: { id: true, value: true, slug: true, colorHex: true } },

@@ -11,8 +11,6 @@ import { CollapsibleGroup, CollapsibleSection } from "@/components/ui/collapsibl
 import {
   checkProductSkusAction,
   checkProductSlugAction,
-  listBrandsAction,
-  listLabelsAction,
   saveProductAction,
   setAttributeValueImageAction,
 } from "@/modules/catalog/product-actions";
@@ -195,13 +193,20 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     setSlugState({ checking: state.slug.trim().length > 0, available: null, suggestion: null });
   }
 
+  const lastCheckedSlug = React.useRef<string>("");
   React.useEffect(() => {
     const slug = state.slug.trim();
-    if (!slug) return;
+    const productId = product?.id ?? draft.productId ?? "";
+    const key = `${productId}:${slug}`;
+    if (!slug || key === lastCheckedSlug.current) {
+      if (!slug) setSlugState({ checking: false, available: null, suggestion: null });
+      return;
+    }
     let cancelled = false;
     const handle = setTimeout(async () => {
       const result = await checkProductSlugAction({ slug, productId: product?.id ?? draft.productId ?? undefined });
       if (cancelled) return;
+      lastCheckedSlug.current = key;
       if (!result.ok) {
         setSlugState({ checking: false, available: null, suggestion: null });
         return;
@@ -216,13 +221,20 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
   /* ------------------------------------------------- product code uniqueness */
 
+  const lastCheckedSku = React.useRef<string>("");
   React.useEffect(() => {
     const code = normalizeSku(state.productCode);
-    if (!code) return;
+    const productId = product?.id ?? draft.productId ?? "";
+    const key = `${productId}:${code}`;
+    if (!code || code.length < 2 || key === lastCheckedSku.current) {
+      if (!code) setSkuState({ checking: false, message: null });
+      return;
+    }
     let cancelled = false;
     const handle = setTimeout(async () => {
       const result = await checkProductSkusAction({ productId: product?.id ?? draft.productId ?? undefined, productCode: code });
       if (cancelled) return;
+      lastCheckedSku.current = key;
       setSkuState({
         checking: false,
         message: !result.ok
@@ -512,7 +524,16 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
   const setAttributeValueImage = async (attributeValueId: string, mediaId: string | null) => {
     patch({ attributeValueImages: { ...state.attributeValueImages, [attributeValueId]: mediaId } });
-    const result = await setAttributeValueImageAction({ attributeValueId, mediaId, productId: product?.id });
+    if (!product?.id) {
+      setAttributes((current) =>
+        current.map((attribute) => ({
+          ...attribute,
+          values: attribute.values.map((value) => (value.id === attributeValueId ? { ...value, mediaId } : value)),
+        })),
+      );
+      return;
+    }
+    const result = await setAttributeValueImageAction({ attributeValueId, mediaId, productId: product.id });
     if (!result.ok) {
       toast.error(result.message);
       return;
@@ -636,9 +657,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
                 ? current
                 : [{ id: brand.id, name: brand.name, slug: brand.slug, productCount: 0, logo: brand.logo }, ...current],
             );
-            void listBrandsAction().then((result) => {
-              if (result.ok) setBrands(result.data.map(toBrandChoice));
-            });
           }}
           onLabelCreated={(label) => {
             setLabels((current) =>
@@ -646,9 +664,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
                 ? current
                 : [{ id: label.id, name: label.name, slug: label.slug, productCount: 0, colorHex: label.colorHex, image: label.image }, ...current],
             );
-            void listLabelsAction().then((result) => {
-              if (result.ok) setLabels(result.data.map(toLabelChoice));
-            });
           }}
           onCategoryCreated={(category) => setCategories((current) => (current.some((entry) => entry.id === category.id) ? current : [...current, category]))}
           onUnitLabelCreated={(label) =>
@@ -750,7 +765,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           name={state.name}
           slug={state.slug}
           productUrlPrefix={data.productUrlPrefix}
-          canViewCost={data.canViewCost}
+          showPackagingCost={Boolean(product)}
           errors={errors}
           onPatch={(value) => patch(value as Partial<ProductEditorState>)}
           onSeoImageChange={(asset) => patch({ seoImage: asset })}

@@ -689,13 +689,10 @@ export async function deleteCategory(actor: CatalogActor, categoryId: string): P
       include: { _count: { select: { products: true, children: true } } },
     });
     if (!category) throw AppError.notFound("Category not found");
-    if (category._count.products > 0) {
-      throw AppError.conflict("This category is assigned to products. Remove it from those products first.");
-    }
     if (category._count.children > 0) {
       throw AppError.conflict("This category has sub-categories. Move or delete them first.");
     }
-    await tx.category.delete({ where: { id: categoryId } });
+    await tx.category.update({ where: { id: categoryId }, data: { deletedAt: new Date(), isActive: false } });
     await tx.auditLog.create({
       data: {
         businessId: actor.businessId,
@@ -704,9 +701,9 @@ export async function deleteCategory(actor: CatalogActor, categoryId: string): P
         action: "category.deleted",
         entityType: "Category",
         entityId: categoryId,
-        summary: `Deleted category ${category.name}`,
+        summary: `Moved category ${category.name} to the bin`,
         before: { name: category.name, slug: category.slug },
-        changedFields: ["category"],
+        changedFields: ["deletedAt"],
       },
     });
   });

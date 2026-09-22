@@ -3,7 +3,19 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { RotateCcw, Trash2 } from "lucide-react";
-import { permanentlyDeleteProductAction, restoreBinnedProductAction } from "@/modules/catalog/product-actions";
+import { permanentlyDeleteBinnedItemAction, restoreBinnedItemAction } from "@/modules/catalog/product-actions";
+
+type BinEntityType = "product" | "brand" | "label" | "category";
+
+interface BinItem {
+  id: string;
+  type: BinEntityType;
+  name: string;
+  sku: string | null;
+  slug: string | null;
+  status: string;
+  removedAt: Date | string;
+}
 import {
   Badge,
   Button,
@@ -20,27 +32,23 @@ import {
 import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { formatDateTime } from "@/lib/utils";
 
-interface BinnedProduct {
-  id: string;
-  name: string;
-  sku: string | null;
-  slug: string;
-  status: string;
-  deletedAt: Date | string | null;
-  archivedAt: Date | string | null;
-  updatedAt: Date | string;
-}
+const TYPE_LABEL: Record<BinEntityType, string> = {
+  product: "Product",
+  brand: "Brand",
+  label: "Label",
+  category: "Category",
+};
 
 export function BinManager({
   items,
   canManage,
 }: {
-  items: BinnedProduct[];
+  items: BinItem[];
   canManage: boolean;
 }) {
   const router = useRouter();
-  const [restoreItem, setRestoreItem] = React.useState<BinnedProduct | null>(null);
-  const [deleteItem, setDeleteItem] = React.useState<BinnedProduct | null>(null);
+  const [restoreItem, setRestoreItem] = React.useState<BinItem | null>(null);
+  const [deleteItem, setDeleteItem] = React.useState<BinItem | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -48,7 +56,7 @@ export function BinManager({
     if (!restoreItem) return;
     setLoading(true);
     setError(null);
-    const result = await restoreBinnedProductAction(restoreItem.id);
+    const result = await restoreBinnedItemAction({ type: restoreItem.type, id: restoreItem.id });
     setLoading(false);
     if (result.ok) {
       setRestoreItem(null);
@@ -62,7 +70,7 @@ export function BinManager({
     if (!deleteItem) return;
     setLoading(true);
     setError(null);
-    const result = await permanentlyDeleteProductAction(deleteItem.id);
+    const result = await permanentlyDeleteBinnedItemAction({ type: deleteItem.type, id: deleteItem.id });
     setLoading(false);
     if (result.ok) {
       setDeleteItem(null);
@@ -76,7 +84,7 @@ export function BinManager({
     return (
       <Card>
         <CardContent>
-          <EmptyState title="The bin is empty" description="Discarded drafts and archived products appear here." />
+          <EmptyState title="The bin is empty" description="Deleted catalogue records appear here until you restore or permanently remove them." />
         </CardContent>
       </Card>
     );
@@ -88,7 +96,8 @@ export function BinManager({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Product</TableHead>
+              <TableHead>Item</TableHead>
+              <TableHead>Type</TableHead>
               <TableHead>SKU</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Removed</TableHead>
@@ -97,18 +106,19 @@ export function BinManager({
           </TableHeader>
           <TableBody>
             {items.map((item) => (
-              <TableRow key={item.id}>
+              <TableRow key={`${item.type}-${item.id}`}>
                 <TableCell>
                   <p className="font-medium text-slate-900">{item.name}</p>
-                  <p className="font-mono text-[11px] text-slate-400">{item.slug}</p>
+                  {item.slug ? <p className="font-mono text-[11px] text-slate-400">{item.slug}</p> : null}
+                </TableCell>
+                <TableCell>
+                  <Badge variant="neutral">{TYPE_LABEL[item.type]}</Badge>
                 </TableCell>
                 <TableCell className="font-mono text-xs">{item.sku ?? "—"}</TableCell>
                 <TableCell>
-                  <Badge variant="neutral">{item.status.toLowerCase()}</Badge>
+                  <Badge variant="neutral">{item.status}</Badge>
                 </TableCell>
-                <TableCell className="text-xs text-slate-500">
-                  {formatDateTime(item.deletedAt ?? item.archivedAt ?? item.updatedAt)}
-                </TableCell>
+                <TableCell className="text-xs text-slate-500">{formatDateTime(item.removedAt)}</TableCell>
                 {canManage ? (
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -136,7 +146,7 @@ export function BinManager({
 
       {restoreItem ? (
         <Dialog open onOpenChange={(open) => { if (!open) setRestoreItem(null); }}>
-          <DialogContent title="Restore this product?" description="It returns to the catalogue as a draft so you can review it before publishing." className="max-w-md">
+          <DialogContent title={`Restore this ${TYPE_LABEL[restoreItem.type].toLowerCase()}?`} description="It returns to the catalogue so you can review it." className="max-w-md">
             {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
             <p className="text-sm text-slate-600">
               Restore <span className="font-medium text-slate-900">{restoreItem.name}</span>?
@@ -156,8 +166,8 @@ export function BinManager({
       {deleteItem ? (
         <Dialog open onOpenChange={(open) => { if (!open) setDeleteItem(null); }}>
           <DialogContent
-            title="Permanently delete this product?"
-            description="This cannot be undone. Order history that already references the product is kept, but the catalogue record is removed."
+            title={`Permanently delete this ${TYPE_LABEL[deleteItem.type].toLowerCase()}?`}
+            description="This cannot be undone."
             className="max-w-md"
           >
             {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}

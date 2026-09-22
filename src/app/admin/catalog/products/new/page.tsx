@@ -44,7 +44,7 @@ export default async function NewProductPage() {
 
       <Alert variant="info" title="The whole form is saved in one transaction">
         Product, variants, prices, images and category links are written together, so a half-finished product can never be published.
-        Purchase cost is {data.canViewCost ? "visible to you" : "hidden because your role cannot view costs"}.
+        Purchase cost is recorded on purchase orders, not on this form.
       </Alert>
 
       <ProductEditorForm data={data} />
