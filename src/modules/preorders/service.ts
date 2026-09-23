@@ -193,7 +193,7 @@ export async function allocatePreorderQueue(
   return withTransaction(async (tx) => {
     const variant = await tx.variant.findFirst({
       where: { id: input.variantId, product: { businessId: actor.businessId } },
-      select: { id: true, sku: true },
+      select: { id: true, name: true, product: { select: { sku: true } } },
     });
     if (!variant) throw AppError.notFound("Variant not found");
 
@@ -243,7 +243,7 @@ export async function allocatePreorderQueue(
         action: "preorder.allocated",
         entityType: "Variant",
         entityId: input.variantId,
-        summary: `Allocated ${result.allocated} unit(s) of ${variant.sku} to ${result.commitments.length} preorder(s)`,
+        summary: `Allocated ${result.allocated} unit(s) of ${variant.product?.sku ?? variant.name} to ${result.commitments.length} preorder(s)`,
         after: { allocated: result.allocated, skipped, commitments: result.commitments.length, available },
         changedFields: ["preorderCommitted", "reserved"],
       },

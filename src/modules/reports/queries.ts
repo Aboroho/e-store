@@ -253,15 +253,15 @@ async function inventoryValuation(businessId: string): Promise<ReportResult> {
     where: { variant: { product: { businessId } } },
     include: {
       location: { select: { name: true, code: true } },
-      variant: { select: { sku: true, name: true, costPaisa: true, product: { select: { name: true } } } },
+      variant: { select: { name: true, costPaisa: true, product: { select: { name: true, sku: true } } } },
     },
-    orderBy: [{ location: { name: "asc" } }, { variant: { sku: "asc" } }],
+      orderBy: [{ location: { name: "asc" } }, { variant: { product: { sku: "asc" } } }],
     take: 5000,
   });
 
   const rows = balances.map((balance) => ({
     location: balance.location.name,
-    sku: balance.variant.sku,
+    sku: balance.variant.product.sku ?? "",
     product: balance.variant.product.name,
     variant: balance.variant.name,
     onHand: balance.onHand,
@@ -307,7 +307,7 @@ async function inventoryMovements(businessId: string, range: { from: Date; to: D
     orderBy: { createdAt: "desc" },
     take: 5000,
     include: {
-      variant: { select: { sku: true, name: true } },
+      variant: { select: { name: true, product: { select: { sku: true, name: true } } } },
       location: { select: { name: true } },
     },
   });
@@ -315,7 +315,7 @@ async function inventoryMovements(businessId: string, range: { from: Date; to: D
   const rows = movements.map((movement) => ({
     createdAt: movement.createdAt.toISOString(),
     type: movement.type,
-    sku: movement.variant?.sku ?? "(deleted variant)",
+    sku: movement.variant?.product.sku ?? "(deleted variant)",
     location: movement.location?.name ?? "—",
     onHandDelta: movement.quantityDelta,
     reservedDelta: movement.reservedDelta,
@@ -354,11 +354,11 @@ async function damagedStock(businessId: string): Promise<ReportResult> {
       where: { businessId, damagedDelta: { gt: 0 } },
       orderBy: { createdAt: "desc" },
       take: 1000,
-      include: { variant: { select: { sku: true, name: true } }, location: { select: { name: true } } },
+      include: { variant: { select: { name: true, product: { select: { sku: true, name: true } } } }, location: { select: { name: true } } },
     }),
     prisma.inventoryBalance.findMany({
       where: { variant: { product: { businessId } }, OR: [{ damaged: { gt: 0 } }, { inspection: { gt: 0 } }] },
-      include: { variant: { select: { sku: true, name: true } }, location: { select: { name: true } } },
+      include: { variant: { select: { name: true, product: { select: { sku: true, name: true } } } }, location: { select: { name: true } } },
       orderBy: { damaged: "desc" },
     }),
   ]);
@@ -377,7 +377,7 @@ async function damagedStock(businessId: string): Promise<ReportResult> {
     ],
     rows: damagedBalances.map((balance) => ({
       location: balance.location.name,
-      sku: balance.variant.sku,
+      sku: balance.variant.product.sku ?? "",
       variant: balance.variant.name,
       damaged: balance.damaged,
       inspection: balance.inspection,
@@ -401,7 +401,7 @@ async function damagedStock(businessId: string): Promise<ReportResult> {
         ],
         rows: damagedMovements.map((movement) => ({
           createdAt: movement.createdAt.toISOString(),
-          sku: movement.variant?.sku ?? "—",
+          sku: movement.variant?.product.sku ?? "—",
           quantity: movement.damagedDelta,
           reason: movement.reason ?? "",
           reference: movement.reference ?? "",
@@ -418,7 +418,7 @@ async function preordersOutstanding(businessId: string): Promise<ReportResult> {
     take: 2000,
     include: {
       order: { select: { orderNumber: true, customerName: true, customerPhoneNormalized: true } },
-      variant: { select: { sku: true, name: true, product: { select: { name: true } } } },
+      variant: { select: { name: true, product: { select: { name: true, sku: true } } } },
       location: { select: { name: true } },
     },
   });
@@ -429,7 +429,7 @@ async function preordersOutstanding(businessId: string): Promise<ReportResult> {
     customer: commitment.order.customerName ?? "",
     phone: commitment.order.customerPhoneNormalized ?? "",
     product: commitment.variant?.product.name ?? "—",
-    sku: commitment.variant?.sku ?? "—",
+    sku: commitment.variant?.product.sku ?? "—",
     location: commitment.location.name,
     quantity: commitment.quantity,
     allocated: commitment.allocatedQuantity,

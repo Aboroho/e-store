@@ -69,7 +69,7 @@ export default async function CategoriesPage() {
                           variant="ghost"
                           size="sm"
                           pendingLabel="…"
-                          confirm={`Delete ${category.name}? Products keep existing but lose this category.`}
+                          confirm={`Move ${category.name} to the bin? You can restore it later.`}
                         >
                           Delete
                         </SubmitButton>

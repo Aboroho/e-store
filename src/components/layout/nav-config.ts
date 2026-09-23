@@ -22,6 +22,11 @@ export interface NavItem {
 export interface NavSection {
   title: string;
   items: NavItem[];
+  /**
+   * When true the title is a parent that expands/collapses its children and
+   * does not navigate. Used by Products so the submenu can indent under it.
+   */
+  collapsible?: boolean;
 }
 
 export const ADMIN_NAV: NavSection[] = [
@@ -33,9 +38,11 @@ export const ADMIN_NAV: NavSection[] = [
     ],
   },
   {
-    title: "Catalog",
+    title: "Products",
+    collapsible: true,
     items: [
-      { label: "Products", href: "/admin/catalog/products", permission: "product.view", icon: "Package", stage: 2 },
+      { label: "Add new", href: "/admin/catalog/products/new", permission: "product.create", icon: "Plus", stage: 2 },
+      { label: "Product list", href: "/admin/catalog/products", permission: "product.view", icon: "Package", stage: 2 },
       { label: "Categories", href: "/admin/catalog/categories", permission: "product.view", icon: "FolderTree", stage: 2 },
       { label: "Attributes", href: "/admin/catalog/attributes", permission: "product.view", icon: "Palette", stage: 2 },
       { label: "Brands", href: "/admin/catalog/brands", permission: "product.view", icon: "Bookmark", stage: 2 },
@@ -85,8 +92,6 @@ export const ADMIN_NAV: NavSection[] = [
     items: [
       { label: "Storefronts", href: "/admin/storefronts", permission: "storefront.manage", icon: "Globe", stage: 5 },
       { label: "Pages", href: "/admin/pages", permission: "page.manage", icon: "FileText", stage: 5 },
-      // Stage 4: the Media Library page is live, so the entry is enabled — it is
-      // the standalone way into the media manager, with no upload field needed.
       { label: "Media", href: "/admin/media", permission: "media.manage", icon: "Image", stage: 4 },
       { label: "Reviews", href: "/admin/reviews", permission: "review.moderate", icon: "Star", stage: 5 },
     ],
@@ -99,6 +104,7 @@ export const ADMIN_NAV: NavSection[] = [
       { label: "API keys", href: "/admin/api-keys", permission: "api_key.manage", icon: "KeyRound", stage: 5 },
       { label: "Plugins", href: "/admin/plugins", permission: "plugin.manage", icon: "Puzzle", stage: 5 },
       { label: "Background jobs", href: "/admin/jobs", permission: "job.manage", icon: "Activity", stage: 5 },
+      { label: "Bin", href: "/admin/bin", permission: "product.view", icon: "Trash2", stage: 2 },
       { label: "Audit log", href: "/admin/audit", permission: "audit.view", icon: "ScrollText", stage: 1 },
       { label: "Users", href: "/admin/users", permission: "user.manage", icon: "UserCog", stage: 1 },
       { label: "Roles", href: "/admin/roles", permission: "role.manage", icon: "ShieldCheck", stage: 1 },

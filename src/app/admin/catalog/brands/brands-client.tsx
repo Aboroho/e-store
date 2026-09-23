@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Edit2, Bookmark } from "lucide-react";
+import { Plus, Trash2, Edit2 } from "lucide-react";
 import {
   createBrandPresetAction,
   updateBrandPresetAction,
@@ -46,6 +46,7 @@ export function BrandsManager({
   const [items, setItems] = React.useState<BrandItem[]>(initialItems);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editItem, setEditItem] = React.useState<BrandItem | null>(null);
+  const [deleteItem, setDeleteItem] = React.useState<BrandItem | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -112,16 +113,17 @@ export function BrandsManager({
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this brand?")) return;
+  const handleDelete = async () => {
+    if (!deleteItem) return;
     setLoading(true);
-    const res = await deleteBrandPresetAction(id);
+    const res = await deleteBrandPresetAction(deleteItem.id);
     setLoading(false);
     if (res.ok) {
-      setItems((prev) => prev.filter((i) => i.id !== id));
+      setItems((prev) => prev.filter((i) => i.id !== deleteItem.id));
+      setDeleteItem(null);
       router.refresh();
     } else {
-      alert(res.message);
+      setError(res.message);
     }
   };
 
@@ -235,6 +237,25 @@ export function BrandsManager({
         </Dialog>
       )}
 
+      {deleteItem ? (
+        <Dialog open={Boolean(deleteItem)} onOpenChange={(open) => { if (!open) setDeleteItem(null); }}>
+          <DialogContent title="Delete this brand?" description="Products keep their other organisation. The brand is archived, not hard-deleted." className="max-w-md">
+            {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
+            <p className="text-sm text-slate-600">
+              Delete <span className="font-medium text-slate-900">{deleteItem.name}</span>?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setDeleteItem(null)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" disabled={loading} onClick={handleDelete}>
+                {loading ? "Deleting…" : "Delete brand"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
       {initialItems.length === 0 ? (
         <Card>
           <CardContent>
@@ -295,7 +316,7 @@ export function BrandsManager({
                           size="sm"
                           variant="ghost"
                           className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                          onClick={() => handleDelete(brand.id)}
+                          onClick={() => { setError(null); setDeleteItem(brand); }}
                           title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

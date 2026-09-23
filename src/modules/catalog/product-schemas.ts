@@ -49,8 +49,6 @@ export const productVariantInputSchema = z.object({
   /** Present when the variant already exists (edit/regeneration keeps its identity). */
   id: zId.optional(),
   name: z.string().trim().min(1, "Give the variant a name").max(160),
-  /** Variant SKU is optional in the workflow; SKU belongs to the main product. */
-  sku: z.string().trim().max(64).optional(),
   barcode: zOptionalText(64),
   /** Regular / current price in paisa. */
   currentPricePaisa: zMoneyPaisa.optional(),
@@ -98,6 +96,7 @@ export const productDraftSchema = z.object({
   unitLabelId: zId.nullable().optional(),
   categoryIds: z.array(zId).max(50).default([]),
   primaryCategoryId: zId.nullable().optional(),
+  labelIds: z.array(zId).max(50).default([]),
   attributeIds: z.array(zId).max(30).default([]),
 
   shortDescription: richTextDocumentSchema,
@@ -330,8 +329,24 @@ export const slugCheckSchema = z.object({
 export const skuCheckSchema = z.object({
   productId: zId.optional(),
   productSku: z.string().trim().max(64).optional(),
-  variantSkus: z.array(z.object({ key: z.string().min(1), sku: z.string().trim().max(64) })).max(500).default([]),
+  productCode: z.string().trim().max(64).optional(),
 });
+
+export const labelInputSchema = z.object({
+  name: z.string().trim().min(1, "Enter the label name").max(80),
+  slug: slugSchema.optional(),
+  description: zOptionalText(500),
+  colorHex: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}$/, "Colour must be a hex value such as #ff0000")
+    .optional()
+    .or(z.literal("")),
+  imageMediaId: z.string().uuid().nullable().optional(),
+  isActive: z.boolean().default(true),
+});
+
+export type LabelInput = z.infer<typeof labelInputSchema>;
 
 export type BrandInput = z.infer<typeof brandInputSchema>;
 export type UnitLabelInput = z.infer<typeof unitLabelInputSchema>;

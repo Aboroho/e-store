@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Menu, Search, X } from "lucide-react";
+import { Bell, ChevronDown, Menu, PanelLeftClose, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NavIcon } from "@/components/layout/icon-map";
 import { Avatar, Badge, buttonVariants } from "@/components/ui/primitives";
@@ -35,6 +35,152 @@ export interface ShellNotification {
   createdAt: string;
 }
 
+/** True when this href is the most specific match among all nav items. */
+function isNavActive(pathname: string, href: string, allHrefs: string[]) {
+  const matches = (candidate: string) => {
+    if (candidate === "/admin") return pathname === "/admin" || pathname === "/admin/";
+    return pathname === candidate || pathname.startsWith(`${candidate}/`);
+  };
+  if (!matches(href)) return false;
+  const longerMatch = allHrefs.some((other) => other !== href && other.length > href.length && matches(other));
+  return !longerMatch;
+}
+
+function NavItemLink({
+  item,
+  active,
+  currentStage,
+  unreadCount,
+  onNavigate,
+  indented,
+}: {
+  item: NavSection["items"][number];
+  active: boolean;
+  currentStage: number;
+  unreadCount: number;
+  onNavigate: () => void;
+  indented?: boolean;
+}) {
+  const available = item.stage <= currentStage;
+  if (!available) {
+    return (
+      <li>
+        <span
+          className={cn(
+            "flex cursor-not-allowed items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-slate-400",
+            indented && "pl-8",
+          )}
+          title={`Arrives in Stage ${item.stage}`}
+        >
+          <NavIcon name={item.icon} className="h-4 w-4 shrink-0" />
+          <span className="truncate">{item.label}</span>
+          <span className="ml-auto rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+            S{item.stage}
+          </span>
+        </span>
+      </li>
+    );
+  }
+  return (
+    <li>
+      <Link
+        href={item.href}
+        onClick={onNavigate}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
+          indented && "ml-3 border-l border-slate-200 pl-5",
+          active ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+        )}
+      >
+        <NavIcon name={item.icon} className="h-4 w-4 shrink-0" />
+        <span className="truncate">{item.label}</span>
+        {item.badge === "notifications" && unreadCount > 0 ? (
+          <span className="ml-auto rounded-full bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        ) : null}
+      </Link>
+    </li>
+  );
+}
+
+function NavSectionBlock({
+  section,
+  pathname,
+  allHrefs,
+  currentStage,
+  unreadCount,
+  onNavigate,
+}: {
+  section: NavSection;
+  pathname: string;
+  allHrefs: string[];
+  currentStage: number;
+  unreadCount: number;
+  onNavigate: () => void;
+}) {
+  const childActive = section.items.some((item) => isNavActive(pathname, item.href, allHrefs));
+  const [open, setOpen] = useState(childActive);
+
+  useEffect(() => {
+    if (childActive) setOpen(true);
+  }, [childActive]);
+
+  if (section.collapsible) {
+    return (
+      <div>
+        <button
+          type="button"
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-semibold transition-colors",
+            childActive ? "text-brand-700" : "text-slate-700 hover:bg-slate-50",
+          )}
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <NavIcon name="Package" className="h-4 w-4 shrink-0" />
+          <span className="truncate">{section.title}</span>
+          <ChevronDown className={cn("ml-auto h-4 w-4 shrink-0 text-slate-400 transition-transform", open ? "rotate-0" : "-rotate-90")} aria-hidden="true" />
+        </button>
+        {open ? (
+          <ul className="mt-0.5 space-y-0.5">
+            {section.items.map((item) => (
+              <NavItemLink
+                key={item.href}
+                item={item}
+                active={isNavActive(pathname, item.href, allHrefs)}
+                currentStage={currentStage}
+                unreadCount={unreadCount}
+                onNavigate={onNavigate}
+                indented
+              />
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{section.title}</p>
+      <ul className="space-y-0.5">
+        {section.items.map((item) => (
+          <NavItemLink
+            key={item.href}
+            item={item}
+            active={isNavActive(pathname, item.href, allHrefs)}
+            currentStage={currentStage}
+            unreadCount={unreadCount}
+            onNavigate={onNavigate}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function AdminShell({
   sections,
   user,
@@ -54,18 +200,31 @@ export function AdminShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const allHrefs = sections.flatMap((section) => section.items.map((item) => item.href));
 
-  const isActive = (href: string) =>
-    href === "/admin" ? pathname === "/admin" : pathname === href || pathname.startsWith(`${href}/`);
+  useEffect(() => {
+    document.documentElement.style.setProperty("--admin-sidebar-width", sidebarOpen ? "16rem" : "0px");
+    return () => {
+      document.documentElement.style.removeProperty("--admin-sidebar-width");
+    };
+  }, [sidebarOpen]);
+
+  const closeOnMobile = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) {
+      setSidebarOpen(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 lg:grid lg:grid-cols-[16rem_1fr]">
-      {/* Sidebar */}
+    <div
+      className="min-h-screen bg-slate-50"
+      style={{ ["--admin-sidebar-width" as string]: sidebarOpen ? "16rem" : "0px" }}
+    >
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white transition-transform lg:static lg:translate-x-0",
-          mobileOpen ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 ease-out",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
         aria-label="Main navigation"
       >
@@ -81,8 +240,8 @@ export function AdminShell({
           </Link>
           <button
             type="button"
-            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 lg:hidden"
-            onClick={() => setMobileOpen(false)}
+            className="rounded-md p-1 text-slate-400 hover:bg-slate-100"
+            onClick={() => setSidebarOpen(false)}
             aria-label="Close navigation"
           >
             <X className="h-4 w-4" />
@@ -91,71 +250,35 @@ export function AdminShell({
 
         <nav className="h-[calc(100vh-4rem)] space-y-6 overflow-y-auto px-3 py-4">
           {sections.map((section) => (
-            <div key={section.title}>
-              <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{section.title}</p>
-              <ul className="space-y-0.5">
-                {section.items.map((item) => {
-                  const available = item.stage <= currentStage;
-                  if (!available) {
-                    return (
-                      <li key={item.href}>
-                        <span
-                          className="flex cursor-not-allowed items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-slate-400"
-                          title={`Arrives in Stage ${item.stage}`}
-                        >
-                          <NavIcon name={item.icon} className="h-4 w-4 shrink-0" />
-                          <span className="truncate">{item.label}</span>
-                          <span className="ml-auto rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
-                            S{item.stage}
-                          </span>
-                        </span>
-                      </li>
-                    );
-                  }
-                  return (
-                    <li key={item.href}>
-                      <Link
-                        href={item.href}
-                        onClick={() => setMobileOpen(false)}
-                        aria-current={isActive(item.href) ? "page" : undefined}
-                        className={cn(
-                          "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
-                          isActive(item.href)
-                            ? "bg-brand-50 text-brand-700"
-                            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
-                        )}
-                      >
-                        <NavIcon name={item.icon} className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{item.label}</span>
-                        {item.badge === "notifications" && unreadCount > 0 ? (
-                          <span className="ml-auto rounded-full bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                            {unreadCount > 99 ? "99+" : unreadCount}
-                          </span>
-                        ) : null}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            <NavSectionBlock
+              key={section.title}
+              section={section}
+              pathname={pathname}
+              allHrefs={allHrefs}
+              currentStage={currentStage}
+              unreadCount={unreadCount}
+              onNavigate={closeOnMobile}
+            />
           ))}
         </nav>
       </aside>
 
-      {mobileOpen ? (
-        <div className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setMobileOpen(false)} aria-hidden="true" />
+      {sidebarOpen ? (
+        <div className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       ) : null}
 
-      {/* Main column */}
-      <div className="flex min-h-screen flex-col">
+      <div
+        className="flex min-h-screen flex-col transition-[padding] duration-200 ease-out lg:pl-[var(--admin-sidebar-width,16rem)]"
+      >
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur">
           <button
             type="button"
-            className="rounded-md p-2 text-slate-500 hover:bg-slate-100 lg:hidden"
-            onClick={() => setMobileOpen(true)}
-            aria-label="Open navigation"
+            className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={sidebarOpen}
           >
-            <Menu className="h-5 w-5" />
+            {sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
 
           <form action="/admin/search" className="hidden flex-1 items-center gap-2 sm:flex">

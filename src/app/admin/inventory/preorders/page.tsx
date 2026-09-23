@@ -158,7 +158,7 @@ export default async function PreordersPage({
                     <Link href={`/admin/inventory/${commitment.variantId}`} className="font-medium text-brand-600 hover:underline">
                       {commitment.variant.product.name}
                     </Link>
-                    <p className="font-mono text-xs text-slate-500">{commitment.variant.sku}</p>
+                    <p className="font-mono text-xs text-slate-500">{commitment.variant.product?.sku}</p>
                   </TableCell>
                   <TableCell className="text-sm">
                     {commitment.order ? (

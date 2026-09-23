@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma, withTransaction } from "@/lib/db/client";
 import { generateToken, hashToken } from "@/lib/crypto";
@@ -8,6 +9,7 @@ import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 import { permissionsFromUser } from "@/lib/permissions";
 import { logger } from "@/lib/logging";
+import { staffLoginPath } from "@/lib/auth/paths";
 
 /**
  * Staff/admin session management.
@@ -156,6 +158,26 @@ export async function requireSession(): Promise<SessionUser> {
   const session = await getSession();
   if (!session) throw AppError.unauthenticated("You must sign in to continue");
   return session;
+}
+
+/**
+ * Require a staff session in a Server Component (layouts and pages).
+ *
+ * `requireSession()` throws `AppError` so API routes and actions can return 401.
+ * Layouts have no parent error boundary, so that throw surfaces as an uncaught
+ * overlay. Pages send the visitor to sign-in instead.
+ */
+export async function requirePageSession(): Promise<SessionUser> {
+  const session = await getSession();
+  if (session) return session;
+
+  const cookieStore = await cookies();
+  const hadCookie = Boolean(cookieStore.get(SESSION_COOKIE)?.value);
+  const headerList = await headers();
+  const pathname = headerList.get("x-pathname") ?? "/admin";
+  const search = headerList.get("x-search") ?? "";
+  const redirectTo = pathname.startsWith("/admin") ? `${pathname}${search}` : "/admin";
+  redirect(staffLoginPath({ redirectTo, sessionExpired: hadCookie }));
 }
 
 export async function revokeSession(sessionId: string, reason?: string): Promise<void> {

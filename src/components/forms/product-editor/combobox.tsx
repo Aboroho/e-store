@@ -82,11 +82,19 @@ export function Combobox(props: ComboboxProps) {
   React.useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
     };
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
+
+  const selectedSingle = !props.multiple && props.value
+    ? props.options.find((option) => option.value === props.value)
+    : null;
+  const inputValue = open ? query : (selectedSingle?.label ?? query);
 
   const isSelected = (option: ComboboxOption) =>
     props.multiple ? props.value.includes(option.value) : props.value === option.value;
@@ -125,7 +133,7 @@ export function Combobox(props: ComboboxProps) {
       <div className="relative">
         <div
           className={cn(
-            "flex w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm transition-colors focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500",
+            "flex min-h-10 w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm transition-colors hover:border-slate-400 focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500",
             disabled && "cursor-not-allowed bg-slate-50 opacity-70",
             errorText && "border-red-400",
           )}
@@ -139,8 +147,8 @@ export function Combobox(props: ComboboxProps) {
             aria-controls={listId}
             aria-autocomplete="list"
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-slate-400"
-            placeholder={placeholder}
-            value={query}
+            placeholder={open || !selectedSingle ? placeholder : undefined}
+            value={inputValue}
             disabled={disabled}
             onChange={(event) => {
               setQuery(event.target.value);
@@ -149,6 +157,7 @@ export function Combobox(props: ComboboxProps) {
             }}
             onFocus={() => {
               setOpen(true);
+              setQuery("");
               setActiveIndex(0);
             }}
             onKeyDown={(event) => {
@@ -169,6 +178,7 @@ export function Combobox(props: ComboboxProps) {
                 }
               } else if (event.key === "Escape") {
                 setOpen(false);
+                setQuery("");
               }
             }}
           />
@@ -254,6 +264,35 @@ export function Combobox(props: ComboboxProps) {
         ) : null}
       </div>
 
+      {props.multiple && props.value.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
+          {props.value.map((id) => {
+            const option = props.options.find((entry) => entry.value === id);
+            if (!option) return null;
+            return (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-700"
+              >
+                {option.imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- thumbnail from the media library
+                  <img src={option.imageUrl} alt="" className="h-3.5 w-3.5 rounded-full object-cover" />
+                ) : null}
+                {option.label}
+                <button
+                  type="button"
+                  aria-label={`Remove ${option.label}`}
+                  className="rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                  disabled={disabled}
+                  onClick={() => props.onChange(props.value.filter((value) => value !== id))}
+                >
+                  <X className="h-3 w-3" aria-hidden="true" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
       {children}
       {help && !errorText ? <p className="text-xs text-slate-500">{help}</p> : null}
       {errorText ? (

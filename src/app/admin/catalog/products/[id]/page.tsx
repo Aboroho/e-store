@@ -1,14 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ImageIcon } from "lucide-react";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
-import { formatPaisa } from "@/lib/money";
 import { formatDateTime } from "@/lib/utils";
-import { getProductForEdit } from "@/modules/catalog/queries";
-import { variantReferenceCounts } from "@/modules/catalog/service";
-import { availableQuantity } from "@/modules/inventory/service";
-import { archiveProductAction, archiveVariantAction, restoreProductAction } from "@/modules/catalog/actions";
+import { getProductView } from "@/modules/catalog/queries";
+import { archiveProductAction, restoreProductAction } from "@/modules/catalog/actions";
 import {
   Badge,
   Card,
@@ -16,15 +14,10 @@ import {
   CardHeader,
   CardTitle,
   PageHeader,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
   buttonVariants,
 } from "@/components/ui/primitives";
 import { SubmitButton } from "@/components/ui/interactive";
+import { ProductVariantsPanel } from "./product-variants-panel";
 
 export const metadata: Metadata = { title: "Product" };
 export const dynamic = "force-dynamic";
@@ -34,15 +27,10 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   assertPermission(session, "product.view");
   const { id } = await params;
 
-  const product = await getProductForEdit(session.businessId, id);
+  const product = await getProductView(session.businessId, id);
   if (!product) notFound();
-  const referenceCounts = new Map(
-    (await Promise.all(
-      product.variants.map(async (variant) => [variant.id, await variantReferenceCounts(variant.id)] as const),
-    )).map(([variantId, counts]) => [variantId, counts]),
-  );
   const canUpdate = can(session, "product.update");
-  const canArchive = can(session, "product.archive");
+  const canArchive = can(session, "product.delete");
   const archiveProduct = archiveProductAction.bind(null, product.id);
   const restoreProduct = restoreProductAction.bind(null, product.id);
 
@@ -52,107 +40,82 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         title={product.name}
         description={`${product.productType.toLowerCase()} product · ${product.variants.length} variant(s) · /${product.slug}`}
         actions={
-          <Link href="/admin/catalog/products" className={buttonVariants({ variant: "secondary" })}>
-            Back to products
-          </Link>
+          <div className="flex items-center gap-2">
+            {canUpdate ? (
+              <Link href={`/admin/catalog/products/${product.id}/edit`} className={buttonVariants({})}>
+                Edit product
+              </Link>
+            ) : null}
+            <Link href="/admin/catalog/products" className={buttonVariants({ variant: "secondary" })}>
+              Back to products
+            </Link>
+          </div>
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <Badge variant={product.status === "ACTIVE" ? "success" : product.status === "DRAFT" ? "warning" : "neutral"}>
-          {product.status.toLowerCase()}
-        </Badge>
-        <span className="text-slate-500">Updated {formatDateTime(product.updatedAt)}</span>
-        {canArchive ? (
-          product.deletedAt ? (
-            <form action={restoreProduct}>
-              <SubmitButton variant="outline" size="sm" pendingLabel="Restoring…">
-                Restore product
-              </SubmitButton>
-            </form>
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="h-16 w-16 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+          {product.image?.url ? (
+            // eslint-disable-next-line @next/next/no-img-element -- media is served from storage/CDN hosts
+            <img src={product.image.url} alt={product.image.alt || product.name} className="h-full w-full object-cover" />
           ) : (
-            <form action={archiveProduct}>
-              <SubmitButton
-                variant="outline"
-                size="sm"
-                pendingLabel="Archiving…"
-                confirm="Archive this product? It will no longer be sellable."
-              >
-                Archive product
-              </SubmitButton>
-            </form>
-          )
-        ) : null}
+            <div className="flex h-full w-full items-center justify-center text-slate-300">
+              <ImageIcon className="h-6 w-6" aria-hidden="true" />
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <Badge variant={product.status === "ACTIVE" ? "success" : product.status === "DRAFT" ? "warning" : "neutral"}>
+            {product.status.toLowerCase()}
+          </Badge>
+          {product.sku ? <span className="font-mono text-xs text-slate-600">SKU {product.sku}</span> : null}
+          {product.brand ? <span className="text-slate-600">{product.brand}</span> : null}
+          <span className="text-slate-500">Updated {formatDateTime(product.updatedAt)}</span>
+          {canArchive ? (
+            product.deletedAt ? (
+              <form action={restoreProduct}>
+                <SubmitButton variant="outline" size="sm" pendingLabel="Restoring…">
+                  Restore product
+                </SubmitButton>
+              </form>
+            ) : (
+              <form action={archiveProduct}>
+                <SubmitButton
+                  variant="outline"
+                  size="sm"
+                  pendingLabel="Archiving…"
+                  confirmTitle="Archive this product?"
+                  confirm="It will no longer be sellable. Restore it from the bin if you change your mind."
+                >
+                  Archive product
+                </SubmitButton>
+              </form>
+            )
+          ) : null}
+        </div>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Stock by variant</CardTitle>
+          <CardTitle>Variants</CardTitle>
           <p className="text-xs text-slate-500">
-            Available = on hand − reserved − damaged − inspection. Preorder backlog is tracked separately.
+            This page is view-only except for editing or deleting variants. Stock lives in Inventory, not on the product record.
           </p>
         </CardHeader>
         <CardContent className="px-0 py-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Variant</TableHead>
-                <TableHead>SKU</TableHead>
-                <TableHead className="text-right">Price</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead className="text-right">On hand</TableHead>
-                <TableHead className="text-right">Reserved</TableHead>
-                <TableHead className="text-right">Available</TableHead>
-                <TableHead className="text-right">Avg cost</TableHead>
-                <TableHead className="text-right">History</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {product.variants.map((variant) => {
-                const balance = variant.inventory[0];
-                const references = referenceCounts.get(variant.id) ?? { orderItems: 0, purchaseItems: 0, exchangeItems: 0, movements: 0, total: 0 };
-                return (
-                  <TableRow key={variant.id}>
-                    <TableCell>
-                      <Link href={`/admin/inventory/${variant.id}`} className="font-medium text-brand-600 hover:underline">
-                        {variant.name}
-                      </Link>
-                      <p className="text-xs text-slate-500">
-                        {variant.attributeValues
-                          .map((entry) => `${entry.attributeId.slice(0, 4)}…`)
-                          .join(" ") || "default"}
-                      </p>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{variant.sku}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {variant.priceOverridePaisa != null ? formatPaisa(variant.priceOverridePaisa) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{variant.costPaisa != null ? formatPaisa(variant.costPaisa) : "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{balance?.onHand ?? 0}</TableCell>
-                    <TableCell className="text-right tabular-nums">{balance?.reserved ?? 0}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      <span className={balance && availableQuantity(balance) <= 0 ? "font-medium text-red-600" : undefined}>
-                        {balance ? availableQuantity(balance) : 0}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {balance ? formatPaisa(balance.averageCostPaisa) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right text-xs text-slate-500">
-                      {references.total} change(s)
-                      {canArchive && variant.status === "ACTIVE" && references.total === 0 ? (
-                        <form action={archiveVariantAction.bind(null, variant.id, product.id)} className="mt-1">
-                          <SubmitButton variant="ghost" size="sm" pendingLabel="…">
-                            Archive
-                          </SubmitButton>
-                        </form>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+          <ProductVariantsPanel
+            productId={product.id}
+            productName={product.name}
+            productPreorder={product.isPreorderEnabled}
+            productDefaults={{
+              currentPricePaisa: product.defaultCurrentPricePaisa,
+              discountType: product.defaultDiscountType,
+              discountValue: product.defaultDiscountValue,
+              weightGrams: product.weightGrams,
+            }}
+            variants={product.variants}
+            canEdit={canUpdate}
+          />
         </CardContent>
       </Card>
 
@@ -171,7 +134,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </CardContent>
         </Card>
       ) : null}
-
     </div>
   );
 }

@@ -56,10 +56,11 @@ function bdtToPaisa(value: unknown): number | undefined {
 
 
 export async function archiveProductAction(productId: string, reasonOrForm?: string | FormData): Promise<void> {
-  const context = await actor("product.archive");
+  const context = await actor("product.delete");
   const reason = typeof reasonOrForm === "string" ? reasonOrForm : undefined;
   await archiveProduct(context, productId, reason);
   revalidatePath("/admin/catalog/products");
+  revalidatePath("/admin/bin");
   redirect("/admin/catalog/products");
 }
 
@@ -82,7 +83,7 @@ export async function updateVariantAction(_prev: ActionState, formData: FormData
     const raw = formDataToObject(formData);
     const variantId = String(raw.variantId ?? "");
     const parsed = parseInput(
-      variantInputSchema.partial({ name: true, sku: true, pricePaisa: true }),
+      variantInputSchema.partial({ name: true, pricePaisa: true }),
       {
         ...raw,
         pricePaisa: bdtToPaisa(raw.pricePaisa),
@@ -101,7 +102,7 @@ export async function updateVariantAction(_prev: ActionState, formData: FormData
 }
 
 export async function archiveVariantAction(variantId: string, productId: string): Promise<void> {
-  const context = await actor("product.archive");
+  const context = await actor("product.update");
   await archiveVariant(context, variantId);
   revalidatePath(`/admin/catalog/products/${productId}`);
 }
@@ -170,6 +171,7 @@ export async function deleteCategoryAction(categoryId: string): Promise<void> {
   const context = await actor("category.manage");
   await deleteCategory(context, categoryId);
   revalidatePath("/admin/catalog/categories");
+  revalidatePath("/admin/bin");
 }
 
 // ------------------------------------------------------------------ attributes

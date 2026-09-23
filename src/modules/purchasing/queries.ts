@@ -49,7 +49,7 @@ export async function getPurchaseOrder(businessId: string, purchaseOrderId: stri
       items: {
         orderBy: { position: "asc" },
         include: {
-          variant: { select: { id: true, sku: true, name: true, product: { select: { id: true, name: true } } } },
+          variant: { select: { id: true, name: true, product: { select: { id: true, name: true, sku: true } } } },
           receiptItems: { include: { goodsReceipt: { select: { code: true, receivedAt: true } } } },
         },
       },

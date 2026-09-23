@@ -73,7 +73,7 @@ export default async function VariantInventoryPage({ params }: { params: Promise
       />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="On hand" value={balance?.onHand ?? 0} hint={`SKU ${variant.sku}`} />
+        <StatCard label="On hand" value={balance?.onHand ?? 0} hint={`SKU ${variant.product?.sku ?? variant.name}`} />
         <StatCard label="Reserved" value={balance?.reserved ?? 0} tone="warning" hint="Committed to confirmed orders" />
         <StatCard label="Available" value={available} tone={available > 0 ? "success" : "danger"} />
         <StatCard label="Weighted average cost" value={formatPaisa(balance?.averageCostPaisa ?? 0)} />
@@ -230,7 +230,7 @@ export default async function VariantInventoryPage({ params }: { params: Promise
         presetVariantId={variant.id}
         variants={variants.map((entry) => ({
           id: entry.id,
-          sku: entry.sku ?? "",
+          sku: entry.product.sku ?? "",
           label: `${entry.product.name} — ${entry.name}`,
           available: entry.inventory.reduce((sum, row) => sum + availableQuantity(row), 0),
         }))}
