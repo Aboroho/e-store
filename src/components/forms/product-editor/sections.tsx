@@ -21,7 +21,7 @@ import { MediaPicker } from "@/components/media/media-picker";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { assetToRichTextAsset, uploadToMediaLibrary } from "@/components/media/media-upload";
 import { Combobox, FieldWithTip } from "./combobox";
-import { AddAttributeValueInline, CreateAttributeDialog, CreateBrandDialog, CreateCategoryDialog, CreateLabelDialog } from "./product-dialogs";
+import { AddAttributeValueInline, CreateAttributeDialog, CreateBrandDialog, CreateCategoryDialog } from "./product-dialogs";
 import { slugPreview } from "./product-url";
 import { WEIGHT_UNITS, type WeightUnit } from "@/modules/catalog/product-draft";
 import { formatPaisa } from "@/lib/money";
@@ -346,8 +346,6 @@ function MediaLibraryTrigger({ kind, onSelect }: { kind: "image" | "file"; onSel
 export function OrganizationSection({
   brandId,
   brands,
-  labels,
-  selectedLabelIds,
   categories,
   attributeCount,
   selectedCategoryIds,
@@ -360,14 +358,11 @@ export function OrganizationSection({
   errors,
   onPatch,
   onBrandCreated,
-  onLabelCreated,
   onCategoryCreated,
   onUnitLabelCreated,
 }: {
   brandId: string | null;
   brands: Array<{ id: string; name: string; slug: string; productCount: number; logo: { url: string | null } | null }>;
-  labels: Array<{ id: string; name: string; slug: string; productCount: number; colorHex: string | null; image: { url: string | null } | null }>;
-  selectedLabelIds: string[];
   categories: EditorCategory[];
   attributeCount: number;
   selectedCategoryIds: string[];
@@ -380,13 +375,12 @@ export function OrganizationSection({
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onBrandCreated: (brand: { id: string; name: string; slug: string; logo: { url: string | null } | null }) => void;
-  onLabelCreated: (label: { id: string; name: string; slug: string; colorHex: string | null; image: { url: string | null } | null }) => void;
   onCategoryCreated: (category: EditorCategory) => void;
   onUnitLabelCreated: (label: { id: string | null; name: string; slug: string; isDefault: boolean }) => void;
 }) {
   const [brandDialog, setBrandDialog] = React.useState(false);
-  const [labelDialog, setLabelDialog] = React.useState(false);
   const [categoryDialog, setCategoryDialog] = React.useState(false);
+  const [addingUnit, setAddingUnit] = React.useState(false);
   const [unitDraft, setUnitDraft] = React.useState("");
   const [unitSaving, setUnitSaving] = React.useState(false);
 
@@ -409,7 +403,7 @@ export function OrganizationSection({
     const result = await createUnitLabelAction({ name });
     setUnitSaving(false);
     if (!result.ok) return;
-    onPatch({ unitLabel: result.data.name });
+    onPatch({ unitLabel: result.data.name, unitLabelId: result.data.id });
     onUnitLabelCreated({ id: result.data.id, name: result.data.name, slug: result.data.slug, isDefault: unitLabels.length === 0 });
     setUnitDraft("");
   };
@@ -418,7 +412,7 @@ export function OrganizationSection({
     <CollapsibleSection
       id="organization"
       title="Product organisation"
-      description="Brand, categories, labels, how the product is sold and how much it weighs."
+      description="Brand, categories, how the product is counted, and how much it weighs."
       icon={<Layers className="h-4 w-4" />}
       defaultOpen
       badge={selectedCategoryIds.length > 0 ? `${selectedCategoryIds.length} category(ies)` : undefined}
@@ -448,66 +442,6 @@ export function OrganizationSection({
             </Button>
           }
         />
-
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Label htmlFor="product-labels" className="text-slate-800">
-              Labels
-            </Label>
-            <InfoTip>Merchandising tags such as New, Sale or Featured. Optional. The same label can be used on many products.</InfoTip>
-          </div>
-          <NativeSelect
-            id="product-labels"
-            value=""
-            onChange={(event) => {
-              const nextId = event.target.value;
-              if (!nextId || selectedLabelIds.includes(nextId)) return;
-              onPatch({ labelIds: [...selectedLabelIds, nextId] });
-            }}
-          >
-            <option value="">Add a label…</option>
-            {labels
-              .filter((label) => !selectedLabelIds.includes(label.id))
-              .map((label) => (
-                <option key={label.id} value={label.id}>
-                  {label.name}
-                </option>
-              ))}
-          </NativeSelect>
-          {selectedLabelIds.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {selectedLabelIds.map((id) => {
-                const label = labels.find((entry) => entry.id === id);
-                return (
-                  <span
-                    key={id}
-                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs text-slate-700"
-                  >
-                    {label?.colorHex ? (
-                      <span className="h-2.5 w-2.5 rounded-full border border-slate-300" style={{ backgroundColor: label.colorHex }} aria-hidden="true" />
-                    ) : null}
-                    {label?.name ?? id}
-                    <button
-                      type="button"
-                      className="text-slate-400 hover:text-slate-700"
-                      onClick={() => onPatch({ labelIds: selectedLabelIds.filter((entry) => entry !== id) })}
-                      aria-label={`Remove ${label?.name ?? "label"}`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-xs text-slate-500">Optional. Pick a label from the list, or create one.</p>
-          )}
-          {errors.labelIds ? <p className="text-xs text-red-600">{errors.labelIds[0]}</p> : null}
-          <Button type="button" variant="ghost" size="sm" className="justify-start px-0" onClick={() => setLabelDialog(true)}>
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            Create label
-          </Button>
-        </div>
 
         <Combobox
           id="product-categories"
@@ -558,38 +492,61 @@ export function OrganizationSection({
             <Label htmlFor="unit-label" className="text-slate-800">
               Unit label
             </Label>
-            <InfoTip>
-              Describes how this product is sold or counted, such as piece, pair or box. This is different from the weight unit below.
-            </InfoTip>
+            <InfoTip>How this product is counted — piece, pair, box. A value only: no slug or image.</InfoTip>
           </div>
-          <div className="flex items-center gap-2">
-            <Input
-              id="unit-label"
-              list="unit-label-options"
-              value={unitLabel}
-              maxLength={24}
-              onChange={(event) => onPatch({ unitLabel: event.target.value })}
-            />
-            <datalist id="unit-label-options">
-              {unitLabels.map((label) => (
-                <option key={label.slug} value={label.name} />
-              ))}
-            </datalist>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              className="h-8 w-40 text-xs"
-              value={unitDraft}
-              placeholder="Add a label"
-              maxLength={24}
-              onChange={(event) => setUnitDraft(event.target.value)}
-            />
-            <Button type="button" variant="outline" size="sm" disabled={unitSaving || !unitDraft.trim()} onClick={addUnitLabel}>
-              {unitSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
-              Save label
-            </Button>
-            <span className="text-xs text-slate-500">Labels are shared by every product; duplicates are ignored.</span>
-          </div>
+          <NativeSelect
+            id="unit-label"
+            value={addingUnit ? "__new__" : unitLabel}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === "__new__") {
+                setAddingUnit(true);
+                setUnitDraft("");
+                return;
+              }
+              setAddingUnit(false);
+              const match = unitLabels.find((entry) => entry.name === next);
+              onPatch({ unitLabel: next, unitLabelId: match?.id ?? null });
+            }}
+          >
+            {!unitLabel ? <option value="">Select a unit…</option> : null}
+            {unitLabel && !unitLabels.some((entry) => entry.name === unitLabel) ? <option value={unitLabel}>{unitLabel}</option> : null}
+            {unitLabels.map((entry) => (
+              <option key={entry.slug || entry.name} value={entry.name}>
+                {entry.name}
+              </option>
+            ))}
+            <option value="__new__">Add a new unit…</option>
+          </NativeSelect>
+          {addingUnit ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="h-8 w-40 text-xs"
+                value={unitDraft}
+                placeholder="e.g. piece"
+                maxLength={24}
+                onChange={(event) => setUnitDraft(event.target.value)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={unitSaving || !unitDraft.trim()}
+                onClick={async () => {
+                  await addUnitLabel();
+                  setAddingUnit(false);
+                }}
+              >
+                {unitSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+                Save unit
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setAddingUnit(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Shared across products. Pick one or add a new value.</p>
+          )}
           {errors.unitLabel ? <p className="text-xs text-red-600">{errors.unitLabel[0]}</p> : null}
         </div>
 
@@ -646,15 +603,6 @@ export function OrganizationSection({
         onCreated={(category) => {
           onCategoryCreated(category);
           onPatch({ categoryIds: [...selectedCategoryIds, category.id], primaryCategoryId: primaryCategoryId ?? category.id });
-        }}
-      />
-      <CreateLabelDialog
-        open={labelDialog}
-        onOpenChange={setLabelDialog}
-        productUrlPrefix={productUrlPrefix}
-        onCreated={(label) => {
-          onLabelCreated(label);
-          onPatch({ labelIds: [...selectedLabelIds, label.id] });
         }}
       />
     </CollapsibleSection>

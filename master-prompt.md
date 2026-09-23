@@ -347,7 +347,7 @@ Design models for:
 * Products (primary catalog entity; owns the product SKU / product code).
 * Product categories and category hierarchy.
 * Product-category relationships.
-* Product labels (first-class, like brand and category; selected or created inline from the editor).
+* Unit labels (value-only count units such as piece, pair, box — no slug, no image, no separate Label field).
 * Product attributes and attribute values (with optional attribute-level price overrides and default media).
 * Product attribute assignments.
 * Product variants (belonging strictly to a parent product; identified by `id` and a deterministic `optionKey`, never by a variant SKU).
@@ -365,13 +365,13 @@ Support simple products and variable products with a shared, unified creation an
 
 **Architectural Rules for Catalog & Variants:**
 * **SKU Ownership:** The SKU belongs to the main product. There is no variant SKU, no Variant SKU field, and no compatibility aliases (`variant_sku`, `variantSku`). Variants never own a code. Variant internal identity is `id` + `optionKey` for inventory, orders, and historical records. Order lines may snapshot the *product* SKU. Product is the primary catalog entity; variants belong to a product and never appear as independent top-level products.
-* **Three-Level Property Inheritance:** Manual variant override > Attribute-level override > Product default. This applies to price, cost, images, weight, and preorder flags. Clearing a manual override restores attribute-level or product-level default inheritance. The UI never treats the word "inherited" as an input value.
+* **Three-Level Property Inheritance:** Manual variant override > Attribute-level override > Product default. This applies to price, cost, images, weight, and preorder flags. Inherited fields always show the **actual inherited value** in the control (text, image, select — never the word "inherited"). After the user changes a field it is no longer inherited; show that clearly with an Inherit action that restores the product/attribute value.
 * **Product types:** SIMPLE products collapse attributes and variations; VARIABLE products generate combinations from selected attribute values. Switching to SIMPLE keeps one variant and clears attribute value ids.
 * **Product Creation/Editing Flow:** Create and edit share the same editor. Section chips, in this order:
   1. Product Information (name, product type, SKU/product code, barcode, unit).
-  2. Organization (brand, categories, labels with inline create, tax, packaging, shipping/weight).
+  2. Organization (brand, categories, unit label as a value-only count unit, shipping/weight). No Label field.
   3. Images (one primary image, separate additional images; no "make primary" inside additional images; all picks go through the Media Manager).
-  4. Attributes & Variations (select attributes and values; generate combinations; filters; bulk edit of selected variants and filter-targeted variants with dynamic fields). Image assignment is not part of attribute-value selection.
+  4. Attributes & Variations (select attributes and values; generate combinations; filters; bulk edit of selected variants and filter-targeted variants with dynamic fields). Variant rows are compact; editing a variant opens a dialog. Image assignment is not part of attribute-value selection.
   5. Product Description (its own section).
   6. SEO (last).
   Pricing (current price, % or flat discount, server-calculated sell price) renders after Information and is not a section chip.
@@ -379,7 +379,7 @@ Support simple products and variable products with a shared, unified creation an
 * **Inventory & Purchasing Integration:** No initial-stock-entry option in product creation or editing. The product list does not show on-hand or available quantities. All normal inbound stock comes through purchase receiving. Creating a product creates zeroed balances, never stock.
 * **Routes:** `/admin/catalog/products/:id` is view-only. `/admin/catalog/products/:id/edit` is the editor. There is no intermediate variant page. Edit from the list opens the editor directly.
 * **Drafts and bin:** Autosave is real (debounced) and persists server-side. Do not create duplicate drafts. Discarding an unpublished DRAFT bins the product. The bin supports restore and permanent delete through in-app confirmation dialogs, never `alert()`/`confirm()`.
-* **Navigation:** A **Product** sidebar group contains Products, Labels, and Bin. Brands, categories, attributes, tax rates, packaging costs, and unit labels stay under Catalog. Inventory stays under Stock.
+* **Navigation:** The admin sidebar **slides open and closed** (not an accordion-collapse of sections) and is **open by default**. A **Products** group lists Add new, Product list, then the other catalog options (Categories, Attributes, Brands, Price lists, Tax rates, Packaging costs, Unit labels). Bin is a **global** Platform item, not a product-only item. Inventory stays under Stock. There is no Labels nav item and no Label field on the product form.
 
 Prevent duplicate variant combinations for the same product.
 
@@ -878,7 +878,8 @@ Examples of attributes:
 * Each variant has a unique combination of attribute values within its product.
 * Variants may have their own images (override) or inherit the attribute-value default, then the product primary image.
 * Variants may inherit product-level pricing, cost, weight, and preorder flags.
-* Variant-level overrides must be supported. Clearing an override restores inheritance; never write the string "inherited" as a value.
+* Variant-level overrides must be supported. Inherited fields populate the real value in the input. Changing a field marks it custom; Inherit restores the product/attribute value. Never write the string "inherited" as a value.
+* Variant rows open an edit **dialog** for image, price, weight, and preorder. The table itself stays compact (variant, sell price, inherit note, actions).
 * Bulk editing must be available for selected variants and for attribute-filter targeting, with fields that change by action.
 * Bulk edits must preserve explicitly overridden values unless the operator asks to replace them.
 * Product images and variant images must use the centralized Media Manager. No one-off product uploads.
@@ -899,7 +900,7 @@ Provide:
 * Variant bulk editing (selected + filter targeting).
 * Independent primary image and additional images.
 * Product-level pricing with percentage or flat discount; sell price calculated on the server.
-* Labels, like brand and category, with inline create.
+* Unit label as a value-only count unit (NativeSelect + add new). No Label field.
 * Publication status.
 * Description as its own section; SEO last.
 * Draft autosave and recovery, with a leave confirmation dialog.
@@ -1951,7 +1952,7 @@ Implement and test the following end-to-end workflows.
 ## Workflow A: Catalog creation & product authoring
 
 1. Admin creates a product (name, product type, product SKU/code, barcode) and sets product-level pricing (current price, % or flat discount; sell price calculated on the server).
-2. Admin configures Organisation (brand, categories, labels with inline create, unit, shipping/weight, tax, packaging).
+2. Admin configures Organisation (brand, categories, unit label as a value-only count unit, shipping/weight).
 3. Admin assigns one primary image and additional gallery images through the Media Manager. The primary image is independent of the gallery.
 4. For VARIABLE products, admin selects attributes and values (without assigning images during selection), generates combinations, then reviews overrides and bulk-edits selected or filter-targeted variants. SIMPLE products keep one variant and skip the matrix.
 5. Admin writes the product description, then SEO last, and saves as Draft or Publishes.
@@ -2322,7 +2323,7 @@ Implement:
 
 * Product catalog.
 * Categories.
-* Labels.
+* Unit labels (value-only).
 * Attributes.
 * Simple products.
 * Variable products.

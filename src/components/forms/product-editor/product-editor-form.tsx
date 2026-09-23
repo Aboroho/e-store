@@ -63,21 +63,8 @@ interface BrandChoice {
   logo: { url: string | null } | null;
 }
 
-interface LabelChoice {
-  id: string;
-  name: string;
-  slug: string;
-  productCount: number;
-  colorHex: string | null;
-  image: { url: string | null } | null;
-}
-
 function toBrandChoice(brand: ProductEditorData["brands"][number]): BrandChoice {
   return { id: brand.id, name: brand.name, slug: brand.slug, productCount: brand.productCount, logo: brand.logo ?? null };
-}
-
-function toLabelChoice(label: ProductEditorData["labels"][number]): LabelChoice {
-  return { id: label.id, name: label.name, slug: label.slug, productCount: label.productCount, colorHex: label.colorHex, image: label.image ?? null };
 }
 
 type ErrorMap = Record<string, string[]>;
@@ -147,7 +134,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
   /* Option lists that `+ Create …` dialogs extend without a page reload. */
   const [brands, setBrands] = React.useState<BrandChoice[]>(() => data.brands.map(toBrandChoice));
-  const [labels, setLabels] = React.useState<LabelChoice[]>(() => data.labels.map(toLabelChoice));
   const [categories, setCategories] = React.useState<EditorCategory[]>(data.categories);
   const [attributes, setAttributes] = React.useState<EditorAttribute[]>(data.attributes);
   const [unitLabels, setUnitLabels] = React.useState(data.unitLabels);
@@ -644,8 +630,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         <OrganizationSection
           brandId={state.brandId}
           brands={brands}
-          labels={labels}
-          selectedLabelIds={state.labelIds}
           categories={categories}
           attributeCount={attributes.length}
           selectedCategoryIds={state.categoryIds}
@@ -662,13 +646,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
               current.some((entry) => entry.id === brand.id)
                 ? current
                 : [{ id: brand.id, name: brand.name, slug: brand.slug, productCount: 0, logo: brand.logo }, ...current],
-            );
-          }}
-          onLabelCreated={(label) => {
-            setLabels((current) =>
-              current.some((entry) => entry.id === label.id)
-                ? current
-                : [{ id: label.id, name: label.name, slug: label.slug, productCount: 0, colorHex: label.colorHex, image: label.image }, ...current],
             );
           }}
           onCategoryCreated={(category) => setCategories((current) => (current.some((entry) => entry.id === category.id) ? current : [...current, category]))}
@@ -708,6 +685,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
             productPricing={productPricing}
             inheritedWeight={state.weightValue}
             inheritedWeightUnit={state.weightUnit}
+            inheritedPreorder={state.isPreorderEnabled}
             canViewCost={data.canViewCost}
             onApplied={() => router.refresh()}
             onPatch={(value) => patch(value as Partial<ProductEditorState>)}
@@ -779,7 +757,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       </CollapsibleGroup>
 
       {/* Sticky action bar ------------------------------------------------ */}
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:pl-64">
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:pl-[var(--admin-sidebar-width,16rem)]">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-0.5">
             <p className="flex items-center gap-1.5 text-xs text-slate-600" aria-live="polite">

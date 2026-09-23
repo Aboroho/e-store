@@ -232,8 +232,7 @@ export function UnitLabelsManager({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Unit Name</TableHead>
-                <TableHead>Slug</TableHead>
+                <TableHead>Unit</TableHead>
                 <TableHead>Default</TableHead>
                 {canManage && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
@@ -243,9 +242,6 @@ export function UnitLabelsManager({
                 <TableRow key={unit.id}>
                   <TableCell>
                     <span className="font-medium text-slate-900 capitalize">{unit.name}</span>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs text-slate-500">
-                    {unit.slug}
                   </TableCell>
                   <TableCell>
                     {unit.isDefault ? (

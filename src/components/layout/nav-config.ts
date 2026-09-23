@@ -22,8 +22,6 @@ export interface NavItem {
 export interface NavSection {
   title: string;
   items: NavItem[];
-  /** When true the section heading toggles its items open/closed. */
-  collapsible?: boolean;
 }
 
 export const ADMIN_NAV: NavSection[] = [
@@ -35,14 +33,13 @@ export const ADMIN_NAV: NavSection[] = [
     ],
   },
   {
-    title: "Product",
-    collapsible: true,
+    title: "Products",
     items: [
-      { label: "Products", href: "/admin/catalog/products", permission: "product.view", icon: "Package", stage: 2 },
+      { label: "Add new", href: "/admin/catalog/products/new", permission: "product.create", icon: "Plus", stage: 2 },
+      { label: "Product list", href: "/admin/catalog/products", permission: "product.view", icon: "Package", stage: 2 },
       { label: "Categories", href: "/admin/catalog/categories", permission: "product.view", icon: "FolderTree", stage: 2 },
       { label: "Attributes", href: "/admin/catalog/attributes", permission: "product.view", icon: "Palette", stage: 2 },
       { label: "Brands", href: "/admin/catalog/brands", permission: "product.view", icon: "Bookmark", stage: 2 },
-      { label: "Labels", href: "/admin/catalog/labels", permission: "product.view", icon: "Tags", stage: 2 },
       { label: "Price lists", href: "/admin/catalog/price-lists", permission: "pricing.manage", icon: "Tags", stage: 2 },
       { label: "Tax rates", href: "/admin/catalog/tax-rates", permission: "product.view", icon: "Percent", stage: 2 },
       { label: "Packaging costs", href: "/admin/catalog/packaging-costs", permission: "product.view", icon: "Box", stage: 2 },
@@ -89,8 +86,6 @@ export const ADMIN_NAV: NavSection[] = [
     items: [
       { label: "Storefronts", href: "/admin/storefronts", permission: "storefront.manage", icon: "Globe", stage: 5 },
       { label: "Pages", href: "/admin/pages", permission: "page.manage", icon: "FileText", stage: 5 },
-      // Stage 4: the Media Library page is live, so the entry is enabled — it is
-      // the standalone way into the media manager, with no upload field needed.
       { label: "Media", href: "/admin/media", permission: "media.manage", icon: "Image", stage: 4 },
       { label: "Reviews", href: "/admin/reviews", permission: "review.moderate", icon: "Star", stage: 5 },
     ],

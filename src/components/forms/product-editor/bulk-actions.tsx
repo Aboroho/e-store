@@ -11,7 +11,7 @@ import type { MediaAssetView } from "@/modules/media/service";
 import { bulkVariantActionAction } from "@/modules/catalog/product-actions";
 import { formatPaisa } from "@/lib/money";
 import { calculatePricing } from "@/modules/catalog/pricing-rules";
-import { describeOverrideTarget } from "@/modules/catalog/inheritance";
+import { describeOverrideTarget, type PricingLevelInput } from "@/modules/catalog/inheritance";
 import {
   DEFAULT_WEIGHT_UNIT,
   WEIGHT_UNITS,
@@ -148,6 +148,7 @@ export function VariantBulkActions({
   attributes,
   selectedKeys,
   productImage,
+  productPricing,
   canViewCost: _canViewCost,
   onApplied,
   onLocalApply,
@@ -158,6 +159,7 @@ export function VariantBulkActions({
   attributes: DraftAttribute[];
   selectedKeys: string[];
   productImage: MediaAssetView | null;
+  productPricing?: PricingLevelInput;
   canViewCost: boolean;
   onApplied: () => void;
   /** Apply the change to in-memory rows when the product has not been saved yet. */
@@ -564,9 +566,12 @@ export function VariantBulkActions({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {matched.map((row) => {
-                  const currentPaisa = row.currentPrice?.trim() ? moneyToPaisa(row.currentPrice) : null;
-                  const discountType = row.discountType ?? "NONE";
-                  const discountValue = Number(row.discountValue) || 0;
+                  const inheriting = !row.currentPrice?.trim() && (!row.discountType || row.discountType === "NONE") && !row.discountValue?.trim();
+                  const currentPaisa = row.currentPrice?.trim()
+                    ? moneyToPaisa(row.currentPrice)
+                    : productPricing?.currentPricePaisa ?? null;
+                  const discountType = inheriting ? (productPricing?.discountType ?? "NONE") : (row.discountType ?? "NONE");
+                  const discountValue = inheriting ? (productPricing?.discountValue ?? 0) : (Number(row.discountValue) || 0);
                   const sell =
                     currentPaisa != null
                       ? calculatePricing({ currentPricePaisa: currentPaisa, discountType, discountValue }).sellPricePaisa
@@ -580,7 +585,7 @@ export function VariantBulkActions({
                   return (
                     <tr key={row.key}>
                       <td className="px-3 py-1.5 font-medium text-slate-800">{row.name || "Untitled variant"}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{currentPaisa != null ? formatPaisa(currentPaisa) : "Inherited"}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{currentPaisa != null ? formatPaisa(currentPaisa) : "—"}</td>
                       <td className="px-3 py-1.5 text-slate-600">
                         {discountType === "NONE"
                           ? "None"
@@ -588,8 +593,8 @@ export function VariantBulkActions({
                             ? `${discountValue}%`
                             : formatPaisa(Math.round(discountValue * 100))}
                       </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{sell != null ? formatPaisa(sell) : "Inherited"}</td>
-                      <td className="px-3 py-1.5 text-slate-500">{image.label}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{sell != null ? formatPaisa(sell) : "—"}</td>
+                      <td className="px-3 py-1.5 text-slate-500">{image.mediaId ? image.label : "—"}</td>
                     </tr>
                   );
                 })}

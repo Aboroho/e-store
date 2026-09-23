@@ -35,6 +35,7 @@ export function AttributesVariationsSection({
   productPricing,
   inheritedWeight,
   inheritedWeightUnit,
+  inheritedPreorder = false,
   canViewCost,
   onApplied,
   onPatch,
@@ -61,6 +62,7 @@ export function AttributesVariationsSection({
   productPricing: PricingLevelInput;
   inheritedWeight?: string;
   inheritedWeightUnit?: WeightUnit;
+  inheritedPreorder?: boolean;
   canViewCost: boolean;
   /** Called after a bulk change so the server read model is refreshed. */
   onApplied: () => void;
@@ -183,6 +185,7 @@ export function AttributesVariationsSection({
           productPricing={productPricing}
           inheritedWeight={inheritedWeight}
           inheritedWeightUnit={inheritedWeightUnit}
+          inheritedPreorder={inheritedPreorder}
           rowErrors={rowErrors}
           selectedKeys={selection}
           onSelectionChange={onSelectionChange}
@@ -209,6 +212,7 @@ export function AttributesVariationsSection({
               attributes={draftAttributes}
               selectedKeys={selection}
               productImage={productImage}
+              productPricing={productPricing}
               canViewCost={canViewCost}
               onApplied={() => {
                 onApplied();
