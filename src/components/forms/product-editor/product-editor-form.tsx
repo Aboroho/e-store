@@ -167,6 +167,12 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   });
   const [skuState, setSkuState] = React.useState<{ checking: boolean; message: string | null }>({ checking: false, message: null });
 
+  React.useEffect(() => {
+    if (!product && draft.pending) draft.resume();
+    // Resume a create-product working draft so it is the form, not a banner, when returning from the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   /* ---------------------------------------------------------------- matrix */
 
@@ -562,7 +568,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         </Alert>
       ) : null}
 
-      <ResumeDraftBanner draft={draft} onResume={draft.resume} onDiscard={draft.discard} />
+      {product ? <ResumeDraftBanner draft={draft} onResume={draft.resume} onDiscard={draft.discard} /> : null}
 
       <CollapsibleGroup
         defaultOpen={["information", "organization", "variants", "pricing"]}

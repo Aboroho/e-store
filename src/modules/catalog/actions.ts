@@ -102,7 +102,7 @@ export async function updateVariantAction(_prev: ActionState, formData: FormData
 }
 
 export async function archiveVariantAction(variantId: string, productId: string): Promise<void> {
-  const context = await actor("product.archive");
+  const context = await actor("product.update");
   await archiveVariant(context, variantId);
   revalidatePath(`/admin/catalog/products/${productId}`);
 }

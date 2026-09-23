@@ -119,17 +119,17 @@ describe("weight conversion", () => {
 });
 
 describe("draft autosave gating", () => {
-  it("waits for title and SKU before creating the first draft of a new product", () => {
+  it("saves any dirty create-product change, even before title and SKU exist", () => {
     expect(
       shouldAutosaveDraft({
         dirty: true,
-        name: "Shoes",
+        name: "",
         productCode: "",
         productId: null,
         fingerprint: "a",
         lastSavedFingerprint: null,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldAutosaveDraft({
         dirty: true,

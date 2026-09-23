@@ -4,7 +4,7 @@ import { Package, Plus } from "lucide-react";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
 import { parseListQuery } from "@/lib/validation";
-import { listCategoryOptions, listProducts } from "@/modules/catalog/queries";
+import { listCategoryOptions, listProducts, listWorkingDrafts } from "@/modules/catalog/queries";
 import { PageHeader, Card, CardContent, EmptyState, buttonVariants } from "@/components/ui/primitives";
 import { FilterSelect, SearchForm } from "@/components/ui/interactive";
 import { Pagination } from "@/components/ui/pagination";
@@ -29,7 +29,7 @@ export default async function ProductsPage({
   const status = typeof params.status === "string" ? params.status : undefined;
   const categoryId = typeof params.categoryId === "string" ? params.categoryId : undefined;
 
-  const [{ rows, total }, categories] = await Promise.all([
+  const [{ rows, total }, categories, drafts] = await Promise.all([
     listProducts(session.businessId, {
       search: query.search,
       status,
@@ -40,7 +40,18 @@ export default async function ProductsPage({
       take: query.take,
     }),
     listCategoryOptions(session.businessId),
+    listWorkingDrafts(session.businessId, session.id),
   ]);
+
+  const showDrafts = (!status || status === "ALL" || status === "DRAFT") && !categoryId && query.page === 1;
+  const needle = query.search?.trim().toLowerCase();
+  const visibleDrafts = showDrafts
+    ? drafts.filter((draft) => {
+        if (!needle) return true;
+        return [draft.name, draft.sku ?? "", draft.slug].join(" ").toLowerCase().includes(needle);
+      })
+    : [];
+  const listRows = [...visibleDrafts, ...rows];
 
   return (
     <div className="space-y-4">
@@ -78,7 +89,7 @@ export default async function ProductsPage({
           />
         </CardContent>
 
-        {rows.length === 0 ? (
+        {listRows.length === 0 ? (
           <CardContent>
             <EmptyState
               title="No products yet"
@@ -94,8 +105,9 @@ export default async function ProductsPage({
           </CardContent>
         ) : (
           <ProductListTable
-            products={rows}
+            products={listRows}
             canEdit={can(session, "product.update")}
+            canCreate={can(session, "product.create")}
             canDelete={can(session, "product.delete") || can(session, "product.update")}
           />
         )}

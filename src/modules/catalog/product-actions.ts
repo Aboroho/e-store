@@ -6,7 +6,7 @@ import { AppError } from "@/lib/errors";
 import { logger } from "@/lib/logging";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
-import { addAttributeValue as addAttributeValueService, createAttribute as createAttributeService, createCategory as createCategoryService } from "@/modules/catalog/service";
+import { addAttributeValue as addAttributeValueService, archiveVariant, createAttribute as createAttributeService, createCategory as createCategoryService } from "@/modules/catalog/service";
 import {
   bulkApplyVariantAction,
   createBrand,
@@ -447,6 +447,7 @@ export async function saveProductDraftAction(input: {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const result = await saveProductDraft(actor, input);
+    revalidatePath("/admin/catalog/products");
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to save the draft. Your changes are still on this page — try again in a moment.");
@@ -486,6 +487,7 @@ export async function discardProductDraftAction(input: {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const discarded = await discardProductDraft(actor.businessId, { ...input, userId: actor.userId });
+    revalidatePath("/admin/catalog/products");
     return { ok: true, data: { discarded } };
   } catch (error) {
     return failure(error, "Unable to discard the draft.");
@@ -777,6 +779,29 @@ export async function moveProductsToBinAction(productIds: string[]): Promise<Act
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to move those products to the bin.");
+  }
+}
+
+export async function archiveVariantsAction(input: {
+  productId: string;
+  variantIds: string[];
+}): Promise<ActionResult<{ archived: number }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete"]);
+    const uniqueIds = [...new Set(input.variantIds.filter(Boolean))];
+    if (uniqueIds.length === 0) return { ok: true, data: { archived: 0 } };
+    const variants = await prisma.variant.findMany({
+      where: { id: { in: uniqueIds }, productId: input.productId, product: { businessId: actor.businessId } },
+      select: { id: true },
+    });
+    for (const variant of variants) {
+      await archiveVariant(actor, variant.id);
+    }
+    revalidatePath(`/admin/catalog/products/${input.productId}`);
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: { archived: variants.length } };
+  } catch (error) {
+    return failure(error, "Unable to delete those variants.");
   }
 }
 

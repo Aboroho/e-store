@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Archive, ImageIcon, RotateCcw, Search } from "lucide-react";
+import { Archive, ImageIcon, RotateCcw, Search, Trash2 } from "lucide-react";
 import { Badge, Button, Input, Label, NativeSelect } from "@/components/ui/primitives";
+import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { InfoTip } from "@/components/ui/tooltip";
 import { MediaThumb } from "@/components/media/media-field";
 import { MediaPicker } from "@/components/media/media-picker";
@@ -139,6 +140,7 @@ export function VariantTable({
   const [valueFilter, setValueFilter] = React.useState("");
   const [pageSize, setPageSize] = React.useState(25);
   const [page, setPage] = React.useState(1);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   const valueLabels = React.useMemo(() => {
     const map = new Map<string, { attribute: string; value: string }>();
@@ -338,6 +340,16 @@ export function VariantTable({
           <Button type="button" variant="ghost" size="sm" onClick={() => onSelectionChange([])} disabled={selectedKeys.length === 0}>
             Clear selection ({selectedKeys.length})
           </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={() => setConfirmDelete(true)}
+            disabled={selectedKeys.length === 0}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+            Delete selected ({selectedKeys.length})
+          </Button>
         </div>
       </div>
 
@@ -401,6 +413,33 @@ export function VariantTable({
           </tbody>
         </table>
       </div>
+
+      {confirmDelete ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setConfirmDelete(false); }}>
+          <DialogContent
+            title={selectedKeys.length === 1 ? "Delete this variant?" : `Delete ${selectedKeys.length} variants?`}
+            description="They leave this form immediately. On save they are archived, never hard-deleted, so order history stays intact."
+            className="max-w-md"
+          >
+            <div className="mt-2 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  for (const key of selectedKeys) onRemove(key);
+                  onSelectionChange([]);
+                  setConfirmDelete(false);
+                }}
+              >
+                Delete
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       {/* Mobile cards */}
       <ul className="space-y-3 md:hidden">

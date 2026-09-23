@@ -556,9 +556,8 @@ export function isValidSku(value: string): boolean {
 /**
  * Should the product editor persist a working copy?
  *
- * A first create-product draft is only written once title *and* SKU exist.
- * Later ticks skip the network when the payload has not changed since the
- * last successful save.
+ * Any dirty change on Create or Edit is saved. The network is skipped when
+ * the payload has not changed since the last successful save.
  */
 export function shouldAutosaveDraft(input: {
   dirty: boolean;
@@ -570,7 +569,6 @@ export function shouldAutosaveDraft(input: {
 }): boolean {
   if (!input.dirty) return false;
   if (input.fingerprint === input.lastSavedFingerprint) return false;
-  if (!input.productId && (!input.name.trim() || !input.productCode.trim())) return false;
   return true;
 }
 

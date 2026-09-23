@@ -19,6 +19,7 @@ import {
   describeBulkTarget,
   imageActionImpact,
   resolveBulkTarget,
+  resolveVariantImage,
   toWeightGrams,
   type BulkTarget,
   type BulkTargetCriteria,

@@ -3,10 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Edit3, Layers, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Edit3, ImageIcon, Layers, Trash2 } from "lucide-react";
 import { formatPaisa } from "@/lib/money";
-import type { ProductListRow } from "@/modules/catalog/queries";
-import { moveProductsToBinAction, setProductPublicationAction } from "@/modules/catalog/product-actions";
+import type { CatalogImageThumb, ProductListRow } from "@/modules/catalog/queries";
+import { discardProductDraftAction, moveProductsToBinAction, setProductPublicationAction } from "@/modules/catalog/product-actions";
 import {
   Badge,
   Button,
@@ -25,6 +25,21 @@ const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
   ARCHIVED: "neutral",
 };
 
+function ProductThumb({ image, label }: { image: CatalogImageThumb | null; label: string }) {
+  return (
+    <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+      {image?.url ? (
+        // eslint-disable-next-line @next/next/no-img-element -- media is served from storage/CDN hosts
+        <img src={image.url} alt={image.alt || label} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-slate-300">
+          <ImageIcon className="h-4 w-4" aria-hidden="true" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Product list. Edit always opens the product editor (`/:id/edit`); there is no
  * intermediate variant page. Inventory is a separate module, so this table does
@@ -33,10 +48,12 @@ const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
 export function ProductListTable({
   products,
   canEdit,
+  canCreate = false,
   canDelete,
 }: {
   products: ProductListRow[];
   canEdit: boolean;
+  canCreate?: boolean;
   canDelete: boolean;
 }) {
   const router = useRouter();
@@ -56,7 +73,8 @@ export function ProductListTable({
     });
   };
 
-  const allIds = products.map((product) => product.id);
+  const selectableIds = products.filter((product) => !product.isWorkingDraft).map((product) => product.id);
+  const allIds = selectableIds;
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
 
   const toggleOne = (id: string) => {
@@ -84,6 +102,19 @@ export function ProductListTable({
     }
     setConfirmDelete(null);
     setSelected(new Set());
+    router.refresh();
+  };
+
+  const discardDraft = async (draftId: string) => {
+    setLoading(true);
+    setError(null);
+    const result = await discardProductDraftAction({ draftId });
+    setLoading(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setConfirmDelete(null);
     router.refresh();
   };
 
@@ -144,12 +175,14 @@ export function ProductListTable({
             const isExpanded = expanded.has(product.id);
             const hasMultipleVariants = product.variants.length > 1;
             const isSelected = selected.has(product.id);
+            const href = product.isWorkingDraft ? "/admin/catalog/products/new" : `/admin/catalog/products/${product.id}`;
+            const editHref = product.isWorkingDraft ? "/admin/catalog/products/new" : `/admin/catalog/products/${product.id}/edit`;
 
             return (
               <React.Fragment key={product.id}>
                 <TableRow className={isExpanded ? "bg-slate-50/70 border-b-0" : undefined}>
                   <TableCell className="w-10 pr-0">
-                    {canDelete ? (
+                    {canDelete && !product.isWorkingDraft ? (
                       <input
                         type="checkbox"
                         className="h-4 w-4 rounded border-slate-300"
@@ -172,13 +205,17 @@ export function ProductListTable({
                     )}
                   </TableCell>
                   <TableCell>
+                    <div className="flex items-center gap-3">
+                      <ProductThumb image={product.image} label={product.name} />
+                      <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <Link
-                        href={`/admin/catalog/products/${product.id}`}
+                        href={href}
                         className="font-medium text-brand-600 hover:underline flex items-center gap-1.5"
                       >
                         {product.name}
                       </Link>
+                      {product.isWorkingDraft ? <Badge variant="warning">working draft</Badge> : null}
                       {product.isFeatured ? <Badge variant="violet">featured</Badge> : null}
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
@@ -189,8 +226,14 @@ export function ProductListTable({
                           SKU: {product.sku}
                         </span>
                       )}
-                      <span>·</span>
-                      <span className="text-slate-400 font-mono text-[11px]">{product.slug}</span>
+                      {product.slug ? (
+                        <>
+                          <span>·</span>
+                          <span className="text-slate-400 font-mono text-[11px]">{product.slug}</span>
+                        </>
+                      ) : null}
+                    </div>
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -218,7 +261,7 @@ export function ProductListTable({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {canEdit ? (
+                      {canEdit && !product.isWorkingDraft ? (
                         product.status === "ACTIVE" ? (
                           <Button
                             type="button"
@@ -241,22 +284,22 @@ export function ProductListTable({
                           </Button>
                         )
                       ) : null}
-                      {canEdit ? (
+                      {(product.isWorkingDraft ? canEdit || canCreate : canEdit) ? (
                         <Link
-                          href={`/admin/catalog/products/${product.id}/edit`}
+                          href={editHref}
                           className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-md transition-colors"
                         >
-                          <Edit3 className="h-3.5 w-3.5" /> Edit
+                          <Edit3 className="h-3.5 w-3.5" /> {product.isWorkingDraft ? "Continue" : "Edit"}
                         </Link>
                       ) : (
                         <Link
-                          href={`/admin/catalog/products/${product.id}`}
+                          href={href}
                           className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-800 px-2.5 py-1.5 rounded-md"
                         >
                           View
                         </Link>
                       )}
-                      {canDelete ? (
+                      {(product.isWorkingDraft ? canDelete || canCreate : canDelete) ? (
                         <Button
                           type="button"
                           size="sm"
@@ -299,7 +342,12 @@ export function ProductListTable({
                                 const hasPriceOverride = variant.priceOverridePaisa != null;
                                 return (
                                   <tr key={variant.id} className="hover:bg-slate-50/80 transition-colors">
-                                    <td className="px-3 py-2 font-medium text-slate-900">{variant.name || "Default"}</td>
+                                    <td className="px-3 py-2 font-medium text-slate-900">
+                                      <div className="flex items-center gap-2">
+                                        <ProductThumb image={variant.image} label={variant.name || "Default"} />
+                                        <span>{variant.name || "Default"}</span>
+                                      </div>
+                                    </td>
                                     <td className="px-3 py-2 text-right font-medium">
                                       <div className="inline-flex items-center gap-1 justify-end">
                                         <span>{formatPaisa(variant.pricePaisa)}</span>
@@ -334,10 +382,10 @@ export function ProductListTable({
                             </tbody>
                           </table>
                         </div>
-                        {canEdit ? (
+                        {canEdit && !product.isWorkingDraft ? (
                           <p className="mt-2 text-[11px] text-slate-500">
                             Change variants in the{" "}
-                            <Link href={`/admin/catalog/products/${product.id}/edit`} className="font-medium text-brand-600 hover:underline">
+                            <Link href={editHref} className="font-medium text-brand-600 hover:underline">
                               product editor
                             </Link>
                             .
@@ -356,22 +404,47 @@ export function ProductListTable({
       {confirmDelete ? (
         <Dialog open onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}>
           <DialogContent
-            title={confirmDelete.length === 1 ? "Move this product to the bin?" : `Move ${confirmDelete.length} products to the bin?`}
-            description="They leave the catalogue and can be restored from the bin. Permanent deletion happens only from the bin."
+            title={
+              confirmDelete.length === 1 && products.find((product) => product.id === confirmDelete[0])?.isWorkingDraft
+                ? "Discard this working draft?"
+                : confirmDelete.length === 1
+                  ? "Move this product to the bin?"
+                  : `Move ${confirmDelete.length} products to the bin?`
+            }
+            description={
+              confirmDelete.length === 1 && products.find((product) => product.id === confirmDelete[0])?.isWorkingDraft
+                ? "The unsaved product work will be removed. This cannot be undone."
+                : "They leave the catalogue and can be restored from the bin. Permanent deletion happens only from the bin."
+            }
             className="max-w-md"
           >
             {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
             <p className="text-sm text-slate-600">
               {confirmDelete.length === 1
-                ? `Move “${products.find((product) => product.id === confirmDelete[0])?.name ?? "this product"}” to the bin?`
+                ? products.find((product) => product.id === confirmDelete[0])?.isWorkingDraft
+                  ? `Discard “${products.find((product) => product.id === confirmDelete[0])?.name ?? "this draft"}”?`
+                  : `Move “${products.find((product) => product.id === confirmDelete[0])?.name ?? "this product"}” to the bin?`
                 : `${confirmDelete.length} products will be moved to the bin.`}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setConfirmDelete(null)}>
                 Cancel
               </Button>
-              <Button type="button" variant="destructive" disabled={loading} onClick={() => void moveToBin(confirmDelete)}>
-                {loading ? "Moving…" : "Move to bin"}
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={loading}
+                onClick={() => {
+                  const draft = confirmDelete.length === 1 ? products.find((product) => product.id === confirmDelete[0]) : null;
+                  if (draft?.isWorkingDraft) void discardDraft(draft.id);
+                  else void moveToBin(confirmDelete);
+                }}
+              >
+                {loading
+                  ? "Working…"
+                  : confirmDelete.length === 1 && products.find((product) => product.id === confirmDelete[0])?.isWorkingDraft
+                    ? "Discard draft"
+                    : "Move to bin"}
               </Button>
             </div>
           </DialogContent>
