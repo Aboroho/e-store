@@ -13,20 +13,46 @@ import {
   Search,
   Tag,
 } from "lucide-react";
-import { Alert, Badge, Button, Input, Label, NativeSelect, Textarea } from "@/components/ui/primitives";
+import {
+  Alert,
+  Badge,
+  Button,
+  Input,
+  Label,
+  NativeSelect,
+  Textarea,
+} from "@/components/ui/primitives";
 import { InfoTip } from "@/components/ui/tooltip";
 import { CollapsibleSection } from "@/components/ui/collapsible";
-import { MediaField, MediaGalleryField, type MediaGalleryItem } from "@/components/media/media-field";
+import {
+  MediaField,
+  MediaGalleryField,
+  type MediaGalleryItem,
+} from "@/components/media/media-field";
 import { MediaPicker } from "@/components/media/media-picker";
 import { RichTextEditor } from "@/components/rich-text-editor";
-import { assetToRichTextAsset, uploadToMediaLibrary } from "@/components/media/media-upload";
+import {
+  assetToRichTextAsset,
+  uploadToMediaLibrary,
+} from "@/components/media/media-upload";
 import { Combobox, FieldWithTip } from "./combobox";
-import { AddAttributeValueInline, CreateAttributeDialog, CreateBrandDialog, CreateCategoryDialog } from "./product-dialogs";
+import {
+  AddAttributeValueInline,
+  CreateAttributeDialog,
+  CreateBrandDialog,
+  CreateCategoryDialog,
+} from "./product-dialogs";
 import { slugPreview } from "./product-url";
 import { WEIGHT_UNITS, type WeightUnit } from "@/modules/catalog/product-draft";
 import { formatPaisa } from "@/lib/money";
-import { calculatePricing, validateDiscount } from "@/modules/catalog/pricing-rules";
-import type { EditorAttribute, EditorCategory } from "@/modules/catalog/product-queries";
+import {
+  calculatePricing,
+  validateDiscount,
+} from "@/modules/catalog/pricing-rules";
+import type {
+  EditorAttribute,
+  EditorCategory,
+} from "@/modules/catalog/product-queries";
 import type { MediaAssetView } from "@/modules/media/service";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
 
@@ -57,13 +83,21 @@ export function BasicInformationSection({
   barcode: string;
   productType: "SIMPLE" | "VARIABLE";
   productUrlPrefix: string | null;
-  slugState: { checking: boolean; available: boolean | null; suggestion: string | null };
+  slugState: {
+    checking: boolean;
+    available: boolean | null;
+    suggestion: string | null;
+  };
   skuState: { checking: boolean; message?: string };
   errors: Record<string, string[]>;
   onNameChange: (value: string) => void;
   onSlugChange: (value: string, options?: { manual?: boolean }) => void;
   onRegenerateSlug: () => void;
-  onPatch: (patch: { barcode?: string; productCode?: string; productType?: "SIMPLE" | "VARIABLE" }) => void;
+  onPatch: (patch: {
+    barcode?: string;
+    productCode?: string;
+    productType?: "SIMPLE" | "VARIABLE";
+  }) => void;
 }) {
   return (
     <CollapsibleSection
@@ -82,7 +116,8 @@ export function BasicInformationSection({
               Product name <span className="text-red-500">*</span>
             </Label>
             <InfoTip>
-              The name shoppers see on the storefront, in search engines and on invoices. It also drives the suggested URL slug.
+              The name shoppers see on the storefront, in search engines and on
+              invoices. It also drives the suggested URL slug.
             </InfoTip>
           </div>
           <Input
@@ -96,10 +131,15 @@ export function BasicInformationSection({
             aria-describedby="product-name-counter"
           />
           <div className="flex items-center justify-between text-xs">
-            <span id="product-name-counter" className={name.length > 200 ? "text-red-600" : "text-slate-500"}>
+            <span
+              id="product-name-counter"
+              className={name.length > 200 ? "text-red-600" : "text-slate-500"}
+            >
               {name.length}/200 characters
             </span>
-            {errors.name ? <span className="text-red-600">{errors.name[0]}</span> : null}
+            {errors.name ? (
+              <span className="text-red-600">{errors.name[0]}</span>
+            ) : null}
           </div>
         </div>
 
@@ -109,8 +149,9 @@ export function BasicInformationSection({
               URL slug <span className="text-red-500">*</span>
             </Label>
             <InfoTip>
-              The last part of the product address. It is suggested from the name and stays editable; changing it later changes the
-              product URL, so search engines may need to re-index the page.
+              The last part of the product address. It is suggested from the
+              name and stays editable; changing it later changes the product
+              URL, so search engines may need to re-index the page.
             </InfoTip>
           </div>
           <div className="flex items-center gap-2">
@@ -118,32 +159,52 @@ export function BasicInformationSection({
               id="product-slug"
               value={slug}
               maxLength={80}
-              onChange={(event) => onSlugChange(event.target.value, { manual: true })}
-              onBlur={(event) => onSlugChange(event.target.value.trim(), { manual: true })}
+              onChange={(event) =>
+                onSlugChange(event.target.value, { manual: true })
+              }
+              onBlur={(event) =>
+                onSlugChange(event.target.value.trim(), { manual: true })
+              }
             />
-            <Button type="button" variant="outline" size="sm" onClick={onRegenerateSlug} disabled={!name}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRegenerateSlug}
+              disabled={!name}
+            >
               <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
               Regenerate
             </Button>
           </div>
           <div className="space-y-1 text-xs">
-            <p className="truncate text-slate-500" title={slugPreview(productUrlPrefix, slug)}>
+            <p
+              className="truncate text-slate-500"
+              title={slugPreview(productUrlPrefix, slug)}
+            >
               {slugPreview(productUrlPrefix, slug)}
             </p>
             <p className="flex items-center gap-1.5">
               {slugState.checking ? (
                 <>
-                  <Loader2 className="h-3 w-3 animate-spin text-slate-400" aria-hidden="true" />
+                  <Loader2
+                    className="h-3 w-3 animate-spin text-slate-400"
+                    aria-hidden="true"
+                  />
                   <span className="text-slate-500">Checking availability…</span>
                 </>
               ) : slugState.available === false ? (
                 <>
-                  <span className="text-amber-700">Already used by another product.</span>
+                  <span className="text-amber-700">
+                    Already used by another product.
+                  </span>
                   {slugState.suggestion ? (
                     <button
                       type="button"
                       className="font-medium text-brand-700 underline"
-                      onClick={() => onSlugChange(slugState.suggestion!, { manual: true })}
+                      onClick={() =>
+                        onSlugChange(slugState.suggestion!, { manual: true })
+                      }
                     >
                       Use {slugState.suggestion}
                     </button>
@@ -151,16 +212,23 @@ export function BasicInformationSection({
                 </>
               ) : slugState.available ? (
                 <>
-                  <CheckCircle2 className="h-3 w-3 text-emerald-600" aria-hidden="true" />
+                  <CheckCircle2
+                    className="h-3 w-3 text-emerald-600"
+                    aria-hidden="true"
+                  />
                   <span className="text-emerald-700">Available</span>
                 </>
               ) : null}
             </p>
             <p className="text-slate-400">
-              {slugTouched ? "Edited by you — the name will not overwrite it." : "Follows the product name until you edit it."} Creating a
-              slug never publishes the product.
+              {slugTouched
+                ? "Edited by you — the name will not overwrite it."
+                : "Follows the product name until you edit it."}{" "}
+              Creating a slug never publishes the product.
             </p>
-            {errors.slug ? <p className="text-red-600">{errors.slug[0]}</p> : null}
+            {errors.slug ? (
+              <p className="text-red-600">{errors.slug[0]}</p>
+            ) : null}
           </div>
         </div>
 
@@ -170,8 +238,9 @@ export function BasicInformationSection({
               Product code (SKU) <span className="text-red-500">*</span>
             </Label>
             <InfoTip>
-              The product&apos;s stock keeping unit — the only SKU in the system. Variants do not carry their own code: they are identified by
-              their options in inventory, purchasing, orders and reports.
+              The product&apos;s stock keeping unit — the only SKU in the
+              system. Variants do not carry their own code: they are identified
+              by their options in inventory, purchasing, orders and reports.
             </InfoTip>
           </div>
           <Input
@@ -189,10 +258,15 @@ export function BasicInformationSection({
             ) : skuState.message ? (
               <span className="text-amber-700">{skuState.message}</span>
             ) : (
-              <span className="text-slate-500">Unique inside your business. Letters, numbers, dot, dash, underscore and slash.</span>
+              <span className="text-slate-500">
+                Unique inside your business. Letters, numbers, dot, dash,
+                underscore and slash.
+              </span>
             )}
           </p>
-          {errors.productCode ? <p className="text-xs text-red-600">{errors.productCode[0]}</p> : null}
+          {errors.productCode ? (
+            <p className="text-xs text-red-600">{errors.productCode[0]}</p>
+          ) : null}
         </div>
 
         <div className="space-y-1.5">
@@ -200,9 +274,17 @@ export function BasicInformationSection({
             <Label htmlFor="product-barcode" className="text-slate-800">
               Barcode
             </Label>
-            <InfoTip>Optional EAN/UPC printed on the packaging. Used by the barcode scan box on packing screens.</InfoTip>
+            <InfoTip>
+              Optional EAN/UPC printed on the packaging. Used by the barcode
+              scan box on packing screens.
+            </InfoTip>
           </div>
-          <Input id="product-barcode" value={barcode} maxLength={64} onChange={(event) => onPatch({ barcode: event.target.value })} />
+          <Input
+            id="product-barcode"
+            value={barcode}
+            maxLength={64}
+            onChange={(event) => onPatch({ barcode: event.target.value })}
+          />
         </div>
 
         <div className="space-y-1.5 lg:col-span-2">
@@ -211,21 +293,32 @@ export function BasicInformationSection({
               Product type <span className="text-red-500">*</span>
             </Label>
             <InfoTip>
-              Single products sell as one item. Variable products have options such as colour and size; each combination is a variant that
+              Single products sell as one item. Variable products have options
+              such as colour and size; each combination is a variant that
               inherits the product price until you override it.
             </InfoTip>
           </div>
           <div className="flex flex-wrap gap-2">
             {(
               [
-                { value: "SIMPLE", label: "Single", help: "One sellable item, no option matrix." },
-                { value: "VARIABLE", label: "Variable", help: "Options generate variants." },
+                {
+                  value: "SIMPLE",
+                  label: "Single",
+                  help: "One sellable item, no option matrix.",
+                },
+                {
+                  value: "VARIABLE",
+                  label: "Variable",
+                  help: "Options generate variants.",
+                },
               ] as const
             ).map((choice) => (
               <label
                 key={choice.value}
                 className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
-                  productType === choice.value ? "border-brand-300 bg-brand-50 text-brand-800" : "border-slate-200 text-slate-700"
+                  productType === choice.value
+                    ? "border-brand-300 bg-brand-50 text-brand-800"
+                    : "border-slate-200 text-slate-700"
                 }`}
               >
                 <input
@@ -237,7 +330,9 @@ export function BasicInformationSection({
                 />
                 <span>
                   <span className="font-medium">{choice.label}</span>
-                  <span className="block text-xs text-slate-500">{choice.help}</span>
+                  <span className="block text-xs text-slate-500">
+                    {choice.help}
+                  </span>
                 </span>
               </label>
             ))}
@@ -273,8 +368,9 @@ export function ProductDescriptionSection({
           <div className="flex items-center gap-1.5">
             <Label className="text-slate-800">Short description</Label>
             <InfoTip>
-              One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the fallback
-              meta description.
+              One or two sentences shown in listings, category tiles and search
+              results. Keep it plain: it is also used as the fallback meta
+              description.
             </InfoTip>
           </div>
           <RichTextEditor
@@ -285,18 +381,45 @@ export function ProductDescriptionSection({
             placeholder="Lightweight leather shoes for everyday wear."
             minHeight={140}
             maxHeight={260}
-            features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
-            toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
+            features={{
+              heading: false,
+              table: false,
+              taskList: false,
+              image: true,
+              file: false,
+              blockquote: false,
+              codeBlock: false,
+              horizontalRule: false,
+            }}
+            toolbar={{
+              items: [
+                "bold",
+                "italic",
+                "underline",
+                "strike",
+                "link",
+                "bulletList",
+                "orderedList",
+                "image",
+                "clearFormatting",
+                "undo",
+                "redo",
+                "expand",
+              ],
+            }}
             onUpload={canUpload ? uploadToMediaLibrary : undefined}
-            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+            renderMediaLibrary={({ kind, onSelect }) => (
+              <MediaLibraryTrigger kind={kind} onSelect={onSelect} />
+            )}
           />
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5">
             <Label className="text-slate-800">Long description</Label>
             <InfoTip>
-              The full product story on the product page. Images and video are picked from the shared media library, so the same asset is
-              never uploaded twice and never deleted while a description uses it.
+              The full product story on the product page. Images and video are
+              picked from the shared media library, so the same asset is never
+              uploaded twice and never deleted while a description uses it.
             </InfoTip>
           </div>
           <RichTextEditor
@@ -308,11 +431,14 @@ export function ProductDescriptionSection({
             minHeight={260}
             expandable
             onUpload={canUpload ? uploadToMediaLibrary : undefined}
-            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+            renderMediaLibrary={({ kind, onSelect }) => (
+              <MediaLibraryTrigger kind={kind} onSelect={onSelect} />
+            )}
           />
           <p className="text-xs text-slate-500">
-            Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting is
-            rejected on save.
+            Use “Expand editor” for a full-screen writing surface. Content is
+            structured JSON, never raw HTML: unsupported formatting is rejected
+            on save.
           </p>
         </div>
       </div>
@@ -320,7 +446,22 @@ export function ProductDescriptionSection({
   );
 }
 
-function MediaLibraryTrigger({ kind, onSelect }: { kind: "image" | "file"; onSelect: (asset: { id?: string | null; url: string; name?: string; mimeType?: string; size?: number; width?: number; height?: number; alt?: string }) => void }) {
+function MediaLibraryTrigger({
+  kind,
+  onSelect,
+}: {
+  kind: "image" | "file";
+  onSelect: (asset: {
+    id?: string | null;
+    url: string;
+    name?: string;
+    mimeType?: string;
+    size?: number;
+    width?: number;
+    height?: number;
+    alt?: string;
+  }) => void;
+}) {
   return (
     <MediaPicker
       title={kind === "image" ? "Insert image" : "Insert video or file"}
@@ -362,21 +503,42 @@ export function OrganizationSection({
   onUnitLabelCreated,
 }: {
   brandId: string | null;
-  brands: Array<{ id: string; name: string; slug: string; productCount: number; logo: { url: string | null } | null }>;
+  brands: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    productCount: number;
+    logo: { url: string | null } | null;
+  }>;
   categories: EditorCategory[];
   attributeCount: number;
   selectedCategoryIds: string[];
   primaryCategoryId: string | null;
-  unitLabels: Array<{ id: string | null; name: string; slug: string; isDefault: boolean }>;
+  unitLabels: Array<{
+    id: string | null;
+    name: string;
+    slug: string;
+    isDefault: boolean;
+  }>;
   unitLabel: string;
   weightValue: string;
   weightUnit: WeightUnit;
   productUrlPrefix: string | null;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
-  onBrandCreated: (brand: { id: string; name: string; slug: string; logo: { url: string | null } | null }) => void;
+  onBrandCreated: (brand: {
+    id: string;
+    name: string;
+    slug: string;
+    logo: { url: string | null } | null;
+  }) => void;
   onCategoryCreated: (category: EditorCategory) => void;
-  onUnitLabelCreated: (label: { id: string | null; name: string; slug: string; isDefault: boolean }) => void;
+  onUnitLabelCreated: (label: {
+    id: string | null;
+    name: string;
+    slug: string;
+    isDefault: boolean;
+  }) => void;
 }) {
   const [brandDialog, setBrandDialog] = React.useState(false);
   const [categoryDialog, setCategoryDialog] = React.useState(false);
@@ -399,12 +561,18 @@ export function OrganizationSection({
     const name = unitDraft.trim();
     if (!name) return;
     setUnitSaving(true);
-    const { createUnitLabelAction } = await import("@/modules/catalog/product-actions");
+    const { createUnitLabelAction } =
+      await import("@/modules/catalog/product-actions");
     const result = await createUnitLabelAction({ name });
     setUnitSaving(false);
     if (!result.ok) return;
     onPatch({ unitLabel: result.data.name, unitLabelId: result.data.id });
-    onUnitLabelCreated({ id: result.data.id, name: result.data.name, slug: result.data.slug, isDefault: unitLabels.length === 0 });
+    onUnitLabelCreated({
+      id: result.data.id,
+      name: result.data.name,
+      slug: result.data.slug,
+      isDefault: unitLabels.length === 0,
+    });
     setUnitDraft("");
   };
 
@@ -415,7 +583,11 @@ export function OrganizationSection({
       description="Brand, categories, how the product is counted, and how much it weighs."
       icon={<Layers className="h-4 w-4" />}
       defaultOpen
-      badge={selectedCategoryIds.length > 0 ? `${selectedCategoryIds.length} category(ies)` : undefined}
+      badge={
+        selectedCategoryIds.length > 0
+          ? `${selectedCategoryIds.length} category(ies)`
+          : undefined
+      }
       badgeTone={selectedCategoryIds.length > 0 ? "success" : "neutral"}
     >
       <div className="grid gap-4 lg:grid-cols-2">
@@ -436,7 +608,13 @@ export function OrganizationSection({
           emptyMessage="No brand matches that search."
           error={errors.brandId}
           footer={
-            <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setBrandDialog(true)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => setBrandDialog(true)}
+            >
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               Create brand
             </Button>
@@ -452,11 +630,24 @@ export function OrganizationSection({
           help="Select as many as apply; the first one (or the primary you choose) is used for breadcrumbs."
           options={categoryOptions}
           value={selectedCategoryIds}
-          onChange={(value) => onPatch({ categoryIds: value, primaryCategoryId: value.includes(primaryCategoryId ?? "") ? primaryCategoryId : (value[0] ?? null) })}
+          onChange={(value) =>
+            onPatch({
+              categoryIds: value,
+              primaryCategoryId: value.includes(primaryCategoryId ?? "")
+                ? primaryCategoryId
+                : (value[0] ?? null),
+            })
+          }
           emptyMessage="No category matches that search."
           error={errors.categoryIds}
           footer={
-            <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setCategoryDialog(true)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => setCategoryDialog(true)}
+            >
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               Create category
             </Button>
@@ -467,12 +658,16 @@ export function OrganizationSection({
               <Label htmlFor="primary-category" className="text-xs">
                 Primary category
               </Label>
-              <InfoTip>Used for breadcrumbs and the canonical category link.</InfoTip>
+              <InfoTip>
+                Used for breadcrumbs and the canonical category link.
+              </InfoTip>
               <NativeSelect
                 id="primary-category"
                 className="h-8 w-56 text-xs"
                 value={primaryCategoryId ?? ""}
-                onChange={(event) => onPatch({ primaryCategoryId: event.target.value || null })}
+                onChange={(event) =>
+                  onPatch({ primaryCategoryId: event.target.value || null })
+                }
               >
                 {selectedCategoryIds.map((id) => {
                   const category = categories.find((entry) => entry.id === id);
@@ -492,7 +687,10 @@ export function OrganizationSection({
             <Label htmlFor="unit-label" className="text-slate-800">
               Unit label
             </Label>
-            <InfoTip>How this product is counted — piece, pair, box. A value only: no slug or image.</InfoTip>
+            <InfoTip>
+              How this product is counted — piece, pair, box. A value only: no
+              slug or image.
+            </InfoTip>
           </div>
           <NativeSelect
             id="unit-label"
@@ -510,7 +708,10 @@ export function OrganizationSection({
             }}
           >
             {!unitLabel ? <option value="">Select a unit…</option> : null}
-            {unitLabel && !unitLabels.some((entry) => entry.name === unitLabel) ? <option value={unitLabel}>{unitLabel}</option> : null}
+            {unitLabel &&
+            !unitLabels.some((entry) => entry.name === unitLabel) ? (
+              <option value={unitLabel}>{unitLabel}</option>
+            ) : null}
             {unitLabels.map((entry) => (
               <option key={entry.slug || entry.name} value={entry.name}>
                 {entry.name}
@@ -537,17 +738,33 @@ export function OrganizationSection({
                   setAddingUnit(false);
                 }}
               >
-                {unitSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+                {unitSaving ? (
+                  <Loader2
+                    className="h-3.5 w-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
                 Save unit
               </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setAddingUnit(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setAddingUnit(false)}
+              >
                 Cancel
               </Button>
             </div>
           ) : (
-            <p className="text-xs text-slate-500">Shared across products. Pick one or add a new value.</p>
+            <p className="text-xs text-slate-500">
+              Shared across products. Pick one or add a new value.
+            </p>
           )}
-          {errors.unitLabel ? <p className="text-xs text-red-600">{errors.unitLabel[0]}</p> : null}
+          {errors.unitLabel ? (
+            <p className="text-xs text-red-600">{errors.unitLabel[0]}</p>
+          ) : null}
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -571,7 +788,13 @@ export function OrganizationSection({
             label="Weight unit"
             tooltip="Gram, kilogram or pound. The value is converted to grams before it is stored, so reports and couriers always agree."
           >
-            <NativeSelect id="product-weight-unit" value={weightUnit} onChange={(event) => onPatch({ weightUnit: event.target.value as WeightUnit })}>
+            <NativeSelect
+              id="product-weight-unit"
+              value={weightUnit}
+              onChange={(event) =>
+                onPatch({ weightUnit: event.target.value as WeightUnit })
+              }
+            >
               {WEIGHT_UNITS.map((unit) => (
                 <option key={unit.value} value={unit.value}>
                   {unit.label}
@@ -583,7 +806,8 @@ export function OrganizationSection({
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
-        {attributeCount} attribute(s) available — configure them in the attributes section below.
+        {attributeCount} attribute(s) available — configure them in the
+        attributes section below.
       </p>
 
       <CreateBrandDialog
@@ -602,7 +826,10 @@ export function OrganizationSection({
         productUrlPrefix={productUrlPrefix}
         onCreated={(category) => {
           onCategoryCreated(category);
-          onPatch({ categoryIds: [...selectedCategoryIds, category.id], primaryCategoryId: primaryCategoryId ?? category.id });
+          onPatch({
+            categoryIds: [...selectedCategoryIds, category.id],
+            primaryCategoryId: primaryCategoryId ?? category.id,
+          });
         }}
       />
     </CollapsibleSection>
@@ -632,7 +859,11 @@ export function ProductImagesSection({
       title="Product images"
       description="The listing image is independent of the gallery. Changing one never rewrites the other."
       icon={<ImageIcon className="h-4 w-4" />}
-      badge={primaryImage || images.length > 0 ? `${(primaryImage ? 1 : 0) + images.length} image(s)` : "No images"}
+      badge={
+        primaryImage || images.length > 0
+          ? `${(primaryImage ? 1 : 0) + images.length} image(s)`
+          : "No images"
+      }
       badgeTone={primaryImage ? "success" : "warning"}
     >
       <div className="space-y-5">
@@ -645,7 +876,11 @@ export function ProductImagesSection({
               onPrimaryChange(null);
               return;
             }
-            onPrimaryChange({ mediaId: asset.id, asset, altText: primaryImage?.altText ?? null });
+            onPrimaryChange({
+              mediaId: asset.id,
+              asset,
+              altText: primaryImage?.altText ?? null,
+            });
           }}
           tooltip="Shown in listings, search results, cart and social previews. It is stored separately from additional images — it is never gallery row 0."
           help="Pick from the shared media library — upload inside the library if the image is not there yet."
@@ -662,7 +897,13 @@ export function ProductImagesSection({
           tooltip="Extra angles shown as thumbnails under the main image. These never become the primary image from here."
           help="Use the arrows to reorder. Removing an image here only detaches it from this product — it stays in the media library."
           onAltTextChange={(mediaId, altText) =>
-            onImagesChange(images.map((item) => (item.mediaId === mediaId ? { ...item, altText: altText || null } : item)))
+            onImagesChange(
+              images.map((item) =>
+                item.mediaId === mediaId
+                  ? { ...item, altText: altText || null }
+                  : item,
+              ),
+            )
           }
         />
       </div>
@@ -681,8 +922,15 @@ export function AttributeValueThumb({ mediaId }: { mediaId: string }) {
     let live = true;
     import("@/modules/media/actions").then(async ({ browseMediaAction }) => {
       try {
-        const result = await browseMediaAction({ page: 1, pageSize: 60, mimeGroup: "image" });
-        if (live) setUrl(result.rows.find((entry) => entry.id === mediaId)?.url ?? null);
+        const result = await browseMediaAction({
+          page: 1,
+          pageSize: 60,
+          mimeGroup: "image",
+        });
+        if (live)
+          setUrl(
+            result.rows.find((entry) => entry.id === mediaId)?.url ?? null,
+          );
       } catch {
         if (live) setUrl(null);
       }
@@ -692,7 +940,10 @@ export function AttributeValueThumb({ mediaId }: { mediaId: string }) {
     };
   }, [mediaId]);
 
-  if (!url) return <span className="h-3 w-3 rounded-full bg-slate-200" aria-hidden="true" />;
+  if (!url)
+    return (
+      <span className="h-3 w-3 rounded-full bg-slate-200" aria-hidden="true" />
+    );
   // eslint-disable-next-line @next/next/no-img-element -- media lives on arbitrary storage hosts
   return <img src={url} alt="" className="h-6 w-6 object-cover" />;
 }
@@ -734,10 +985,20 @@ export function PricingSection({
   discountType: "PERCENTAGE" | "FLAT" | "NONE";
   discountValue: string;
   taxRateId: string | null;
-  taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
+  taxRates: Array<{
+    id: string;
+    name: string;
+    rateBps: number;
+    isDefault: boolean;
+  }>;
   taxRateBps: string;
   packagingTemplateId: string | null;
-  packagingTemplates: Array<{ id: string; name: string; costPaisa: number; isDefault: boolean }>;
+  packagingTemplates: Array<{
+    id: string;
+    name: string;
+    costPaisa: number;
+    isDefault: boolean;
+  }>;
   packagingCostPaisa: string;
   variantCount: number;
   /** Variants carrying a price override of their own. */
@@ -765,8 +1026,14 @@ export function PricingSection({
       title="Pricing"
       description="The default price every variant starts from. Set it before generating variants — they inherit it until overridden."
       icon={<ClipboardList className="h-4 w-4" />}
-      badge={unpricedCount === 0 && variantCount > 0 ? "Every variant priced" : `${unpricedCount} unpriced`}
-      badgeTone={unpricedCount === 0 && variantCount > 0 ? "success" : "warning"}
+      badge={
+        unpricedCount === 0 && variantCount > 0
+          ? "Every variant priced"
+          : `${unpricedCount} unpriced`
+      }
+      badgeTone={
+        unpricedCount === 0 && variantCount > 0 ? "success" : "warning"
+      }
     >
       <div className="grid gap-4 lg:grid-cols-4">
         <FieldWithTip
@@ -792,7 +1059,12 @@ export function PricingSection({
           <NativeSelect
             id="product-discount-type"
             value={discountType}
-            onChange={(event) => onPatch({ discountType: event.target.value as "PERCENTAGE" | "FLAT" | "NONE" })}
+            onChange={(event) =>
+              onPatch({
+                discountType: event.target.value as
+                  "PERCENTAGE" | "FLAT" | "NONE",
+              })
+            }
           >
             <option value="NONE">No discount</option>
             <option value="PERCENTAGE">Percentage</option>
@@ -802,9 +1074,15 @@ export function PricingSection({
 
         <FieldWithTip
           id="product-discount-value"
-          label={discountType === "PERCENTAGE" ? "Discount (%)" : "Discount (BDT)"}
+          label={
+            discountType === "PERCENTAGE" ? "Discount (%)" : "Discount (BDT)"
+          }
           tooltip="A percentage is 0–100. A flat amount may not exceed the current price."
-          error={discountError.ok ? undefined : [discountError.message ?? "Invalid discount"]}
+          error={
+            discountError.ok
+              ? undefined
+              : [discountError.message ?? "Invalid discount"]
+          }
         >
           <Input
             id="product-discount-value"
@@ -826,7 +1104,11 @@ export function PricingSection({
           </div>
           {pricing.compareAtPricePaisa != null ? (
             <p className="text-xs text-slate-500">
-              Shows as <span className="line-through">{formatPaisa(pricing.compareAtPricePaisa)}</span> {formatPaisa(pricing.sellPricePaisa)}
+              Shows as{" "}
+              <span className="line-through">
+                {formatPaisa(pricing.compareAtPricePaisa)}
+              </span>{" "}
+              {formatPaisa(pricing.sellPricePaisa)}
             </p>
           ) : null}
         </FieldWithTip>
@@ -844,8 +1126,15 @@ export function PricingSection({
             value={packagingTemplateId ?? ""}
             onChange={(event) => {
               const nextId = event.target.value || null;
-              const preset = packagingTemplates.find((template) => template.id === nextId);
-              onPatch({ packagingCostTemplateId: nextId, ...(preset ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) } : {}) });
+              const preset = packagingTemplates.find(
+                (template) => template.id === nextId,
+              );
+              onPatch({
+                packagingCostTemplateId: nextId,
+                ...(preset
+                  ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) }
+                  : {}),
+              });
             }}
           >
             <option value="">No template</option>
@@ -856,7 +1145,10 @@ export function PricingSection({
             ))}
           </NativeSelect>
           <div className="mt-2 flex items-center gap-2">
-            <Label htmlFor="product-packaging-cost" className="text-xs text-slate-500">
+            <Label
+              htmlFor="product-packaging-cost"
+              className="text-xs text-slate-500"
+            >
               Custom cost (BDT)
             </Label>
             <Input
@@ -864,12 +1156,17 @@ export function PricingSection({
               className="h-8 w-24"
               inputMode="decimal"
               value={packagingCostPaisa}
-              onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
+              onChange={(event) =>
+                onPatch({ packagingCostPaisa: event.target.value })
+              }
             />
           </div>
           <p className="mt-1 text-xs text-slate-400">
             Manage presets in{" "}
-            <Link href="/admin/catalog/packaging-costs" className="text-brand-700 underline">
+            <Link
+              href="/admin/catalog/packaging-costs"
+              className="text-brand-700 underline"
+            >
               Packaging costs
             </Link>
             .
@@ -887,7 +1184,10 @@ export function PricingSection({
             onChange={(event) => {
               const nextId = event.target.value || null;
               const preset = taxRates.find((rate) => rate.id === nextId);
-              onPatch({ taxRateId: nextId, ...(preset ? { taxRateBps: String(preset.rateBps) } : {}) });
+              onPatch({
+                taxRateId: nextId,
+                ...(preset ? { taxRateBps: String(preset.rateBps) } : {}),
+              });
             }}
           >
             <option value="">No tax preset</option>
@@ -911,7 +1211,10 @@ export function PricingSection({
           </div>
           <p className="mt-1 text-xs text-slate-400">
             Manage presets in{" "}
-            <Link href="/admin/catalog/tax-rates" className="text-brand-700 underline">
+            <Link
+              href="/admin/catalog/tax-rates"
+              className="text-brand-700 underline"
+            >
               Tax rates
             </Link>
             . Tax is recorded separately from discounts and profit.
@@ -921,9 +1224,12 @@ export function PricingSection({
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
         <Badge variant="neutral">{overrideCount} variant override(s)</Badge>
-        <Badge variant={unpricedCount === 0 ? "success" : "warning"}>{unpricedCount} variant(s) without a price</Badge>
+        <Badge variant={unpricedCount === 0 ? "success" : "warning"}>
+          {unpricedCount} variant(s) without a price
+        </Badge>
         <span className="text-slate-500">
-          Changing a default never overwrites an explicit variant or attribute override — those rows keep their own price.
+          Changing a default never overwrites an explicit variant or attribute
+          override — those rows keep their own price.
         </span>
       </div>
     </CollapsibleSection>
@@ -982,7 +1288,13 @@ export function ProductSettingsSection({
       title="SEO and publication"
       description="Search metadata, preorder policy, and whether the product is live. This section is last on purpose."
       icon={<Search className="h-4 w-4" />}
-      badge={status === "ACTIVE" ? "Published" : status === "DRAFT" ? "Draft" : "Archived"}
+      badge={
+        status === "ACTIVE"
+          ? "Published"
+          : status === "DRAFT"
+            ? "Draft"
+            : "Archived"
+      }
       badgeTone={status === "ACTIVE" ? "success" : "neutral"}
       className="mb-10"
     >
@@ -994,13 +1306,17 @@ export function ProductSettingsSection({
                 type="checkbox"
                 className="mt-0.5 h-4 w-4 rounded border-slate-300"
                 checked={isPreorderEnabled}
-                onChange={(event) => onPatch({ isPreorderEnabled: event.target.checked })}
+                onChange={(event) =>
+                  onPatch({ isPreorderEnabled: event.target.checked })
+                }
               />
               <span>
                 Allow preorders on this product
                 <span className="block text-xs text-slate-500">
-                  Preorder is a product setting: when it is on, any variant of this product can be pre-ordered. Orders are only split into
-                  a preorder when the requested quantity exceeds available stock (or stock is zero).
+                  Preorder is a product setting: when it is on, any variant of
+                  this product can be pre-ordered. Orders are only split into a
+                  preorder when the requested quantity exceeds available stock
+                  (or stock is zero).
                 </span>
               </span>
             </label>
@@ -1010,11 +1326,16 @@ export function ProductSettingsSection({
                 type="checkbox"
                 className="mt-0.5 h-4 w-4 rounded border-slate-300"
                 checked={requiresShipping}
-                onChange={(event) => onPatch({ requiresShipping: event.target.checked })}
+                onChange={(event) =>
+                  onPatch({ requiresShipping: event.target.checked })
+                }
               />
               <span>
                 Requires shipping
-                <span className="block text-xs text-slate-500">Turn off for digital goods and services; they skip courier booking.</span>
+                <span className="block text-xs text-slate-500">
+                  Turn off for digital goods and services; they skip courier
+                  booking.
+                </span>
               </span>
             </label>
 
@@ -1023,11 +1344,15 @@ export function ProductSettingsSection({
                 type="checkbox"
                 className="mt-0.5 h-4 w-4 rounded border-slate-300"
                 checked={isFeatured}
-                onChange={(event) => onPatch({ isFeatured: event.target.checked })}
+                onChange={(event) =>
+                  onPatch({ isFeatured: event.target.checked })
+                }
               />
               <span>
                 Featured
-                <span className="block text-xs text-slate-500">Shown first in storefront collections that honour the flag.</span>
+                <span className="block text-xs text-slate-500">
+                  Shown first in storefront collections that honour the flag.
+                </span>
               </span>
             </label>
           </div>
@@ -1039,7 +1364,14 @@ export function ProductSettingsSection({
             help="Leave empty to use the storefront default wording."
             error={errors.preorderNote}
           >
-            <Input id="preorder-note" value={preorderNote} maxLength={300} onChange={(event) => onPatch({ preorderNote: event.target.value })} />
+            <Input
+              id="preorder-note"
+              value={preorderNote}
+              maxLength={300}
+              onChange={(event) =>
+                onPatch({ preorderNote: event.target.value })
+              }
+            />
           </FieldWithTip>
 
           <Alert variant="info" title="Stock comes from purchasing">
@@ -1083,12 +1415,25 @@ export function ProductSettingsSection({
                 rows={3}
                 maxLength={400}
                 value={seoDescription}
-                onChange={(event) => onPatch({ seoDescription: event.target.value })}
+                onChange={(event) =>
+                  onPatch({ seoDescription: event.target.value })
+                }
               />
             </FieldWithTip>
 
-            <FieldWithTip id="seo-keywords" label="Keywords" tooltip="Internal keywords used by your own storefront search.">
-              <Input id="seo-keywords" value={seoKeywords} maxLength={400} onChange={(event) => onPatch({ seoKeywords: event.target.value })} />
+            <FieldWithTip
+              id="seo-keywords"
+              label="Keywords"
+              tooltip="Internal keywords used by your own storefront search."
+            >
+              <Input
+                id="seo-keywords"
+                value={seoKeywords}
+                maxLength={400}
+                onChange={(event) =>
+                  onPatch({ seoKeywords: event.target.value })
+                }
+              />
             </FieldWithTip>
 
             <MediaField
@@ -1109,36 +1454,49 @@ export function ProductSettingsSection({
                   Publication
                 </Label>
                 <InfoTip>
-                  Draft keeps the product invisible on the storefront. Active publishes it (the storefront only serves active products).
+                  Draft keeps the product invisible on the storefront. Active
+                  publishes it (the storefront only serves active products).
                   Archived hides it while keeping order history.
                 </InfoTip>
               </div>
               <NativeSelect
                 id="product-status"
                 value={status}
-                onChange={(event) => onPatch({ status: event.target.value as "DRAFT" | "ACTIVE" | "ARCHIVED" })}
+                onChange={(event) =>
+                  onPatch({
+                    status: event.target.value as
+                      "DRAFT" | "ACTIVE" | "ARCHIVED",
+                  })
+                }
               >
                 <option value="DRAFT">Draft — not sellable yet</option>
                 <option value="ACTIVE">Active — visible and sellable</option>
                 <option value="ARCHIVED">Archived</option>
               </NativeSelect>
-              <p className="text-xs text-slate-500">“Save as draft” always saves as a draft, whatever this says.</p>
+              <p className="text-xs text-slate-500">
+                “Save as draft” always saves as a draft, whatever this says.
+              </p>
             </div>
 
             <div className="space-y-2">
               <div className="flex items-center gap-1.5">
                 <Label className="text-slate-800">Search preview</Label>
                 <InfoTip>
-                  An approximation of how the result may look. Search engines decide the final appearance; this preview does not promise
+                  An approximation of how the result may look. Search engines
+                  decide the final appearance; this preview does not promise
                   indexing or ranking.
                 </InfoTip>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-4">
                 <p className="text-xs text-emerald-700">{url}</p>
-                <p className="mt-1 text-base font-medium text-sky-800">{title || "Product name"}</p>
+                <p className="mt-1 text-base font-medium text-sky-800">
+                  {title || "Product name"}
+                </p>
                 <p className="mt-1 text-sm text-slate-600">
                   {description ||
-                    (name ? `Shop ${name} online. Fast delivery, easy returns.` : "Add a meta description or a short description to control this text.")}
+                    (name
+                      ? `Shop ${name} online. Fast delivery, easy returns.`
+                      : "Add a meta description or a short description to control this text.")}
                 </p>
               </div>
             </div>
@@ -1168,111 +1526,158 @@ export function AttributesAndValues({
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onAttributeCreated: (attribute: EditorAttribute) => void;
-  onValueAdded: (attributeId: string, value: { id: string; value: string; colorHex: string | null; mediaId: string | null }) => void;
+  onValueAdded: (
+    attributeId: string,
+    value: {
+      id: string;
+      value: string;
+      colorHex: string | null;
+      mediaId: string | null;
+    },
+  ) => void;
 }) {
   const [dialog, setDialog] = React.useState(false);
-  const selected = attributes.filter((attribute) => selectedAttributeIds.includes(attribute.id));
+  const selected = attributes.filter((attribute) =>
+    selectedAttributeIds.includes(attribute.id),
+  );
 
   return (
     <div className="space-y-4">
-        <Combobox
-          id="product-attributes"
-          label="Attributes"
-          multiple
-          placeholder="Search attributes…"
-          tooltip="Variation attributes create one variant per combination. Descriptive attributes only show information on the product page."
-          help="Choose the attributes this product uses, then pick the values that apply."
-          options={attributes.map((attribute) => ({
-            value: attribute.id,
-            label: attribute.name,
-            hint: attribute.isVariantDefining ? "variations" : "describes",
-          }))}
-          value={selectedAttributeIds}
-          onChange={(value) =>
-            onPatch({
-              attributeIds: value,
-              // Dropping an attribute also drops its values, so the matrix cannot reference stale options.
-              selectedValueIds: selectedValueIds.filter((valueId) =>
-                value.some((attributeId) => attributes.find((attribute) => attribute.id === attributeId)?.values.some((entry) => entry.id === valueId)),
+      <Combobox
+        id="product-attributes"
+        label="Attributes"
+        multiple
+        placeholder="Search attributes…"
+        tooltip="Variation attributes create one variant per combination. Descriptive attributes only show information on the product page."
+        help="Choose the attributes this product uses, then pick the values that apply."
+        options={attributes.map((attribute) => ({
+          value: attribute.id,
+          label: attribute.name,
+          hint: attribute.isVariantDefining ? "variations" : "describes",
+        }))}
+        value={selectedAttributeIds}
+        onChange={(value) =>
+          onPatch({
+            attributeIds: value,
+            // Dropping an attribute also drops its values, so the matrix cannot reference stale options.
+            selectedValueIds: selectedValueIds.filter((valueId) =>
+              value.some((attributeId) =>
+                attributes
+                  .find((attribute) => attribute.id === attributeId)
+                  ?.values.some((entry) => entry.id === valueId),
               ),
-            })
-          }
-          emptyMessage="No attribute matches that search."
-          error={errors.attributeIds}
-          footer={
-            <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialog(true)}>
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              Create attribute
-            </Button>
-          }
-        />
+            ),
+          })
+        }
+        emptyMessage="No attribute matches that search."
+        error={errors.attributeIds}
+        footer={
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() => setDialog(true)}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            Create attribute
+          </Button>
+        }
+      />
 
-        {selected.length === 0 ? (
-          <Alert variant="info">
-            No attributes yet. Add Colour and Size to build a variant matrix, or Material to describe the product without creating
-            variants.
-          </Alert>
-        ) : null}
+      {selected.length === 0 ? (
+        <Alert variant="info">
+          No attributes yet. Add Colour and Size to build a variant matrix, or
+          Material to describe the product without creating variants.
+        </Alert>
+      ) : null}
 
-        <div className="space-y-3">
-          {selected.map((attribute) => (
-            <div key={attribute.id} className="rounded-lg border border-slate-200 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium text-slate-800">{attribute.name}</p>
-                  <Badge variant={attribute.isVariantDefining ? "brand" : "neutral"}>
-                    {attribute.isVariantDefining ? "Used for variations" : "Describes the product"}
-                  </Badge>
-                  <InfoTip>
-                    {attribute.isVariantDefining
-                      ? "Every selected value of this attribute becomes part of a variant (Colour × Size)."
-                      : "This attribute only shows information on the product page and never creates variants."}
-                  </InfoTip>
-                </div>
-                <AddAttributeValueInline attributeId={attribute.id} onAdded={(value) => onValueAdded(attribute.id, value)} />
+      <div className="space-y-3">
+        {selected.map((attribute) => (
+          <div
+            key={attribute.id}
+            className="rounded-lg border border-slate-200 p-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-slate-800">
+                  {attribute.name}
+                </p>
+                <Badge
+                  variant={attribute.isVariantDefining ? "brand" : "neutral"}
+                >
+                  {attribute.isVariantDefining
+                    ? "Used for variations"
+                    : "Describes the product"}
+                </Badge>
+                <InfoTip>
+                  {attribute.isVariantDefining
+                    ? "Every selected value of this attribute becomes part of a variant (Colour × Size)."
+                    : "This attribute only shows information on the product page and never creates variants."}
+                </InfoTip>
               </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                {attribute.values.map((value) => {
-                  const checked = selectedValueIds.includes(value.id);
-                  return (
-                    <div
-                      key={value.id}
-                      className={`flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs ${
-                        checked ? "border-brand-300 bg-brand-50 text-brand-700" : "border-slate-200 text-slate-600"
-                      }`}
-                    >
-                      <label className="flex cursor-pointer items-center gap-1.5">
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={checked}
-                          onChange={(event) =>
-                            onPatch({
-                              selectedValueIds: event.target.checked
-                                ? [...selectedValueIds, value.id]
-                                : selectedValueIds.filter((id) => id !== value.id),
-                            })
-                          }
-                        />
-                        {value.colorHex ? (
-                          <span className="h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: value.colorHex }} aria-hidden="true" />
-                        ) : null}
-                        {value.value}
-                      </label>
-                    </div>
-                  );
-                })}
-                {attribute.values.length === 0 ? <span className="text-xs text-slate-400">No values yet — add one on the right.</span> : null}
-              </div>
+              <AddAttributeValueInline
+                attributeId={attribute.id}
+                onAdded={(value) => onValueAdded(attribute.id, value)}
+              />
             </div>
-          ))}
-        </div>
 
-        <p className="text-xs text-slate-500">
-          {attributesSummary} Images are assigned on the variant after it exists — not while picking values.
-        </p>
-        {errors.selectedValueIds ? <p className="text-xs text-red-600">{errors.selectedValueIds[0]}</p> : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {attribute.values.map((value) => {
+                const checked = selectedValueIds.includes(value.id);
+                return (
+                  <div
+                    key={value.id}
+                    className={`flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs ${
+                      checked
+                        ? "border-brand-300 bg-brand-50 text-brand-700"
+                        : "border-slate-200 text-slate-600"
+                    }`}
+                  >
+                    <label className="flex cursor-pointer items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={checked}
+                        onChange={(event) =>
+                          onPatch({
+                            selectedValueIds: event.target.checked
+                              ? [...selectedValueIds, value.id]
+                              : selectedValueIds.filter(
+                                  (id) => id !== value.id,
+                                ),
+                          })
+                        }
+                      />
+                      {value.colorHex ? (
+                        <span
+                          className="h-3 w-3 rounded-full border border-slate-300"
+                          style={{ backgroundColor: value.colorHex }}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                      {value.value}
+                    </label>
+                  </div>
+                );
+              })}
+              {attribute.values.length === 0 ? (
+                <span className="text-xs text-slate-400">
+                  No values yet — add one on the right.
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-xs text-slate-500">
+        {attributesSummary} Images are assigned on the variant after it exists —
+        not while picking values.
+      </p>
+      {errors.selectedValueIds ? (
+        <p className="text-xs text-red-600">{errors.selectedValueIds[0]}</p>
+      ) : null}
 
       <CreateAttributeDialog
         open={dialog}

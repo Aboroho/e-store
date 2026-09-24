@@ -3,7 +3,14 @@
 import * as React from "react";
 import { AlertTriangle, Check, Loader2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
-import { Alert, Badge, Button, Input, Label, NativeSelect } from "@/components/ui/primitives";
+import {
+  Alert,
+  Badge,
+  Button,
+  Input,
+  Label,
+  NativeSelect,
+} from "@/components/ui/primitives";
 import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { InfoTip } from "@/components/ui/tooltip";
 import { MediaPicker } from "@/components/media/media-picker";
@@ -11,7 +18,10 @@ import type { MediaAssetView } from "@/modules/media/service";
 import { bulkVariantActionAction } from "@/modules/catalog/product-actions";
 import { formatPaisa } from "@/lib/money";
 import { calculatePricing } from "@/modules/catalog/pricing-rules";
-import { describeOverrideTarget, type PricingLevelInput } from "@/modules/catalog/inheritance";
+import {
+  describeOverrideTarget,
+  type PricingLevelInput,
+} from "@/modules/catalog/inheritance";
 import {
   DEFAULT_WEIGHT_UNIT,
   WEIGHT_UNITS,
@@ -89,7 +99,12 @@ const ACTIONS: ActionDefinition[] = [
     hint: "Set a current price and an optional discount. Choose where it is written: on each variant, on the matched attribute value (so future variants inherit it) or on the product default.",
     input: "price",
   },
-  { value: "set-weight", label: "Set weight", hint: "Overrides the product weight for the target variants.", input: "weight" },
+  {
+    value: "set-weight",
+    label: "Set weight",
+    hint: "Overrides the product weight for the target variants.",
+    input: "weight",
+  },
   {
     value: "clear-price-override",
     label: "Restore inherited price",
@@ -158,15 +173,22 @@ export function VariantBulkActions({
   embedded?: boolean;
 }) {
   const [action, setAction] = React.useState<BulkAction>("set-primary-image");
-  const [targetKind, setTargetKind] = React.useState<BulkTarget["kind"]>(selectedKeys.length > 0 ? "selected" : "all");
+  const [targetKind, setTargetKind] = React.useState<BulkTarget["kind"]>(
+    selectedKeys.length > 0 ? "selected" : "all",
+  );
   const [criteria, setCriteria] = React.useState<BulkTargetCriteria[]>([]);
   const [media, setMedia] = React.useState<MediaAssetView | null>(null);
   const [currentPrice, setCurrentPrice] = React.useState("");
-  const [discountType, setDiscountType] = React.useState<"PERCENTAGE" | "FLAT" | "NONE">("NONE");
+  const [discountType, setDiscountType] = React.useState<
+    "PERCENTAGE" | "FLAT" | "NONE"
+  >("NONE");
   const [discountValue, setDiscountValue] = React.useState("");
-  const [overrideTarget, setOverrideTarget] = React.useState<"variant" | "attribute" | "product" | "clear">("variant");
+  const [overrideTarget, setOverrideTarget] = React.useState<
+    "variant" | "attribute" | "product" | "clear"
+  >("variant");
   const [weight, setWeight] = React.useState("");
-  const [weightUnit, setWeightUnit] = React.useState<WeightUnit>(DEFAULT_WEIGHT_UNIT);
+  const [weightUnit, setWeightUnit] =
+    React.useState<WeightUnit>(DEFAULT_WEIGHT_UNIT);
   const [replaceOverrides, setReplaceOverrides] = React.useState(false);
   const [confirmed, setConfirmed] = React.useState(false);
   const [previewOpen, setPreviewOpen] = React.useState(false);
@@ -174,11 +196,14 @@ export function VariantBulkActions({
   const [error, setError] = React.useState<string | null>(null);
 
   const definition = ACTIONS.find((entry) => entry.value === action)!;
-  const attributeActions = action === "set-primary-image" || action === "reset-image";
+  const attributeActions =
+    action === "set-primary-image" || action === "reset-image";
 
   // When the table selection changes, default the target to it. Adjusted during
   // render (the documented alternative to a setState effect): one pass, no flash.
-  const [previousSelectionSize, setPreviousSelectionSize] = React.useState(selectedKeys.length);
+  const [previousSelectionSize, setPreviousSelectionSize] = React.useState(
+    selectedKeys.length,
+  );
   if (selectedKeys.length !== previousSelectionSize) {
     setPreviousSelectionSize(selectedKeys.length);
     if (selectedKeys.length > 0) setTargetKind("selected");
@@ -192,12 +217,29 @@ export function VariantBulkActions({
 
   const target: BulkTarget =
     targetKind === "attribute"
-      ? { kind: "attribute", criteria: criteria.filter((criterion) => criterion.valueIds.length > 0) }
-      : { kind: targetKind, variantIds: targetKind === "selected" ? selectedKeys : undefined };
+      ? {
+          kind: "attribute",
+          criteria: criteria.filter(
+            (criterion) => criterion.valueIds.length > 0,
+          ),
+        }
+      : {
+          kind: targetKind,
+          variantIds: targetKind === "selected" ? selectedKeys : undefined,
+        };
 
-  const criteriaSignature = criteria.map((criterion) => `${criterion.attributeId}:${criterion.valueIds.join("+")}`).join("|");
+  const criteriaSignature = criteria
+    .map(
+      (criterion) => `${criterion.attributeId}:${criterion.valueIds.join("+")}`,
+    )
+    .join("|");
   const matched = React.useMemo(
-    () => resolveBulkTarget(target, { rows, selectedIds: selectedKeys, attributes }),
+    () =>
+      resolveBulkTarget(target, {
+        rows,
+        selectedIds: selectedKeys,
+        attributes,
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature captures the criteria content; primitive deps below capture the rest
     [targetKind, selectedKeys, rows, attributes, criteriaSignature],
   );
@@ -222,7 +264,9 @@ export function VariantBulkActions({
     (definition.input === "image" && !media) ||
     (definition.input === "price" && !currentPrice.trim()) ||
     (definition.input === "weight" && !weight.trim()) ||
-    (targetKind === "attribute" && (criteria.length === 0 || criteria.every((criterion) => criterion.valueIds.length === 0)));
+    (targetKind === "attribute" &&
+      (criteria.length === 0 ||
+        criteria.every((criterion) => criterion.valueIds.length === 0)));
 
   const apply = async () => {
     setApplying(true);
@@ -253,11 +297,17 @@ export function VariantBulkActions({
 
     // Only the inputs this action actually consumes are sent, so an unrelated field
     // can never be written by accident.
-    const payload: Record<string, unknown> = { productId, action, target, replaceOverrides };
+    const payload: Record<string, unknown> = {
+      productId,
+      action,
+      target,
+      replaceOverrides,
+    };
     if (definition.input === "image" && media) payload.mediaId = media.id;
     if (action === "set-price") {
       payload.overrideTarget = overrideTarget;
-      if (currentPrice.trim()) payload.currentPricePaisa = moneyToPaisa(currentPrice);
+      if (currentPrice.trim())
+        payload.currentPricePaisa = moneyToPaisa(currentPrice);
       payload.discountType = discountType;
       if (discountValue.trim()) payload.discountValue = Number(discountValue);
     }
@@ -265,7 +315,8 @@ export function VariantBulkActions({
       payload.weightGrams = toWeightGrams(weight, weightUnit);
       payload.weightUnit = weightUnit;
     }
-    if (attributeActions) payload.setAttributeDefault = targetKind === "attribute";
+    if (attributeActions)
+      payload.setAttributeDefault = targetKind === "attribute";
 
     const result = await bulkVariantActionAction(payload);
     setApplying(false);
@@ -284,18 +335,28 @@ export function VariantBulkActions({
   };
 
   return (
-    <div className={embedded ? "space-y-4" : "space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4"}>
+    <div
+      className={
+        embedded
+          ? "space-y-4"
+          : "space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4"
+      }
+    >
       {embedded ? null : (
-      <div className="flex items-start gap-2">
-        <Wand2 className="mt-0.5 h-4 w-4 text-brand-600" aria-hidden="true" />
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">Bulk edit</h3>
-          <p className="text-xs text-slate-600">
-            Apply one change to selected variants or to every variant matching an attribute filter. Fields change with the action you pick. Nothing is written until you preview and confirm.
-            {!productId ? " Changes stay in this form until the product is saved." : null}
-          </p>
+        <div className="flex items-start gap-2">
+          <Wand2 className="mt-0.5 h-4 w-4 text-brand-600" aria-hidden="true" />
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Bulk edit</h3>
+            <p className="text-xs text-slate-600">
+              Apply one change to selected variants or to every variant matching
+              an attribute filter. Fields change with the action you pick.
+              Nothing is written until you preview and confirm.
+              {!productId
+                ? " Changes stay in this form until the product is saved."
+                : null}
+            </p>
+          </div>
         </div>
-      </div>
       )}
 
       <div className="grid gap-3 lg:grid-cols-3">
@@ -326,7 +387,8 @@ export function VariantBulkActions({
               Apply to
             </Label>
             <InfoTip>
-              The target group is resolved on the server from the saved variants, so the preview and the update can never disagree.
+              The target group is resolved on the server from the saved
+              variants, so the preview and the update can never disagree.
             </InfoTip>
           </div>
           <NativeSelect
@@ -348,7 +410,9 @@ export function VariantBulkActions({
         <div className="space-y-1">
           <Label className="text-xs">Target group</Label>
           <div className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700">
-            <Badge variant={matched.length > 0 ? "brand" : "warning"}>{matched.length} variant(s)</Badge>
+            <Badge variant={matched.length > 0 ? "brand" : "warning"}>
+              {matched.length} variant(s)
+            </Badge>
             <span className="truncate" title={targetDescription}>
               {targetDescription}
             </span>
@@ -357,7 +421,11 @@ export function VariantBulkActions({
       </div>
 
       {targetKind === "attribute" ? (
-        <AttributeCriteria attributes={attributes} criteria={criteria} onChange={setCriteria} />
+        <AttributeCriteria
+          attributes={attributes}
+          criteria={criteria}
+          onChange={setCriteria}
+        />
       ) : null}
 
       {definition.input === "image" ? (
@@ -365,12 +433,23 @@ export function VariantBulkActions({
           <div className="h-14 w-14 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
             {media?.url ? (
               // eslint-disable-next-line @next/next/no-img-element -- media lives on arbitrary storage hosts
-              <img src={media.url} alt={media.altText ?? media.originalName} className="h-full w-full object-cover" />
+              <img
+                src={media.url}
+                alt={media.altText ?? media.originalName}
+                className="h-full w-full object-cover"
+              />
             ) : null}
           </div>
           <div className="min-w-[12rem] flex-1">
-            <p className="text-sm font-medium text-slate-800">{media ? media.title ?? media.originalName : "No image selected"}</p>
-            <p className="text-xs text-slate-500">Pick an existing asset or upload a new one through the shared library.</p>
+            <p className="text-sm font-medium text-slate-800">
+              {media
+                ? (media.title ?? media.originalName)
+                : "No image selected"}
+            </p>
+            <p className="text-xs text-slate-500">
+              Pick an existing asset or upload a new one through the shared
+              library.
+            </p>
           </div>
           <MediaPicker
             title="Bulk image"
@@ -383,7 +462,12 @@ export function VariantBulkActions({
             }
           />
           {media ? (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setMedia(null)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setMedia(null)}
+            >
               Clear
             </Button>
           ) : null}
@@ -408,7 +492,11 @@ export function VariantBulkActions({
                 id="bulk-discount-type"
                 className="h-9 w-32"
                 value={discountType}
-                onChange={(event) => setDiscountType(event.target.value as "PERCENTAGE" | "FLAT" | "NONE")}
+                onChange={(event) =>
+                  setDiscountType(
+                    event.target.value as "PERCENTAGE" | "FLAT" | "NONE",
+                  )
+                }
               >
                 <option value="NONE">No discount</option>
                 <option value="PERCENTAGE">Percentage</option>
@@ -417,7 +505,11 @@ export function VariantBulkActions({
             </div>
             <MoneyInput
               id="bulk-discount-value"
-              label={discountType === "PERCENTAGE" ? "Discount (%)" : "Discount (BDT)"}
+              label={
+                discountType === "PERCENTAGE"
+                  ? "Discount (%)"
+                  : "Discount (BDT)"
+              }
               value={discountValue}
               onChange={setDiscountValue}
               tip="A percentage is 0–100; a flat amount is taken off the current price, in BDT."
@@ -430,8 +522,10 @@ export function VariantBulkActions({
                 Write the price to
               </Label>
               <InfoTip>
-                A variant override affects only the target rows. An attribute override is inherited by every variant of the matched value —
-                including variants generated later. The product default changes what every variant without an override sells for.
+                A variant override affects only the target rows. An attribute
+                override is inherited by every variant of the matched value —
+                including variants generated later. The product default changes
+                what every variant without an override sells for.
               </InfoTip>
             </div>
             <NativeSelect
@@ -439,18 +533,28 @@ export function VariantBulkActions({
               className="h-9 w-full max-w-md"
               value={productId ? overrideTarget : "variant"}
               onChange={(event) => {
-                setOverrideTarget(event.target.value as "variant" | "attribute" | "product" | "clear");
+                setOverrideTarget(
+                  event.target.value as
+                    "variant" | "attribute" | "product" | "clear",
+                );
                 invalidateConfirmation();
               }}
             >
-              <option value="variant">Variant override (only the target variants)</option>
-              <option value="attribute" disabled={!productId || targetKind !== "attribute"}>
+              <option value="variant">
+                Variant override (only the target variants)
+              </option>
+              <option
+                value="attribute"
+                disabled={!productId || targetKind !== "attribute"}
+              >
                 Attribute-level override (needs an attribute filter)
               </option>
               <option value="product" disabled={!productId}>
                 Product default (variants without an override follow it)
               </option>
-              <option value="clear">Clear the override and restore inheritance</option>
+              <option value="clear">
+                Clear the override and restore inheritance
+              </option>
             </NativeSelect>
           </div>
 
@@ -458,7 +562,13 @@ export function VariantBulkActions({
             <p className="text-xs text-slate-600">
               Sell price:{" "}
               <strong className="text-slate-800">
-                {formatPaisa(calculatePricing({ currentPricePaisa: moneyToPaisa(currentPrice), discountType, discountValue: Number(discountValue) || 0 }).sellPricePaisa)}
+                {formatPaisa(
+                  calculatePricing({
+                    currentPricePaisa: moneyToPaisa(currentPrice),
+                    discountType,
+                    discountValue: Number(discountValue) || 0,
+                  }).sellPricePaisa,
+                )}
               </strong>{" "}
               · compare-at {formatPaisa(moneyToPaisa(currentPrice))}
             </p>
@@ -471,7 +581,13 @@ export function VariantBulkActions({
             <Label htmlFor="bulk-weight" className="text-xs">
               New weight
             </Label>
-            <Input id="bulk-weight" className="h-9 w-32" inputMode="decimal" value={weight} onChange={(event) => setWeight(event.target.value)} />
+            <Input
+              id="bulk-weight"
+              className="h-9 w-32"
+              inputMode="decimal"
+              value={weight}
+              onChange={(event) => setWeight(event.target.value)}
+            />
           </div>
           <div className="space-y-1">
             <Label htmlFor="bulk-weight-unit" className="text-xs">
@@ -481,7 +597,9 @@ export function VariantBulkActions({
               id="bulk-weight-unit"
               className="h-9 w-36"
               value={weightUnit}
-              onChange={(event) => setWeightUnit(event.target.value as WeightUnit)}
+              onChange={(event) =>
+                setWeightUnit(event.target.value as WeightUnit)
+              }
             >
               {WEIGHT_UNITS.map((unit) => (
                 <option key={unit.value} value={unit.value}>
@@ -490,7 +608,9 @@ export function VariantBulkActions({
               ))}
             </NativeSelect>
           </div>
-          <p className="pb-2 text-xs text-slate-500">Stored in grams; the unit is kept for display.</p>
+          <p className="pb-2 text-xs text-slate-500">
+            Stored in grams; the unit is kept for display.
+          </p>
         </div>
       ) : null}
 
@@ -505,7 +625,8 @@ export function VariantBulkActions({
           <span>
             Replace images on variants that have their own
             <span className="block text-xs text-slate-500">
-              Off by default: variants with a custom image keep it. On: every matching variant gets this image as a hard override.
+              Off by default: variants with a custom image keep it. On: every
+              matching variant gets this image as a hard override.
             </span>
           </span>
         </label>
@@ -522,39 +643,66 @@ export function VariantBulkActions({
         >
           Preview change
         </Button>
-        {missingInput ? <span className="text-xs text-slate-500">Choose a value for this action first.</span> : null}
+        {missingInput ? (
+          <span className="text-xs text-slate-500">
+            Choose a value for this action first.
+          </span>
+        ) : null}
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white">
         <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Selected variants</p>
-          <span className="text-xs text-slate-500">{matched.length} in the current target</span>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Selected variants
+          </p>
+          <span className="text-xs text-slate-500">
+            {matched.length} in the current target
+          </span>
         </div>
         {matched.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-slate-500">No variants in this target yet. Choose a group above.</p>
+          <p className="px-3 py-3 text-xs text-slate-500">
+            No variants in this target yet. Choose a group above.
+          </p>
         ) : (
           <div className="max-h-56 overflow-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-slate-50 text-slate-500">
                 <tr>
                   <th className="px-3 py-1.5 text-left font-medium">Variant</th>
-                  <th className="px-3 py-1.5 text-right font-medium">Current price</th>
-                  <th className="px-3 py-1.5 text-left font-medium">Discount</th>
-                  <th className="px-3 py-1.5 text-right font-medium">Sell price</th>
+                  <th className="px-3 py-1.5 text-right font-medium">
+                    Current price
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium">
+                    Discount
+                  </th>
+                  <th className="px-3 py-1.5 text-right font-medium">
+                    Sell price
+                  </th>
                   <th className="px-3 py-1.5 text-left font-medium">Image</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {matched.map((row) => {
-                  const inheriting = !row.currentPrice?.trim() && (!row.discountType || row.discountType === "NONE") && !row.discountValue?.trim();
+                  const inheriting =
+                    !row.currentPrice?.trim() &&
+                    (!row.discountType || row.discountType === "NONE") &&
+                    !row.discountValue?.trim();
                   const currentPaisa = row.currentPrice?.trim()
                     ? moneyToPaisa(row.currentPrice)
-                    : productPricing?.currentPricePaisa ?? null;
-                  const discountType = inheriting ? (productPricing?.discountType ?? "NONE") : (row.discountType ?? "NONE");
-                  const discountValue = inheriting ? (productPricing?.discountValue ?? 0) : (Number(row.discountValue) || 0);
+                    : (productPricing?.currentPricePaisa ?? null);
+                  const discountType = inheriting
+                    ? (productPricing?.discountType ?? "NONE")
+                    : (row.discountType ?? "NONE");
+                  const discountValue = inheriting
+                    ? (productPricing?.discountValue ?? 0)
+                    : Number(row.discountValue) || 0;
                   const sell =
                     currentPaisa != null
-                      ? calculatePricing({ currentPricePaisa: currentPaisa, discountType, discountValue }).sellPricePaisa
+                      ? calculatePricing({
+                          currentPricePaisa: currentPaisa,
+                          discountType,
+                          discountValue,
+                        }).sellPricePaisa
                       : null;
                   const image = resolveVariantImage({
                     imageMediaId: row.imageMediaId,
@@ -564,8 +712,12 @@ export function VariantBulkActions({
                   });
                   return (
                     <tr key={row.key}>
-                      <td className="px-3 py-1.5 font-medium text-slate-800">{row.name || "Untitled variant"}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{currentPaisa != null ? formatPaisa(currentPaisa) : "—"}</td>
+                      <td className="px-3 py-1.5 font-medium text-slate-800">
+                        {row.name || "Untitled variant"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {currentPaisa != null ? formatPaisa(currentPaisa) : "—"}
+                      </td>
                       <td className="px-3 py-1.5 text-slate-600">
                         {discountType === "NONE"
                           ? "None"
@@ -573,8 +725,12 @@ export function VariantBulkActions({
                             ? `${discountValue}%`
                             : formatPaisa(Math.round(discountValue * 100))}
                       </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{sell != null ? formatPaisa(sell) : "—"}</td>
-                      <td className="px-3 py-1.5 text-slate-500">{image.mediaId ? image.label : "—"}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {sell != null ? formatPaisa(sell) : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-slate-500">
+                        {image.mediaId ? image.label : "—"}
+                      </td>
                     </tr>
                   );
                 })}
@@ -593,53 +749,74 @@ export function VariantBulkActions({
           <dl className="space-y-2 text-sm">
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Action</dt>
-              <dd className="text-right font-medium text-slate-800">{definition.label}</dd>
+              <dd className="text-right font-medium text-slate-800">
+                {definition.label}
+              </dd>
             </div>
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Target group</dt>
-              <dd className="text-right font-medium text-slate-800">{targetDescription}</dd>
+              <dd className="text-right font-medium text-slate-800">
+                {targetDescription}
+              </dd>
             </div>
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Affected variants</dt>
-              <dd className="text-right font-medium text-slate-800">{matched.length}</dd>
+              <dd className="text-right font-medium text-slate-800">
+                {matched.length}
+              </dd>
             </div>
             {impact ? (
               <>
                 <div className="flex items-start justify-between gap-4">
                   <dt className="text-slate-500">Images that change</dt>
-                  <dd className="text-right font-medium text-slate-800">{impact.inherited}</dd>
+                  <dd className="text-right font-medium text-slate-800">
+                    {impact.inherited}
+                  </dd>
                 </div>
                 <div className="flex items-start justify-between gap-4">
                   <dt className="text-slate-500">Overrides preserved</dt>
-                  <dd className="text-right font-medium text-slate-800">{impact.overridden}</dd>
+                  <dd className="text-right font-medium text-slate-800">
+                    {impact.overridden}
+                  </dd>
                 </div>
                 <div className="flex items-start justify-between gap-4">
                   <dt className="text-slate-500">Already showing this image</dt>
-                  <dd className="text-right font-medium text-slate-800">{impact.unchanged}</dd>
+                  <dd className="text-right font-medium text-slate-800">
+                    {impact.unchanged}
+                  </dd>
                 </div>
               </>
             ) : null}
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Overrides</dt>
-              <dd className="text-right font-medium text-slate-800">{replaceOverrides ? "Replaced" : "Preserved"}</dd>
+              <dd className="text-right font-medium text-slate-800">
+                {replaceOverrides ? "Replaced" : "Preserved"}
+              </dd>
             </div>
             {action === "set-price" ? (
               <div className="flex items-start justify-between gap-4">
                 <dt className="text-slate-500">Written to</dt>
-                <dd className="text-right font-medium text-slate-800">{describeOverrideTarget(overrideTarget)}</dd>
+                <dd className="text-right font-medium text-slate-800">
+                  {describeOverrideTarget(overrideTarget)}
+                </dd>
               </div>
             ) : null}
             {definition.restoresInheritance ? (
               <div className="flex items-start justify-between gap-4">
                 <dt className="text-slate-500">After the change</dt>
-                <dd className="text-right font-medium text-slate-800">The value is inherited again (product default → attribute override)</dd>
+                <dd className="text-right font-medium text-slate-800">
+                  The value is inherited again (product default → attribute
+                  override)
+                </dd>
               </div>
             ) : null}
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Variants affected</dt>
               <dd className="max-w-[18rem] text-right text-slate-800">
                 {matched.length === 0 ? (
-                  <span className="text-amber-700">No variants match — nothing will change.</span>
+                  <span className="text-amber-700">
+                    No variants match — nothing will change.
+                  </span>
                 ) : (
                   <>
                     <span className="block text-xs text-slate-500">
@@ -647,7 +824,9 @@ export function VariantBulkActions({
                         .slice(0, 8)
                         .map((row) => row.name || "Untitled variant")
                         .join(", ")}
-                      {matched.length > 8 ? ` and ${matched.length - 8} more` : ""}
+                      {matched.length > 8
+                        ? ` and ${matched.length - 8} more`
+                        : ""}
                     </span>
                   </>
                 )}
@@ -656,13 +835,19 @@ export function VariantBulkActions({
             {attributeActions && targetKind === "attribute" ? (
               <div className="flex items-start justify-between gap-4">
                 <dt className="text-slate-500">Also set attribute default</dt>
-                <dd className="text-right font-medium text-slate-800">Yes — new variants of this value inherit it</dd>
+                <dd className="text-right font-medium text-slate-800">
+                  Yes — new variants of this value inherit it
+                </dd>
               </div>
             ) : null}
           </dl>
 
           {definition.confirm === "destructive" ? (
-            <Alert variant="warning" className="mt-3" title={definition.destructiveHint}>
+            <Alert
+              variant="warning"
+              className="mt-3"
+              title={definition.destructiveHint}
+            >
               <label className="flex items-start gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -670,7 +855,8 @@ export function VariantBulkActions({
                   checked={confirmed}
                   onChange={(event) => setConfirmed(event.target.checked)}
                 />
-                I understand this removes or replaces data on the target variants.
+                I understand this removes or replaces data on the target
+                variants.
               </label>
             </Alert>
           ) : null}
@@ -682,15 +868,26 @@ export function VariantBulkActions({
           ) : null}
 
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setPreviewOpen(false)} disabled={applying}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setPreviewOpen(false)}
+              disabled={applying}
+            >
               Cancel
             </Button>
             <Button
               type="button"
               onClick={apply}
-              disabled={applying || (definition.confirm === "destructive" && !confirmed)}
+              disabled={
+                applying || (definition.confirm === "destructive" && !confirmed)
+              }
             >
-              {applying ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Check className="h-4 w-4" aria-hidden="true" />}
+              {applying ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Check className="h-4 w-4" aria-hidden="true" />
+              )}
               Apply to {matched.length} variant(s)
             </Button>
           </div>
@@ -721,7 +918,14 @@ function MoneyInput({
         </Label>
         <InfoTip>{tip}</InfoTip>
       </div>
-      <Input id={id} className="h-9" inputMode="decimal" value={value} onChange={(event) => onChange(event.target.value)} placeholder="0.00" />
+      <Input
+        id={id}
+        className="h-9"
+        inputMode="decimal"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="0.00"
+      />
       {value && !Number.isFinite(Number(value)) ? (
         <p className="flex items-center gap-1 text-xs text-red-600">
           <AlertTriangle className="h-3 w-3" aria-hidden="true" />
@@ -743,14 +947,20 @@ function AttributeCriteria({
 }) {
   const selectedAttributeId = criteria[0]?.attributeId ?? "";
   const selectedValueIds = criteria[0]?.valueIds ?? [];
-  const attribute = attributes.find((entry) => entry.id === selectedAttributeId);
+  const attribute = attributes.find(
+    (entry) => entry.id === selectedAttributeId,
+  );
 
   return (
     <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex items-center gap-1">
-        <p className="text-xs font-medium text-slate-700">Which attribute should match?</p>
+        <p className="text-xs font-medium text-slate-700">
+          Which attribute should match?
+        </p>
         <InfoTip>
-          First choose the attribute (for example Colour), then pick the values (Black, White). Only variants carrying one of those values are updated.
+          First choose the attribute (for example Colour), then pick the values
+          (Black, White). Only variants carrying one of those values are
+          updated.
         </InfoTip>
       </div>
 
@@ -779,16 +989,24 @@ function AttributeCriteria({
         <div className="space-y-1">
           <Label className="text-xs">Attribute value</Label>
           {!selectedAttributeId ? (
-            <p className="flex h-9 items-center text-xs text-slate-500">Choose an attribute first, then pick its values.</p>
+            <p className="flex h-9 items-center text-xs text-slate-500">
+              Choose an attribute first, then pick its values.
+            </p>
           ) : (
-            <div className="flex min-h-9 flex-wrap items-center gap-1.5" role="group" aria-label={`Values of ${attribute?.name ?? "attribute"}`}>
+            <div
+              className="flex min-h-9 flex-wrap items-center gap-1.5"
+              role="group"
+              aria-label={`Values of ${attribute?.name ?? "attribute"}`}
+            >
               {(attribute?.values ?? []).map((value) => {
                 const checked = selectedValueIds.includes(value.id);
                 return (
                   <label
                     key={value.id}
                     className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
-                      checked ? "border-brand-300 bg-brand-50 text-brand-700" : "border-slate-200 text-slate-600"
+                      checked
+                        ? "border-brand-300 bg-brand-50 text-brand-700"
+                        : "border-slate-200 text-slate-600"
                     }`}
                   >
                     <input
@@ -801,19 +1019,29 @@ function AttributeCriteria({
                             attributeId: selectedAttributeId,
                             valueIds: event.target.checked
                               ? [...selectedValueIds, value.id]
-                              : selectedValueIds.filter((id) => id !== value.id),
+                              : selectedValueIds.filter(
+                                  (id) => id !== value.id,
+                                ),
                           },
                         ]);
                       }}
                     />
                     {value.colorHex ? (
-                      <span className="h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: value.colorHex }} aria-hidden="true" />
+                      <span
+                        className="h-3 w-3 rounded-full border border-slate-300"
+                        style={{ backgroundColor: value.colorHex }}
+                        aria-hidden="true"
+                      />
                     ) : null}
                     {value.value}
                   </label>
                 );
               })}
-              {(attribute?.values ?? []).length === 0 ? <span className="text-xs text-slate-400">This attribute has no values yet.</span> : null}
+              {(attribute?.values ?? []).length === 0 ? (
+                <span className="text-xs text-slate-400">
+                  This attribute has no values yet.
+                </span>
+              ) : null}
             </div>
           )}
         </div>
