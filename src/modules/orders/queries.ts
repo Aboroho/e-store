@@ -332,7 +332,7 @@ export async function getExchangeDetail(businessId: string, exchangeId: string) 
       order: { select: { id: true, orderNumber: true, status: true, placedAt: true, deliveredAt: true, grandTotalPaisa: true, customerName: true, customerPhone: true } },
       customer: { select: { id: true, name: true, phone: true } },
       reason: true,
-      items: { orderBy: { createdAt: "asc" }, include: { variant: { select: { id: true, sku: true, name: true, product: { select: { name: true } } } } } },
+      items: { orderBy: { createdAt: "asc" }, include: { variant: { select: { id: true, name: true, product: { select: { name: true, sku: true } } } } } },
       statusHistory: { orderBy: { createdAt: "asc" } },
       refunds: { orderBy: { createdAt: "desc" } },
       shipments: { select: { id: true, internalCode: true, type: true, status: true, trackingCode: true, courier: { select: { name: true } } } },

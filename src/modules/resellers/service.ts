@@ -544,7 +544,7 @@ export async function listResellerPriceList(businessId: string, resellerId: stri
       items: {
         orderBy: { updatedAt: "desc" },
         take: 500,
-        include: { variant: { select: { id: true, name: true, sku: true, priceOverridePaisa: true, product: { select: { id: true, name: true } } } } },
+        include: { variant: { select: { id: true, name: true, priceOverridePaisa: true, product: { select: { id: true, name: true, sku: true } } } } },
       },
     },
   });
@@ -561,14 +561,13 @@ export async function listVariantsForPricing(businessId: string, resellerId?: st
 
   const variants = await prisma.variant.findMany({
     where: { product: { businessId, deletedAt: null, status: "ACTIVE" }, deletedAt: null },
-    orderBy: { sku: "asc" },
+    orderBy: { product: { sku: "asc" } },
     take: limit,
     select: {
       id: true,
-      sku: true,
       name: true,
       priceOverridePaisa: true,
-      product: { select: { name: true } },
+      product: { select: { name: true, sku: true } },
     },
   });
 
@@ -582,7 +581,7 @@ export async function listVariantsForPricing(businessId: string, resellerId?: st
 
   return variants.map((variant) => ({
     id: variant.id,
-    sku: variant.sku,
+    sku: variant.product.sku ?? "",
     name: variant.name,
     productName: variant.product.name,
     // What the reseller would pay today: negotiated price, then the variant override,

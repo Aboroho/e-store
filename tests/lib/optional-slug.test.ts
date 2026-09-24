@@ -50,7 +50,8 @@ describe("catalog input schemas accept a blank slug", () => {
       name: "A product",
       slug: "",
       productType: "SIMPLE",
-      variants: [{ name: "Default", sku: "SKU-1", pricePaisa: 100, attributeValueIds: [], isPreorderEnabled: false }],
+      sku: "SKU-1",
+      variants: [{ name: "Default", pricePaisa: 100, attributeValueIds: [], isPreorderEnabled: false }],
     });
     expect(parsed.slug).toBeUndefined();
   });

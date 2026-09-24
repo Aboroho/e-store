@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyLocalBulkAction,
   buildCombinations,
   combinationKey,
   describeBulkTarget,
@@ -13,6 +14,7 @@ import {
   planMatrix,
   resolveBulkTarget,
   resolveVariantImage,
+  shouldAutosaveDraft,
   suggestSlug,
   toWeightGrams,
   variantLabel,
@@ -113,6 +115,60 @@ describe("weight conversion", () => {
     expect(fromWeightGrams(1500, "kg")).toBe("1.5");
     expect(fromWeightGrams(500, "g")).toBe("500");
     expect(fromWeightGrams(null, "kg")).toBe("");
+  });
+});
+
+describe("draft autosave gating", () => {
+  it("never autosaves Add New Product — create is always a fresh session", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: true,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: null,
+        fingerprint: "a",
+        lastSavedFingerprint: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("saves a dirty edit of an existing product", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: true,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: "prod-1",
+        fingerprint: "a",
+        lastSavedFingerprint: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips a request when nothing changed since the last save", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: true,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: "prod-1",
+        fingerprint: "same",
+        lastSavedFingerprint: "same",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not save when the form is clean", () => {
+    expect(
+      shouldAutosaveDraft({
+        dirty: false,
+        name: "Shoes",
+        productCode: "SHOE-1",
+        productId: "prod-1",
+        fingerprint: "a",
+        lastSavedFingerprint: null,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -276,6 +332,39 @@ describe("bulk targeting", () => {
     expect(describeBulkTarget({ kind: "selected" }, { attributes: [], selectedCount: 2, totalCount: 3 })).toBe(
       "2 selected variant(s)",
     );
+  });
+});
+
+describe("local bulk apply", () => {
+  const rows = [
+    variant({ key: "black-s", attributeValueIds: ["v-black", "v-s"] }),
+    variant({ key: "black-m", attributeValueIds: ["v-black", "v-m"] }),
+    variant({ key: "white-s", attributeValueIds: ["v-white", "v-s"] }),
+  ];
+
+  it("applies a local bulk price to selected rows without touching the others", () => {
+    const next = applyLocalBulkAction(rows, [rows[0]!, rows[1]!], {
+      action: "set-price",
+      currentPrice: "19.99",
+      discountType: "NONE",
+    });
+    expect(next[0]!.currentPrice).toBe("19.99");
+    expect(next[1]!.currentPrice).toBe("19.99");
+    expect(next[2]!.currentPrice).toBeUndefined();
+  });
+
+  it("preserves a variant image override unless replaceOverrides is on", () => {
+    const withOverride = [
+      variant({ key: "black-s", imageMediaId: "keep-me", attributeValueIds: ["v-black", "v-s"] }),
+      variant({ key: "black-m", imageMediaId: null, attributeValueIds: ["v-black", "v-m"] }),
+    ];
+    const kept = applyLocalBulkAction(withOverride, withOverride, {
+      action: "set-primary-image",
+      mediaId: "new-image",
+      replaceOverrides: false,
+    });
+    expect(kept[0]!.imageMediaId).toBe("keep-me");
+    expect(kept[1]!.imageMediaId).toBe("new-image");
   });
 });
 

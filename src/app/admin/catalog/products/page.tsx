@@ -4,22 +4,14 @@ import { Package, Plus } from "lucide-react";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
 import { parseListQuery } from "@/lib/validation";
-import { formatPaisa } from "@/lib/money";
 import { listCategoryOptions, listProducts } from "@/modules/catalog/queries";
-import { PageHeader, Badge, Card, CardContent, EmptyState, buttonVariants } from "@/components/ui/primitives";
+import { PageHeader, Card, CardContent, EmptyState, buttonVariants } from "@/components/ui/primitives";
 import { FilterSelect, SearchForm } from "@/components/ui/interactive";
 import { Pagination } from "@/components/ui/pagination";
 import { ProductListTable } from "./product-list-table";
-import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Products" };
 export const dynamic = "force-dynamic";
-
-const STATUS_VARIANT: Record<string, "success" | "neutral" | "warning"> = {
-  ACTIVE: "success",
-  DRAFT: "warning",
-  ARCHIVED: "neutral",
-};
 
 export default async function ProductsPage({
   searchParams,
@@ -49,12 +41,13 @@ export default async function ProductsPage({
     }),
     listCategoryOptions(session.businessId),
   ]);
+  const listRows = rows;
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Products"
-        description="Catalog with variants, pricing and live stock. Archived products keep their history."
+        description="Catalogue of products and variants. Stock lives in Inventory — this list does not show on-hand quantities."
         actions={
           can(session, "product.create") ? (
             <Link href="/admin/catalog/products/new" className={buttonVariants({ variant: "default" })}>
@@ -86,11 +79,11 @@ export default async function ProductsPage({
           />
         </CardContent>
 
-        {rows.length === 0 ? (
+        {listRows.length === 0 ? (
           <CardContent>
             <EmptyState
               title="No products yet"
-              description="Create your first product — you can add variants, prices and stock right away."
+              description="Create your first product. Stock is received later through purchasing, not here."
               action={
                 can(session, "product.create") ? (
                   <Link href="/admin/catalog/products/new" className={buttonVariants({ variant: "default" })}>
@@ -102,9 +95,10 @@ export default async function ProductsPage({
           </CardContent>
         ) : (
           <ProductListTable
-            products={rows}
+            products={listRows}
             canEdit={can(session, "product.update")}
-            canViewCost={can(session, "product.view_cost")}
+            canCreate={can(session, "product.create")}
+            canDelete={can(session, "product.delete") || can(session, "product.update")}
           />
         )}
 

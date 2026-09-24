@@ -34,9 +34,9 @@ export async function listInventory(
       ...(query.search
         ? {
             OR: [
-              { sku: { contains: query.search, mode: "insensitive" as const } },
               { name: { contains: query.search, mode: "insensitive" as const } },
               { product: { name: { contains: query.search, mode: "insensitive" as const } } },
+              { product: { sku: { contains: query.search, mode: "insensitive" as const } } },
             ],
           }
         : {}),
@@ -46,7 +46,7 @@ export async function listInventory(
 
   const orderBy =
     query.sortBy === "sku"
-      ? { variant: { sku: query.sortDir } }
+      ? { variant: { product: { sku: query.sortDir } } }
       : query.sortBy === "onHand"
         ? { onHand: query.sortDir }
         : { updatedAt: query.sortDir };
@@ -59,7 +59,7 @@ export async function listInventory(
       take: query.take,
       include: {
         location: { select: { name: true } },
-        variant: { select: { id: true, sku: true, name: true, product: { select: { id: true, name: true } } } },
+        variant: { select: { id: true, name: true, product: { select: { id: true, name: true, sku: true } } } },
       },
     }),
     prisma.inventoryBalance.count({ where }),
@@ -68,7 +68,7 @@ export async function listInventory(
   const rows: InventoryRow[] = balances
     .map((balance) => ({
       variantId: balance.variant.id,
-      sku: balance.variant.sku ?? "",
+      sku: balance.variant.product.sku ?? "",
       variantName: balance.variant.name,
       productId: balance.variant.product.id,
       productName: balance.variant.product.name,
@@ -93,7 +93,7 @@ export async function getVariantInventoryDetail(businessId: string, variantId: s
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, product: { businessId } },
     include: {
-      product: { select: { id: true, name: true, status: true, isPreorderEnabled: true } },
+      product: { select: { id: true, name: true, sku: true, status: true, isPreorderEnabled: true } },
       inventory: { include: { location: { select: { id: true, name: true } } } },
       attributeValues: {
         include: {
@@ -142,7 +142,7 @@ export async function listAdjustments(
           OR: [
             { reasonCode: { contains: query.search, mode: "insensitive" as const } },
             { note: { contains: query.search, mode: "insensitive" as const } },
-            { variant: { sku: { contains: query.search, mode: "insensitive" as const } } },
+            { variant: { product: { sku: { contains: query.search, mode: "insensitive" as const } } } },
           ],
         }
       : {}),
@@ -155,7 +155,7 @@ export async function listAdjustments(
       skip: query.skip,
       take: query.take,
       include: {
-        variant: { select: { sku: true, name: true, product: { select: { name: true } } } },
+        variant: { select: { name: true, product: { select: { name: true, sku: true } } } },
       },
     }),
     prisma.stockAdjustment.count({ where }),
@@ -193,22 +193,21 @@ export async function searchVariants(businessId: string, search?: string, take =
       ...(search
         ? {
             OR: [
-              { sku: { contains: search, mode: "insensitive" as const } },
               { name: { contains: search, mode: "insensitive" as const } },
               { product: { name: { contains: search, mode: "insensitive" as const } } },
+              { product: { sku: { contains: search, mode: "insensitive" as const } } },
             ],
           }
         : {}),
     },
-    orderBy: { sku: "asc" },
+    orderBy: { product: { sku: "asc" } },
     take,
     select: {
       id: true,
-      sku: true,
       name: true,
       costPaisa: true,
       priceOverridePaisa: true,
-      product: { select: { id: true, name: true } },
+      product: { select: { id: true, name: true, sku: true } },
       inventory: { select: { onHand: true, reserved: true, damaged: true, inspection: true } },
     },
   });

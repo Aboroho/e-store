@@ -237,6 +237,8 @@ export interface MediaGalleryFieldProps extends MediaPickerConfig {
   tooltip?: React.ReactNode;
   /** Marks the first item as the primary one and explains the ordering rule. */
   primaryLabel?: string;
+  /** When false, this gallery is additional images only — no “Make primary” or primary badge. */
+  allowMakePrimary?: boolean;
   /** Called when the alt text of an association changes. */
   onAltTextChange?: (mediaId: string, altText: string) => void;
   disabled?: boolean;
@@ -252,6 +254,7 @@ export function MediaGalleryField({
   help,
   tooltip,
   primaryLabel = "Primary",
+  allowMakePrimary = true,
   onAltTextChange,
   disabled = false,
   emptyLabel = "No images selected yet.",
@@ -310,7 +313,7 @@ export function MediaGalleryField({
             <li key={item.mediaId} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
               <div className="relative aspect-square bg-slate-50">
                 <MediaThumb asset={item.asset} rounded="rounded-none" />
-                {index === 0 ? (
+                {allowMakePrimary && index === 0 ? (
                   <Badge variant="brand" className="absolute left-1.5 top-1.5 shadow-sm">
                     <Star className="h-3 w-3" aria-hidden="true" />
                     {primaryLabel}
@@ -345,16 +348,18 @@ export function MediaGalleryField({
                   >
                     <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
                   </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-1.5 text-[11px]"
-                    disabled={disabled || index === 0}
-                    onClick={() => makePrimary(index)}
-                  >
-                    Make primary
-                  </Button>
+                  {allowMakePrimary ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-1.5 text-[11px]"
+                      disabled={disabled || index === 0}
+                      onClick={() => makePrimary(index)}
+                    >
+                      Make primary
+                    </Button>
+                  ) : null}
                   {onAltTextChange ? (
                     <Button
                       type="button"

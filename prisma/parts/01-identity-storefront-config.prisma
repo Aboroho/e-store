@@ -129,6 +129,7 @@ model Business {
   customers            Customer[]
   categories           Category[]
   brands               Brand[]
+  labels               Label[]
   unitLabels           UnitLabel[]
   taxRates             TaxRate[]
   packagingTemplates   PackagingCostTemplate[]

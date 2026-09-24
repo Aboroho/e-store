@@ -139,19 +139,19 @@ export async function createExchangeRequest(actor: ExchangeActor, input: CreateE
       const variant = await tx.variant.findFirst({
         where: { id: item.variantId, product: { businessId: actor.businessId } },
         include: {
-          product: { select: { name: true } },
+          product: { select: { name: true, sku: true } },
           attributeValues: { include: { attribute: true, attributeValue: true } },
         },
       });
       if (!variant) throw AppError.validation("One of the replacement items is not available");
-      if (variant.status !== "ACTIVE") throw AppError.invalidState(`${variant.sku} is unavailable for exchange`);
+      if (variant.status !== "ACTIVE") throw AppError.invalidState(`${variant.product?.sku ?? variant.name} is unavailable for exchange`);
 
       const resolved = await resolveVariantPrice(variant.id, { quantity: item.quantity });
-      if (resolved.pricePaisa <= 0) throw AppError.validation(`${variant.sku || variant.name} has no price configured`);
+      if (resolved.pricePaisa <= 0) throw AppError.validation(`${variant.name} has no price configured`);
       replacementValuePaisa += resolved.pricePaisa * item.quantity;
       replacementRows.push({
         variantId: variant.id,
-        sku: variant.sku ?? "",
+        sku: variant.product?.sku ?? "",
         productName: variant.product.name,
         variantName: variant.name,
         attributesSnapshot: variant.attributeValues.map((value) => ({

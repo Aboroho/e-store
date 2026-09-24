@@ -175,6 +175,31 @@ model Brand {
   @@index([businessId, deletedAt])
 }
 
+/// A merchandising label (New, Sale, Featured, …) a product can carry.
+/// Labels work like Brand and Category: they are first-class catalogue records
+/// that can be selected or created from the product editor without leaving it.
+model Label {
+  id             String   @id @default(uuid())
+  businessId     String
+  name           String
+  slug           String
+  description    String?
+  colorHex       String?
+  imageMediaId   String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  image    MediaAsset?   @relation("LabelImage", fields: [imageMediaId], references: [id], onDelete: SetNull)
+  products ProductLabel[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, isActive, name])
+  @@index([businessId, deletedAt])
+}
+
 /// Selectable unit labels ("piece", "pair", "box", …). `Product.unitLabel` stays a
 /// text column (historic values and storefront rendering are unchanged); this table is
 /// the pickable, de-duplicated list the catalogue UI offers.
@@ -276,6 +301,9 @@ model Product {
   seoDescription   String?
   seoKeywords      String?
   seoImageMediaId  String?
+  /// The product's primary image is a first-class field, independent of the
+  /// additional-image gallery (`images`). Changing one never rewrites the other.
+  primaryImageMediaId String?
   publishedAt      DateTime?
   archivedAt       DateTime?
   createdByUserId  String?
@@ -291,7 +319,9 @@ model Product {
   taxRate    TaxRate?            @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
   packagingCostTemplate PackagingCostTemplate? @relation(fields: [packagingCostTemplateId], references: [id], onDelete: SetNull)
   seoImage   MediaAsset?         @relation("ProductSeoImage", fields: [seoImageMediaId], references: [id], onDelete: SetNull)
+  primaryImage MediaAsset?       @relation("ProductPrimaryImage", fields: [primaryImageMediaId], references: [id], onDelete: SetNull)
   categories ProductCategory[]
+  labels     ProductLabel[]
   images     ProductImage[]
   variants   Variant[]
   attributes ProductAttribute[]
@@ -325,6 +355,20 @@ model ProductCategory {
   @@index([categoryId])
 }
 
+model ProductLabel {
+  id        String   @id @default(uuid())
+  productId String
+  labelId   String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label   Label   @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, labelId])
+  @@index([labelId])
+}
+
 model Attribute {
   id                 String        @id @default(uuid())
   businessId         String
@@ -337,6 +381,7 @@ model Attribute {
   isActive           Boolean       @default(true)
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
+  deletedAt          DateTime?
 
   business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
   values        AttributeValue[]
@@ -345,6 +390,7 @@ model Attribute {
 
   @@unique([businessId, slug])
   @@index([businessId, position])
+  @@index([businessId, deletedAt])
 }
 
 model AttributeValue {
@@ -396,10 +442,8 @@ model ProductAttribute {
 model Variant {
   id             String        @id @default(uuid())
   productId      String
-  /// SKU belongs to the main product. This column is a legacy/internal code only:
-  /// the product-management workflow never asks for it and never generates it.
-  /// @deprecated Identify a variant by `id` (or `productId` + `optionKey`).
-  sku            String?
+  /// SKU belongs to the main product. Variants are identified by `id` and by
+  /// their deterministic `optionKey` — they never own a SKU of their own.
   barcode        String?
   name           String
   /// Deterministic key of the attribute combination, e.g. "color:red|size:xl".
@@ -444,7 +488,6 @@ model Variant {
 
   @@unique([productId, optionKey])
   @@index([productId, status])
-  @@index([productId, sku])
   @@index([status])
 }
 

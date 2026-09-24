@@ -14,6 +14,7 @@ import {
   createAttributeForProductAction,
   createBrandAction,
   createCategoryForProductAction,
+  createLabelAction,
 } from "@/modules/catalog/product-actions";
 import type { EditorAttribute, EditorCategory } from "@/modules/catalog/product-queries";
 import type { MediaAssetView } from "@/modules/media/service";
@@ -183,6 +184,164 @@ export function CreateBrandDialog({
             <Button type="submit" disabled={saving || disabled}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
               Create brand
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Label                                                                      */
+/* -------------------------------------------------------------------------- */
+
+export function CreateLabelDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  productUrlPrefix,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (label: { id: string; name: string; slug: string; colorHex: string | null; image: MediaAssetView | null }) => void;
+  productUrlPrefix: string | null;
+  disabled?: boolean;
+}) {
+  const [name, setName] = React.useState("");
+  const [slug, setSlug] = React.useState("");
+  const [slugTouched, setSlugTouched] = React.useState(false);
+  const [description, setDescription] = React.useState("");
+  const [colorHex, setColorHex] = React.useState("");
+  const [image, setImage] = React.useState<MediaAssetView | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string[]>>({});
+
+  const [wasOpen, setWasOpen] = React.useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (!open) {
+      setName("");
+      setSlug("");
+      setSlugTouched(false);
+      setDescription("");
+      setColorHex("");
+      setImage(null);
+      setError(null);
+      setFieldErrors({});
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        title="Create label"
+        description="The label is created in the catalogue, then selected here. This form stays exactly as you left it."
+        className="max-h-[90dvh] max-w-xl overflow-y-auto"
+      >
+        <form
+          className="space-y-4"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setSaving(true);
+            setError(null);
+            setFieldErrors({});
+            const result = await createLabelAction({
+              name,
+              slug: slug || undefined,
+              description: description || undefined,
+              colorHex: colorHex || undefined,
+              imageMediaId: image?.id ?? null,
+              isActive: true,
+            });
+            setSaving(false);
+            if (!result.ok) {
+              setError(result.message);
+              setFieldErrors(result.fieldErrors ?? {});
+              return;
+            }
+            toast.success(`Label “${result.data.name}” created`);
+            onCreated({ id: result.data.id, name: result.data.name, slug: result.data.slug, colorHex: colorHex || null, image });
+            onOpenChange(false);
+          }}
+        >
+          {error ? <Alert variant="danger">{error}</Alert> : null}
+
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="label-name">
+                Label name <span className="text-red-500">*</span>
+              </Label>
+              <InfoTip>Shown on the product and used by storefront filters, the same way brands and categories are.</InfoTip>
+            </div>
+            <Input
+              id="label-name"
+              value={name}
+              autoFocus
+              required
+              maxLength={80}
+              onChange={(event) => {
+                setName(event.target.value);
+                if (!slugTouched) setSlug(suggestSlug(event.target.value));
+              }}
+            />
+            {fieldErrors.name ? <p className="text-xs text-red-600">{fieldErrors.name[0]}</p> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="label-slug">URL slug</Label>
+              <InfoTip>Used in filter links. Lower-case letters, numbers and dashes.</InfoTip>
+            </div>
+            <Input
+              id="label-slug"
+              value={slug}
+              maxLength={80}
+              onChange={(event) => {
+                setSlug(event.target.value);
+                setSlugTouched(true);
+              }}
+            />
+            {slug ? <p className="text-xs text-slate-500">{slugPreview(productUrlPrefix, slug).replace("/products/", "/labels/")}</p> : null}
+            {fieldErrors.slug ? <p className="text-xs text-red-600">{fieldErrors.slug[0]}</p> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="label-color">Colour</Label>
+              <InfoTip>Optional hex colour used as a swatch next to the label name.</InfoTip>
+            </div>
+            <Input id="label-color" value={colorHex} placeholder="#ef4444" onChange={(event) => setColorHex(event.target.value)} />
+            {fieldErrors.colorHex ? <p className="text-xs text-red-600">{fieldErrors.colorHex[0]}</p> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="label-description">Description</Label>
+              <InfoTip>A sentence about when to use this label. Optional.</InfoTip>
+            </div>
+            <Textarea id="label-description" rows={3} maxLength={500} value={description} onChange={(event) => setDescription(event.target.value)} />
+          </div>
+
+          <MediaField
+            label="Label image"
+            value={image}
+            onChange={setImage}
+            size={80}
+            emptyLabel="No image selected"
+            help="Chosen from the shared media library. Upload inside the library if the image is not there yet."
+            tooltip="The image is a media asset: the same file can be reused without being uploaded again."
+          />
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving || disabled}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
+              Create label
             </Button>
           </div>
         </form>

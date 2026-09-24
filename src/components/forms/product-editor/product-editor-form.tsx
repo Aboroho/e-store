@@ -7,11 +7,10 @@ import { toast } from "sonner";
 import { Alert, Badge, Button } from "@/components/ui/primitives";
 import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { cn } from "@/lib/utils";
-import { CollapsibleGroup } from "@/components/ui/collapsible";
+import { CollapsibleGroup, CollapsibleSection } from "@/components/ui/collapsible";
 import {
   checkProductSkusAction,
   checkProductSlugAction,
-  listBrandsAction,
   saveProductAction,
   setAttributeValueImageAction,
 } from "@/modules/catalog/product-actions";
@@ -25,11 +24,11 @@ import {
   type DraftVariant,
 } from "@/modules/catalog/product-draft";
 import type { EditorAttribute, EditorCategory, ProductEditorData } from "@/modules/catalog/product-queries";
-import type { RichTextDocument } from "@/components/rich-text-editor/types";
 import {
   BasicInformationSection,
   OrganizationSection,
   PricingSection,
+  ProductDescriptionSection,
   ProductImagesSection,
   ProductSettingsSection,
 } from "./sections";
@@ -71,17 +70,17 @@ function toBrandChoice(brand: ProductEditorData["brands"][number]): BrandChoice 
 type ErrorMap = Record<string, string[]>;
 
 /**
- * The order of the form follows the order a merchandiser works in: describe the
- * product, price it, file it, build the variants, dress it with images, then
- * decide how it ships, how it is found and whether it is live.
+ * Named section chips, in this order: Information, Organisation, Images,
+ * Attributes & variations (variable products only), Description, SEO.
+ * Pricing sits after Information and is not a chip.
  */
 const SECTIONS = [
   { id: "information", label: "Product information" },
-  { id: "pricing", label: "Pricing" },
   { id: "organization", label: "Organisation" },
-  { id: "variants", label: "Attributes & variants" },
   { id: "images", label: "Images" },
-  { id: "settings", label: "Settings, SEO & publication" },
+  { id: "variants", label: "Attributes, variations & bulk" },
+  { id: "description", label: "Description" },
+  { id: "seo", label: "SEO" },
 ] as const;
 
 function toPaisa(value: string | null | undefined): number | null {
@@ -121,7 +120,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   const [saving, setSaving] = React.useState<null | "draft" | "create">(null);
   const draft = useProductDraft({
     productId: product?.id ?? null,
-    initialDraft: data.draft,
+    initialDraft: product ? data.draft : null,
     state,
     dirty: editor.dirty,
     onResume: (payload) => {
@@ -130,7 +129,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       editor.reset({ ...state, ...(payload as Partial<ProductEditorState>) });
       setSaved(false);
     },
-    enabled: saving == null,
+    enabled: saving == null && Boolean(product),
   });
 
   /* Option lists that `+ Create …` dialogs extend without a page reload. */
@@ -155,6 +154,8 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   const [skuState, setSkuState] = React.useState<{ checking: boolean; message: string | null }>({ checking: false, message: null });
 
 
+
+
   /* ---------------------------------------------------------------- matrix */
 
   const draftAttributes = React.useMemo(
@@ -165,10 +166,9 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   const plan = React.useMemo(
     () =>
       planMatrix(draftAttributes, state.selectedValueIds, state.variants, {
-        skuPrefix: normalizeSku(state.productCode) || "SKU",
         keepOrphans: true,
       }),
-    [draftAttributes, state.selectedValueIds, state.variants, state.productCode],
+    [draftAttributes, state.selectedValueIds, state.variants],
   );
 
   /* ------------------------------------------------------------- slug check */
@@ -181,13 +181,20 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     setSlugState({ checking: state.slug.trim().length > 0, available: null, suggestion: null });
   }
 
+  const lastCheckedSlug = React.useRef<string>("");
   React.useEffect(() => {
     const slug = state.slug.trim();
-    if (!slug) return;
+    const productId = product?.id ?? draft.productId ?? "";
+    const key = `${productId}:${slug}`;
+    if (!slug || key === lastCheckedSlug.current) {
+      if (!slug) setSlugState({ checking: false, available: null, suggestion: null });
+      return;
+    }
     let cancelled = false;
     const handle = setTimeout(async () => {
-      const result = await checkProductSlugAction({ slug, productId: product?.id });
+      const result = await checkProductSlugAction({ slug, productId: product?.id ?? draft.productId ?? undefined });
       if (cancelled) return;
+      lastCheckedSlug.current = key;
       if (!result.ok) {
         setSlugState({ checking: false, available: null, suggestion: null });
         return;
@@ -198,17 +205,24 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [state.slug, product?.id]);
+  }, [state.slug, product?.id, draft.productId]);
 
   /* ------------------------------------------------- product code uniqueness */
 
+  const lastCheckedSku = React.useRef<string>("");
   React.useEffect(() => {
     const code = normalizeSku(state.productCode);
-    if (!code) return;
+    const productId = product?.id ?? draft.productId ?? "";
+    const key = `${productId}:${code}`;
+    if (!code || code.length < 2 || key === lastCheckedSku.current) {
+      if (!code) setSkuState({ checking: false, message: null });
+      return;
+    }
     let cancelled = false;
     const handle = setTimeout(async () => {
-      const result = await checkProductSkusAction({ productId: product?.id, productCode: code });
+      const result = await checkProductSkusAction({ productId: product?.id ?? draft.productId ?? undefined, productCode: code });
       if (cancelled) return;
+      lastCheckedSku.current = key;
       setSkuState({
         checking: false,
         message: !result.ok
@@ -223,7 +237,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [state.productCode, product?.id]);
+  }, [state.productCode, product?.id, draft.productId]);
 
   /* ------------------------------------------------------- unsaved changes */
 
@@ -247,7 +261,10 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
     asset: image.asset,
     altText: image.altText,
   }));
-  const productImage = state.images[0]?.asset ?? null;
+  const primaryImageItem: MediaGalleryItem | null = state.primaryImage
+    ? { mediaId: state.primaryImage.mediaId, asset: state.primaryImage.asset, altText: state.primaryImage.altText }
+    : null;
+  const productImage = state.primaryImage?.asset ?? null;
   const variantDefiningAttributes = draftAttributes.filter((attribute) => attribute.isVariantDefining !== false);
 
   /** The price a row sells for: its own override, else the attribute default, else the product default. */
@@ -265,18 +282,18 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   );
 
   const completion = React.useMemo(() => {
-    const priced = state.variants.filter((variant) => effectivePaisa(variant) > 0).length;
     return {
       information: state.name.trim().length >= 2 && state.slug.trim().length > 0 && normalizeSku(state.productCode).length >= 2,
-      pricing: (toPaisa(state.currentPrice) ?? 0) > 0 || (state.variants.length > 0 && priced === state.variants.length),
-      organization: state.categoryIds.length > 0 && state.unitLabel.trim().length > 0 && isNonNegativeNumber(state.weightValue),
-      variants: state.variants.length > 0,
-      images: state.images.length > 0,
-      settings: Boolean(state.seoTitle.trim() || state.seoDescription.trim()),
+      organization: state.unitLabel.trim().length > 0 && isNonNegativeNumber(state.weightValue),
+      images: Boolean(state.primaryImage),
+      variants: state.productType === "SIMPLE" || state.variants.length > 0,
+      description: true,
+      seo: Boolean(state.seoTitle.trim() || state.seoDescription.trim() || state.status),
     } satisfies Record<(typeof SECTIONS)[number]["id"], boolean>;
   }, [state, effectivePaisa]);
 
-  const completedCount = SECTIONS.filter((section) => completion[section.id]).length;
+  const visibleSections = state.productType === "SIMPLE" ? SECTIONS.filter((section) => section.id !== "variants") : SECTIONS;
+  const completedCount = visibleSections.filter((section) => completion[section.id]).length;
 
   const productPricing: PricingLevelInput = React.useMemo(
     () => ({
@@ -372,11 +389,8 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
   };
 
   const buildPayload = (saveAsDraft: boolean) => {
-    const variantDefining = state.attributeIds.filter(
-      (id) => attributes.find((attribute) => attribute.id === id)?.isVariantDefining !== false,
-    );
     return {
-      productId: product?.id,
+      productId: product?.id ?? draft.productId ?? undefined,
       expectedUpdatedAt: product?.updatedAt,
       draftId: draft.draftId,
       draftRevision: draft.revision,
@@ -384,18 +398,19 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       slug: state.slug.trim(),
       productCode: normalizeSku(state.productCode),
       barcode: state.barcode.trim() || undefined,
-      productType: (state.variants.length > 1 || variantDefining.length > 0 ? "VARIABLE" : "SIMPLE") as "SIMPLE" | "VARIABLE",
+      productType: state.productType,
       status: saveAsDraft && !product ? ("DRAFT" as const) : state.status,
       brandId: state.brandId,
+      labelIds: state.labelIds,
       unitLabel: state.unitLabel.trim(),
       unitLabelId: state.unitLabelId,
       categoryIds: state.categoryIds,
       primaryCategoryId: state.primaryCategoryId,
-      attributeIds: state.attributeIds,
+      attributeIds: state.productType === "SIMPLE" ? [] : state.attributeIds,
       shortDescription: state.shortDescription,
       description: state.description,
-      primaryImage: state.images[0] ? { mediaId: state.images[0].mediaId, altText: state.images[0].altText ?? null } : null,
-      images: state.images.slice(1).map((image) => ({ mediaId: image.mediaId, altText: image.altText ?? null })),
+      primaryImage: state.primaryImage ? { mediaId: state.primaryImage.mediaId, altText: state.primaryImage.altText ?? null } : null,
+      images: state.images.map((image) => ({ mediaId: image.mediaId, altText: image.altText ?? null })),
       seoImage: state.seoImage ? { mediaId: state.seoImage.id, altText: state.seoImage.altText ?? null } : null,
       attributeValueImages: Object.fromEntries(
         Object.entries(state.attributeValueImages).filter(([, mediaId]) => Boolean(mediaId)),
@@ -417,9 +432,9 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       seoTitle: state.seoTitle.trim() || undefined,
       seoDescription: state.seoDescription.trim() || undefined,
       seoKeywords: state.seoKeywords.trim() || undefined,
-      variants: state.variants.map((variant: DraftVariant) => ({
+      variants: (state.productType === "SIMPLE" ? state.variants.slice(0, 1) : state.variants).map((variant: DraftVariant) => ({
         id: variant.id,
-        name: variant.name.trim() || "Variant",
+        name: variant.name.trim() || (state.productType === "SIMPLE" ? state.name.trim() || "Default" : "Variant"),
         barcode: variant.barcode?.trim() || undefined,
         currentPricePaisa: toPaisa(variant.currentPrice) ?? undefined,
         discountType: variant.discountType ?? "NONE",
@@ -433,7 +448,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         isPreorderEnabled: variant.isPreorderEnabled ?? undefined,
         imageMediaId: variant.imageMediaId,
         galleryMediaIds: variant.galleryMediaIds,
-        attributeValueIds: variant.attributeValueIds,
+        attributeValueIds: state.productType === "SIMPLE" ? [] : variant.attributeValueIds,
         touched: variant.touched,
       })),
       saveAsDraft,
@@ -497,7 +512,16 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
 
   const setAttributeValueImage = async (attributeValueId: string, mediaId: string | null) => {
     patch({ attributeValueImages: { ...state.attributeValueImages, [attributeValueId]: mediaId } });
-    const result = await setAttributeValueImageAction({ attributeValueId, mediaId, productId: product?.id });
+    if (!product?.id) {
+      setAttributes((current) =>
+        current.map((attribute) => ({
+          ...attribute,
+          values: attribute.values.map((value) => (value.id === attributeValueId ? { ...value, mediaId } : value)),
+        })),
+      );
+      return;
+    }
+    const result = await setAttributeValueImageAction({ attributeValueId, mediaId, productId: product.id });
     if (!result.ok) {
       toast.error(result.message);
       return;
@@ -526,17 +550,17 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         </Alert>
       ) : null}
 
-      <ResumeDraftBanner draft={draft} onResume={draft.resume} onDiscard={draft.discard} />
+      {product ? <ResumeDraftBanner draft={draft} onResume={draft.resume} onDiscard={draft.discard} /> : null}
 
       <CollapsibleGroup
-        defaultOpen={["information", "pricing"]}
+        defaultOpen={["information", "organization", "variants", "pricing"]}
         header={
           <div className="mr-auto flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant={completedCount === SECTIONS.length ? "success" : "neutral"}>
-              {completedCount}/{SECTIONS.length} sections complete
+            <Badge variant={completedCount === visibleSections.length ? "success" : "neutral"}>
+              {completedCount}/{visibleSections.length} sections complete
             </Badge>
             <span className="flex flex-wrap items-center gap-1.5">
-              {SECTIONS.map((section) => (
+              {visibleSections.map((section) => (
                 <a
                   key={section.id}
                   href={`#${section.id}`}
@@ -565,22 +589,41 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           slugTouched={state.slugTouched}
           productCode={state.productCode}
           barcode={state.barcode}
+          productType={state.productType}
           productUrlPrefix={data.productUrlPrefix}
           slugState={slugState}
           skuState={{ checking: skuState.checking, message: skuState.message ?? undefined }}
           errors={errors}
-          shortDescription={state.shortDescription}
-          description={state.description}
-          canUpload={data.media.canUpload && data.media.configured}
           onNameChange={editor.setName}
           onSlugChange={(value, options) => editor.setSlug(value, options)}
           onRegenerateSlug={() => {
             editor.regenerateSlug();
             setSlugState({ checking: true, available: null, suggestion: null });
           }}
-          onPatch={(value) => patch(value)}
-          onShortDescriptionChange={(value: RichTextDocument) => patch({ shortDescription: value })}
-          onDescriptionChange={(value: RichTextDocument) => patch({ description: value })}
+          onPatch={(value) => {
+            if (value.productType === "SIMPLE" && state.variants.length > 1) {
+              patch({ ...value, variants: state.variants.slice(0, 1).map((variant) => ({ ...variant, attributeValueIds: [] })) });
+              return;
+            }
+            patch(value);
+          }}
+        />
+
+        <PricingSection
+          currentPrice={state.currentPrice}
+          discountType={state.discountType}
+          discountValue={state.discountValue}
+          taxRateId={state.taxRateId}
+          taxRates={data.taxRates}
+          taxRateBps={state.taxRateBps}
+          packagingTemplateId={state.packagingCostTemplateId}
+          packagingTemplates={data.packagingTemplates}
+          packagingCostPaisa={state.packagingCostPaisa}
+          variantCount={state.variants.length}
+          overrideCount={overrideCount}
+          unpricedCount={unpricedCount}
+          errors={errors}
+          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
         />
 
         <OrganizationSection
@@ -603,10 +646,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
                 ? current
                 : [{ id: brand.id, name: brand.name, slug: brand.slug, productCount: 0, logo: brand.logo }, ...current],
             );
-            // Refresh in the background so the counter and logo come from the server.
-            void listBrandsAction().then((result) => {
-              if (result.ok) setBrands(result.data.map(toBrandChoice));
-            });
           }}
           onCategoryCreated={(category) => setCategories((current) => (current.some((entry) => entry.id === category.id) ? current : [...current, category]))}
           onUnitLabelCreated={(label) =>
@@ -617,70 +656,84 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
         />
 
         <ProductImagesSection
+          primaryImage={primaryImageItem}
           images={images}
           errors={errors}
-          onChange={(items) =>
+          onPrimaryChange={(item) =>
+            patch({
+              primaryImage: item ? { mediaId: item.mediaId, asset: item.asset, altText: item.altText ?? null } : null,
+            })
+          }
+          onImagesChange={(items) =>
             patch({
               images: items.map((item) => ({ mediaId: item.mediaId, asset: item.asset, altText: item.altText ?? null })),
             })
           }
         />
 
-        <AttributesVariationsSection
-          productId={product?.id ?? null}
-          attributes={attributes}
-          state={state}
-          plan={plan}
-          errors={errors}
-          rowErrors={variantErrors}
-          selection={selection}
-          productImage={productImage}
-          productPricing={productPricing}
-          canViewCost={data.canViewCost}
-          onApplied={() => router.refresh()}
-          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
-          onAttributeCreated={(attribute) => setAttributes((current) => (current.some((entry) => entry.id === attribute.id) ? current : [...current, attribute]))}
-          onValueAdded={(attributeId, value) =>
-            setAttributes((current) =>
-              current.map((attribute) =>
-                attribute.id === attributeId
-                  ? {
-                      ...attribute,
-                      values: attribute.values.some((entry) => entry.id === value.id) ? attribute.values : [...attribute.values, { ...value, image: null }],
-                    }
-                  : attribute,
-              ),
-            )
-          }
-          onSetValueImage={setAttributeValueImage}
-          onGenerateMatrix={() => editor.generateMatrix({ keepOrphans: true })}
-          onUpdateVariant={editor.updateVariant}
-          onAddVariant={editor.addVariant}
-          onRemoveVariant={editor.removeVariant}
-          onSelectionChange={setSelection}
-        />
+        {state.productType === "VARIABLE" ? (
+          <AttributesVariationsSection
+            productId={product?.id ?? draft.productId ?? null}
+            attributes={attributes}
+            state={state}
+            plan={plan}
+            errors={errors}
+            rowErrors={variantErrors}
+            selection={selection}
+            productImage={productImage}
+            productPricing={productPricing}
+            inheritedWeight={state.weightValue}
+            inheritedWeightUnit={state.weightUnit}
+            variantEditMode="inline"
+            canViewCost={data.canViewCost}
+            onApplied={() => router.refresh()}
+            onPatch={(value) => patch(value as Partial<ProductEditorState>)}
+            onAttributeCreated={(attribute) => setAttributes((current) => (current.some((entry) => entry.id === attribute.id) ? current : [...current, attribute]))}
+            onValueAdded={(attributeId, value) =>
+              setAttributes((current) =>
+                current.map((attribute) =>
+                  attribute.id === attributeId
+                    ? {
+                        ...attribute,
+                        values: attribute.values.some((entry) => entry.id === value.id) ? attribute.values : [...attribute.values, { ...value, image: null }],
+                      }
+                    : attribute,
+                ),
+              )
+            }
+            onSetValueImage={setAttributeValueImage}
+            onGenerateMatrix={() => editor.generateMatrix({ keepOrphans: true })}
+            onUpdateVariant={editor.updateVariant}
+            onAddVariant={editor.addVariant}
+            onRemoveVariant={editor.removeVariant}
+            onSelectionChange={setSelection}
+            onLocalApply={(variants) => patch({ variants })}
+          />
+        ) : (
+          <CollapsibleSection
+            id="variants"
+            title="Attributes, variations and bulk edit"
+            description="Switch to a variable product to generate combinations and bulk-edit variants."
+            defaultOpen
+          >
+            <p className="text-sm text-slate-600">
+              This is a single product, so there is one variant and no option matrix. Choose <strong>Variable</strong> under product
+              information to add attributes, generate combinations, then bulk-edit selected rows or every variant matching an attribute
+              filter.
+            </p>
+          </CollapsibleSection>
+        )}
 
-        <PricingSection
-          currentPrice={state.currentPrice}
-          discountType={state.discountType}
-          discountValue={state.discountValue}
-          defaultCost={state.defaultCost}
-          variantCount={state.variants.length}
-          overrideCount={overrideCount}
-          unpricedCount={unpricedCount}
-          canViewCost={data.canViewCost}
-          errors={errors}
-          onPatch={(value) => patch(value as Partial<ProductEditorState>)}
+        <ProductDescriptionSection
+          shortDescription={state.shortDescription}
+          description={state.description}
+          onShortDescriptionChange={(value) => patch({ shortDescription: value })}
+          onDescriptionChange={(value) => patch({ description: value })}
+          canUpload={data.media.canUpload}
         />
 
         <ProductSettingsSection
           status={state.status}
-          taxRateId={state.taxRateId}
-          taxRates={data.taxRates}
-          taxRateBps={state.taxRateBps}
-          packagingTemplateId={state.packagingCostTemplateId}
-          packagingTemplates={data.packagingTemplates}
-          packagingCostPaisa={state.packagingCostPaisa}
           isPreorderEnabled={state.isPreorderEnabled}
           preorderNote={state.preorderNote}
           requiresShipping={state.requiresShipping}
@@ -692,7 +745,6 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
           name={state.name}
           slug={state.slug}
           productUrlPrefix={data.productUrlPrefix}
-          canViewCost={data.canViewCost}
           errors={errors}
           onPatch={(value) => patch(value as Partial<ProductEditorState>)}
           onSeoImageChange={(asset) => patch({ seoImage: asset })}
@@ -700,7 +752,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
       </CollapsibleGroup>
 
       {/* Sticky action bar ------------------------------------------------ */}
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:pl-64">
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:pl-[var(--admin-sidebar-width,16rem)]">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-0.5">
             <p className="flex items-center gap-1.5 text-xs text-slate-600" aria-live="polite">
@@ -723,7 +775,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
                 `${variantDefiningAttributes.length} variation attribute(s) · ${state.variants.length} variant(s)`
               )}
             </p>
-            <DraftStatusBar draft={draft} onRetry={draft.retry} onDiscard={draft.discard} />
+            {product ? <DraftStatusBar draft={draft} onRetry={draft.retry} onDiscard={draft.discard} /> : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">

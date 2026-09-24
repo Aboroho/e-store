@@ -240,6 +240,7 @@ export function SubmitButton({
   size = "default",
   pendingLabel = "Saving…",
   confirm,
+  confirmTitle = "Please confirm",
   disabled,
   formAction,
 }: {
@@ -248,26 +249,73 @@ export function SubmitButton({
   variant?: "default" | "secondary" | "outline" | "ghost" | "destructive" | "success" | "link";
   size?: "default" | "sm" | "lg" | "icon";
   pendingLabel?: string;
-  /** When provided, the user must confirm in a native dialog before the form submits. */
+  /** When provided, the user must confirm in a custom dialog before the form submits. */
   confirm?: string;
+  confirmTitle?: string;
   disabled?: boolean;
   formAction?: (formData: FormData) => void | Promise<void>;
 }) {
   const { pending } = useFormStatus();
+  const [open, setOpen] = React.useState(false);
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
+  const confirmedRef = React.useRef(false);
+
+  if (!confirm) {
+    return (
+      <button
+        type="submit"
+        formAction={formAction}
+        disabled={pending || disabled}
+        className={cn(buttonVariants({ variant, size }), className)}
+      >
+        {pending ? pendingLabel : children}
+      </button>
+    );
+  }
+
   return (
-    <button
-      type="submit"
-      formAction={formAction}
-      disabled={pending || disabled}
-      className={cn(buttonVariants({ variant, size }), className)}
-      onClick={(event) => {
-        if (confirm && !window.confirm(confirm)) {
-          event.preventDefault();
-        }
-      }}
-    >
-      {pending ? pendingLabel : children}
-    </button>
+    <>
+      <button
+        ref={buttonRef}
+        type="submit"
+        formAction={formAction}
+        disabled={pending || disabled}
+        className={cn(buttonVariants({ variant, size }), className)}
+        onClick={(event) => {
+          if (!confirmedRef.current) {
+            event.preventDefault();
+            setOpen(true);
+          }
+          confirmedRef.current = false;
+        }}
+      >
+        {pending ? pendingLabel : children}
+      </button>
+      <AlertDialogPrimitive.Root open={open} onOpenChange={setOpen}>
+        <AlertDialogPrimitive.Portal>
+          <AlertDialogPrimitive.Overlay className="fixed inset-0 z-40 bg-slate-900/50" />
+          <AlertDialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <AlertDialogPrimitive.Title className="text-base font-semibold text-slate-900">{confirmTitle}</AlertDialogPrimitive.Title>
+            <AlertDialogPrimitive.Description className="mt-2 text-sm text-slate-500">{confirm}</AlertDialogPrimitive.Description>
+            <div className="mt-6 flex justify-end gap-2">
+              <AlertDialogPrimitive.Cancel className={buttonVariants({ variant: "outline", size: "sm" })}>Cancel</AlertDialogPrimitive.Cancel>
+              <AlertDialogPrimitive.Action
+                className={buttonVariants({ variant: variant === "destructive" ? "destructive" : "default", size: "sm" })}
+                onClick={(event) => {
+                  event.preventDefault();
+                  confirmedRef.current = true;
+                  setOpen(false);
+                  const form = buttonRef.current?.form;
+                  if (form) form.requestSubmit(buttonRef.current);
+                }}
+              >
+                Confirm
+              </AlertDialogPrimitive.Action>
+            </div>
+          </AlertDialogPrimitive.Content>
+        </AlertDialogPrimitive.Portal>
+      </AlertDialogPrimitive.Root>
+    </>
   );
 }
 

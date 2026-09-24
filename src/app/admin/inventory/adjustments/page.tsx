@@ -40,7 +40,7 @@ export default async function AdjustmentsPage({
       <StockAdjustmentForm
         variants={variants.map((variant) => ({
           id: variant.id,
-          sku: variant.sku ?? "",
+          sku: variant.product?.sku ?? "",
           label: `${variant.product.name} — ${variant.name}`,
           available: variant.inventory.reduce((sum, balance) => sum + availableQuantity(balance), 0),
         }))}
@@ -87,7 +87,7 @@ export default async function AdjustmentsPage({
                       <Link href={`/admin/inventory/${adjustment.variantId}`} className="font-medium text-brand-600 hover:underline">
                         {adjustment.variant.product.name}
                       </Link>
-                      <p className="font-mono text-xs text-slate-500">{adjustment.variant.sku}</p>
+                      <p className="font-mono text-xs text-slate-500">{adjustment.variant.product?.sku}</p>
                     </TableCell>
                     <TableCell>
                       <Badge variant={adjustment.direction === "INCREASE" ? "success" : "danger"}>{adjustment.direction.toLowerCase()}</Badge>

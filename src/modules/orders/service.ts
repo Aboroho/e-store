@@ -188,7 +188,7 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       // SKU belongs to the product; the variant is identified by its id and by
       // the snapshot of its option key, so renaming a product never rewrites a
       // completed order line and two variants of one product stay distinct.
-      const lineSku = variant.product.sku ?? variant.sku ?? "";
+      const lineSku = variant.product.sku ?? "";
       if (variant.status !== "ACTIVE") throw AppError.validation(`${variant.product.name} — ${variant.name} is not available`);
 
       const canOverride = input.channel === "ADMIN" || input.channel === "RESELLER" || input.channel === "IN_STORE";
@@ -214,7 +214,7 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
           value: value.attributeValue.value,
         })) as Prisma.InputJsonValue,
         optionKey: variant.optionKey ?? null,
-        variantCode: variant.sku ?? null,
+        variantCode: variant.product?.sku ?? null,
         quantity: item.quantity,
         unitPricePaisa,
         compareAtPricePaisa: variant.compareAtPricePaisa ?? null,

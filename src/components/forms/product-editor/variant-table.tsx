@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Archive, ImageIcon, RotateCcw, Search } from "lucide-react";
+import { Archive, ImageIcon, Pencil, Search, Trash2 } from "lucide-react";
 import { Badge, Button, Input, Label, NativeSelect } from "@/components/ui/primitives";
+import { Dialog, DialogContent } from "@/components/ui/interactive";
 import { InfoTip } from "@/components/ui/tooltip";
 import { MediaThumb } from "@/components/media/media-field";
 import { MediaPicker } from "@/components/media/media-picker";
 import { cn } from "@/lib/utils";
 import { formatPaisa } from "@/lib/money";
+import { calculatePricing } from "@/modules/catalog/pricing-rules";
 import { browseMediaAction } from "@/modules/media/actions";
 import type { MediaAssetView } from "@/modules/media/service";
 import {
@@ -47,7 +49,13 @@ export interface VariantTableProps {
   productImage: MediaAssetView | null;
   /** Product default pricing — level 3 of the inheritance model. */
   productPricing: PricingLevelInput;
+  inheritedWeight?: string;
+  inheritedWeightUnit?: WeightUnit;
+  /** Add New Product: inline row editors. Existing products: compact rows + dialog. */
+  editMode?: "inline" | "dialog";
   selectedKeys: string[];
+  /** Extra controls rendered next to “Rows per page” (bulk edit trigger). */
+  toolbarExtra?: React.ReactNode;
   /** Per-row validation messages, keyed by variant key (bad prices, duplicates…). */
   rowErrors?: Record<string, string>;
   onSelectionChange: (keys: string[]) => void;
@@ -57,6 +65,11 @@ export interface VariantTableProps {
 }
 
 const PAGE_SIZES = [25, 50, 100, 250];
+
+function formatInheritedMoney(paisa: number | null | undefined): string {
+  if (paisa == null || paisa <= 0) return "";
+  return paisa % 100 === 0 ? String(paisa / 100) : (paisa / 100).toFixed(2);
+}
 
 function toPaisa(value: string | null | undefined): number | null {
   const trimmed = (value ?? "").trim();
@@ -115,17 +128,23 @@ export function VariantTable({
   orphanKeys = [],
   productImage,
   productPricing,
+  inheritedWeight = "",
+  inheritedWeightUnit = DEFAULT_WEIGHT_UNIT,
+  editMode = "inline",
   selectedKeys,
   rowErrors = {},
   onSelectionChange,
   onUpdate,
   onRemove,
-  canViewCost,
+  canViewCost: _canViewCost,
+  toolbarExtra,
 }: VariantTableProps) {
   const [query, setQuery] = React.useState("");
   const [valueFilter, setValueFilter] = React.useState("");
   const [pageSize, setPageSize] = React.useState(25);
   const [page, setPage] = React.useState(1);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [editingKey, setEditingKey] = React.useState<string | null>(null);
 
   const valueLabels = React.useMemo(() => {
     const map = new Map<string, { attribute: string; value: string }>();
@@ -235,10 +254,15 @@ export function VariantTable({
     orphanKeys,
     rowErrors,
     productPricing,
+    inheritedWeight,
+    inheritedWeightUnit,
+    editMode,
     onUpdate,
     onRemove,
-    canViewCost,
+    onEdit: (key: string) => setEditingKey(key),
+    canViewCost: _canViewCost,
   };
+  const editingRow = rows.find((row) => row.key === editingKey) ?? null;
 
   return (
     <div className="space-y-3">
@@ -314,6 +338,8 @@ export function VariantTable({
           </NativeSelect>
         </div>
 
+        {toolbarExtra ? <div className="pb-0.5">{toolbarExtra}</div> : null}
+
         <div className="flex flex-wrap items-center gap-2 pb-1">
           <Button type="button" variant="outline" size="sm" onClick={selectMatching} disabled={filtered.length === 0}>
             Select {filtered.length} shown
@@ -321,12 +347,22 @@ export function VariantTable({
           <Button type="button" variant="ghost" size="sm" onClick={() => onSelectionChange([])} disabled={selectedKeys.length === 0}>
             Clear selection ({selectedKeys.length})
           </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={() => setConfirmDelete(true)}
+            disabled={selectedKeys.length === 0}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+            Delete selected ({selectedKeys.length})
+          </Button>
         </div>
       </div>
 
       {/* Desktop table */}
       <div className="hidden overflow-x-auto rounded-lg border border-slate-200 md:block">
-        <table className="w-full min-w-[70rem] text-sm">
+        <table className="w-full min-w-[40rem] text-sm">
           <caption className="sr-only">Product variants</caption>
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -342,24 +378,38 @@ export function VariantTable({
               <th scope="col" className="px-3 py-2">
                 Variant
               </th>
-              <th scope="col" className="px-3 py-2">
-                Image
-              </th>
-              <th scope="col" className="px-3 py-2">
-                Price override
-              </th>
-              {canViewCost ? (
-                <th scope="col" className="px-3 py-2">
-                  Cost
-                </th>
-              ) : null}
-              <th scope="col" className="px-3 py-2">
-                Weight
-              </th>
-              <th scope="col" className="px-3 py-2">
-                Preorder
-              </th>
-              <th scope="col" className="px-3 py-2">
+              {editMode === "inline" ? (
+                <>
+                  <th scope="col" className="px-3 py-2">
+                    Image
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Current price
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Discount type
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Discount
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Sell price
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Weight
+                  </th>
+                </>
+              ) : (
+                <>
+                  <th scope="col" className="px-3 py-2 text-right">
+                    Sell price
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Price source
+                  </th>
+                </>
+              )}
+              <th scope="col" className="px-3 py-2 text-right">
                 Actions
               </th>
             </tr>
@@ -380,6 +430,33 @@ export function VariantTable({
           </tbody>
         </table>
       </div>
+
+      {confirmDelete ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setConfirmDelete(false); }}>
+          <DialogContent
+            title={selectedKeys.length === 1 ? "Delete this variant?" : `Delete ${selectedKeys.length} variants?`}
+            description="They leave this form immediately. On save they are archived, never hard-deleted, so order history stays intact."
+            className="max-w-md"
+          >
+            <div className="mt-2 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  for (const key of selectedKeys) onRemove(key);
+                  onSelectionChange([]);
+                  setConfirmDelete(false);
+                }}
+              >
+                Delete
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       {/* Mobile cards */}
       <ul className="space-y-3 md:hidden">
@@ -417,6 +494,17 @@ export function VariantTable({
           </span>
         ) : null}
       </div>
+
+      {editMode === "dialog" && editingRow ? (
+        <VariantEditDialog
+          {...shared}
+          row={editingRow}
+          productImageId={productImageId}
+          selected={selected.has(editingRow.key)}
+          onSelect={() => undefined}
+          onClose={() => setEditingKey(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -430,10 +518,14 @@ interface RowSharedProps {
   rowErrors: Record<string, string>;
   productImageId: string | null;
   productPricing: PricingLevelInput;
+  inheritedWeight: string;
+  inheritedWeightUnit: WeightUnit;
+  editMode: "inline" | "dialog";
   selected: boolean;
   onSelect: (checked: boolean) => void;
   onUpdate: VariantTableProps["onUpdate"];
   onRemove: VariantTableProps["onRemove"];
+  onEdit: (key: string) => void;
   canViewCost: boolean;
 }
 
@@ -486,7 +578,7 @@ function VariantImageCell({ row, attributes, assets, productImageId, onUpdate }:
               variant="ghost"
               size="sm"
               className="h-7 px-1.5 text-[11px]"
-              title="Drop the variant image so the attribute or product image is inherited again"
+              title="Drop the variant image so the attribute or product image is used again"
               onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
             >
               Inherit
@@ -514,55 +606,94 @@ export function SourceBadge({ label }: { label: string }) {
   );
 }
 
-/**
- * Price cell: the override inputs plus the *effective* price underneath, so the
- * inherited value is visible without having to save and reopen the product.
- */
-function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowSharedProps) {
+function displayedPricing(row: DraftVariant, attributes: DraftAttribute[], productPricing: PricingLevelInput) {
+  const inheriting =
+    Boolean(row.clearPriceOverride) ||
+    (!row.currentPrice?.trim() && !row.discountValue?.trim() && (!row.discountType || row.discountType === "NONE"));
   const effective = effectiveRowPrice(row, attributes, productPricing);
-  const hasOverride = Boolean(overrideFor(row)) && !row.clearPriceOverride;
+  const inheritedCurrent = formatInheritedMoney(effective.value.currentPricePaisa);
+  const inheritedType = effective.value.discountType ?? "NONE";
+  const inheritedDiscount =
+    inheritedType === "NONE" || !effective.value.discountValue ? "" : String(effective.value.discountValue);
+  return {
+    inheriting,
+    current: inheriting ? inheritedCurrent : (row.currentPrice ?? ""),
+    type: (inheriting ? inheritedType : (row.discountType ?? inheritedType)) as DraftVariant["discountType"],
+    discount: inheriting ? inheritedDiscount : (row.discountValue ?? ""),
+    inheritedCurrent,
+    inheritedType,
+    inheritedDiscount,
+  };
+}
 
-  return (
+function VariantPriceFields({
+  row,
+  attributes,
+  productPricing,
+  onUpdate,
+  layout,
+}: RowSharedProps & { layout: "row" | "stack" }) {
+  const effective = effectiveRowPrice(row, attributes, productPricing);
+  const display = displayedPricing(row, attributes, productPricing);
+  const hasOverride = !display.inheriting;
+
+  const commit = (patch: Partial<DraftVariant>) => {
+    onUpdate(
+      row.key,
+      {
+        currentPrice: patch.currentPrice ?? (display.inheriting ? display.inheritedCurrent : display.current),
+        discountType: patch.discountType ?? display.type,
+        discountValue: patch.discountValue ?? display.discount,
+        clearPriceOverride: false,
+        price: "",
+      },
+      { touched: true },
+    );
+  };
+
+  const sell = calculatePricing({
+    currentPricePaisa: toPaisa(display.current) ?? 0,
+    discountType: display.type ?? "NONE",
+    discountValue: Number(display.discount) || 0,
+  });
+
+  const currentField = (
+    <Input
+      aria-label={`Current price for ${row.name}`}
+      className={cn("h-9 w-24", display.inheriting && "text-slate-500")}
+      inputMode="decimal"
+      value={display.current}
+      onChange={(event) => commit({ currentPrice: event.target.value })}
+    />
+  );
+  const typeField = (
+    <NativeSelect
+      aria-label={`Discount type for ${row.name}`}
+      className={cn("h-9 w-32", display.inheriting && "text-slate-500")}
+      value={display.type ?? "NONE"}
+      onChange={(event) => commit({ discountType: event.target.value as DraftVariant["discountType"] })}
+    >
+      <option value="NONE">No discount</option>
+      <option value="PERCENTAGE">Percentage</option>
+      <option value="FLAT">Flat</option>
+    </NativeSelect>
+  );
+  const discountField = (
+    <Input
+      aria-label={`Discount for ${row.name}`}
+      className={cn("h-9 w-20", display.inheriting && "text-slate-500")}
+      inputMode="decimal"
+      disabled={(display.type ?? "NONE") === "NONE"}
+      value={display.discount}
+      onChange={(event) => commit({ discountValue: event.target.value })}
+    />
+  );
+  const sellField = (
     <div className="space-y-1">
-      <div className="flex items-center gap-1">
-        <Input
-          aria-label={`Override price for ${row.name}`}
-          className="h-9 w-24"
-          inputMode="decimal"
-          placeholder="Inherit"
-          value={row.currentPrice ?? ""}
-          onChange={(event) =>
-            onUpdate(row.key, { currentPrice: event.target.value, clearPriceOverride: false, price: "" }, { touched: true })
-          }
-        />
-        <NativeSelect
-          aria-label={`Discount type for ${row.name}`}
-          className="h-9 w-16 px-1"
-          value={row.discountType ?? "NONE"}
-          onChange={(event) =>
-            onUpdate(
-              row.key,
-              { discountType: event.target.value as DraftVariant["discountType"], clearPriceOverride: false },
-              { touched: true },
-            )
-          }
-        >
-          <option value="NONE">—</option>
-          <option value="PERCENTAGE">%</option>
-          <option value="FLAT">৳</option>
-        </NativeSelect>
-        <Input
-          aria-label={`Discount value for ${row.name}`}
-          className="h-9 w-16"
-          inputMode="decimal"
-          placeholder="0"
-          disabled={(row.discountType ?? "NONE") === "NONE"}
-          value={row.discountValue ?? ""}
-          onChange={(event) => onUpdate(row.key, { discountValue: event.target.value, clearPriceOverride: false }, { touched: true })}
-        />
+      <div className="flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-2 text-sm font-medium text-slate-800">
+        {formatPaisa(sell.sellPricePaisa)}
       </div>
       <div className="flex flex-wrap items-center gap-1">
-        <span className="text-xs font-medium text-slate-700">{formatPaisa(effective.value.pricePaisa)}</span>
         <SourceBadge label={effective.label} />
         {hasOverride ? (
           <button
@@ -582,15 +713,89 @@ function VariantPriceCell({ row, attributes, productPricing, onUpdate }: RowShar
       </div>
     </div>
   );
+
+  if (layout === "stack") {
+    return (
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Current price</Label>
+          {currentField}
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Discount type</Label>
+          {typeField}
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Discount</Label>
+          {discountField}
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[11px] text-slate-500">Sell price</Label>
+          {sellField}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <td className="px-3 py-2">{currentField}</td>
+      <td className="px-3 py-2">{typeField}</td>
+      <td className="px-3 py-2">{discountField}</td>
+      <td className="px-3 py-2">{sellField}</td>
+    </>
+  );
+}
+
+function VariantWeightField({ row, inheritedWeight, inheritedWeightUnit, onUpdate }: RowSharedProps) {
+  const weightInheriting = !row.weight?.trim() || Boolean(row.clearWeightOverride);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1">
+        <Input
+          aria-label={`Weight for ${row.name}`}
+          className={cn("h-9 w-20", weightInheriting && "text-slate-500")}
+          inputMode="decimal"
+          value={weightInheriting ? inheritedWeight : row.weight}
+          onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
+        />
+        <NativeSelect
+          aria-label={`Weight unit for ${row.name}`}
+          className="h-9 w-24"
+          value={row.weightUnit ?? inheritedWeightUnit ?? DEFAULT_WEIGHT_UNIT}
+          onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit, clearWeightOverride: false }, { touched: true })}
+        >
+          {WEIGHT_UNITS.map((unit) => (
+            <option key={unit.value} value={unit.value}>
+              {unit.label}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+      <InheritNote
+        inheriting={weightInheriting}
+        onInherit={weightInheriting ? undefined : () => onUpdate(row.key, { weight: "", clearWeightOverride: true }, { touched: true })}
+      />
+    </div>
+  );
 }
 
 const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
-  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost } = props;
+  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onEdit, onRemove, attributes, productPricing, assets, productImageId, editMode } = props;
   const isOrphan = orphanKeys.includes(row.key);
   const error = rowErrors[row.key];
+  const sell = effectiveRowPrice(row, attributes, productPricing);
+  const price = displayedPricing(row, attributes, productPricing);
+  const image = resolveVariantImage({
+    imageMediaId: row.imageMediaId,
+    attributeValueIds: row.attributeValueIds,
+    productImageMediaId: productImageId,
+    attributes,
+  });
+  const asset = image.mediaId ? assets[image.mediaId] ?? null : null;
 
   return (
-    <tr className={cn("border-t border-slate-100 align-top", isOrphan && "bg-amber-50/40")}>
+    <tr className={cn("border-t border-slate-100", isOrphan && "bg-amber-50/40")}>
       <td className="px-3 py-2">
         <input
           type="checkbox"
@@ -600,104 +805,61 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
           aria-label={`Select variant ${row.name || "row"}`}
         />
       </td>
-      <td className="max-w-[16rem] px-3 py-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <p className="truncate text-sm font-medium text-slate-800">{row.name || "Untitled variant"}</p>
-          {isOrphan ? (
-            <Badge
-              variant="warning"
-              title="This variant is no longer part of the generated combinations. It keeps its data and is archived only if you remove it."
-            >
-              Not in matrix
-            </Badge>
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-3">
+          {editMode === "dialog" ? (
+            <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+              {asset ? (
+                <MediaThumb asset={asset} rounded="rounded-none" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-slate-300">
+                  <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                </div>
+              )}
+            </div>
           ) : null}
-          {row.id ? null : <Badge variant="brand">New</Badge>}
-        </div>
-        <p className="text-xs text-slate-500">{optionSummary(row, valueLabels)}</p>
-        {error ? <p className="mt-1 max-w-[14rem] text-[11px] text-red-600">{error}</p> : null}
-      </td>
-      <td className="px-3 py-2">
-        <VariantImageCell {...props} />
-      </td>
-      <td className="px-3 py-2">
-        <VariantPriceCell {...props} />
-      </td>
-      {canViewCost ? (
-        <td className="px-3 py-2">
-          <Input
-            aria-label={`Cost for ${row.name}`}
-            className="h-9 w-24"
-            inputMode="decimal"
-            placeholder="Inherit"
-            value={row.cost ?? ""}
-            onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
-          />
-        </td>
-      ) : null}
-      <td className="px-3 py-2">
-        <div className="flex items-center gap-1">
-          <Input
-            aria-label={`Weight for ${row.name}`}
-            className="h-9 w-20"
-            inputMode="decimal"
-            placeholder="Inherit"
-            value={row.weight ?? ""}
-            onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
-          />
-          <NativeSelect
-            aria-label={`Weight unit for ${row.name}`}
-            className="h-9 w-20"
-            value={row.weightUnit ?? DEFAULT_WEIGHT_UNIT}
-            onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit })}
-          >
-            {WEIGHT_UNITS.map((unit) => (
-              <option key={unit.value} value={unit.value}>
-                {unit.value}
-              </option>
-            ))}
-          </NativeSelect>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <p className="truncate text-sm font-medium text-slate-800">{row.name || "Untitled variant"}</p>
+              {isOrphan ? <Badge variant="warning">Not in matrix</Badge> : null}
+              {row.id ? null : <Badge variant="brand">New</Badge>}
+            </div>
+            <p className="text-xs text-slate-500">{optionSummary(row, valueLabels)}</p>
+            {error ? <p className="mt-1 text-[11px] text-red-600">{error}</p> : null}
+          </div>
         </div>
       </td>
+      {editMode === "inline" ? (
+        <>
+          <td className="px-3 py-2">
+            <VariantImageCell {...props} />
+          </td>
+          <VariantPriceFields {...props} layout="row" />
+          <td className="px-3 py-2">
+            <VariantWeightField {...props} />
+          </td>
+        </>
+      ) : (
+        <>
+          <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-800">{formatPaisa(sell.sellPricePaisa)}</td>
+          <td className="px-3 py-2">
+            <InheritNote inheriting={price.inheriting} />
+          </td>
+        </>
+      )}
       <td className="px-3 py-2">
-        <NativeSelect
-          aria-label={`Preorder for ${row.name}`}
-          className="h-9 w-28"
-          value={row.isPreorderEnabled === undefined ? "INHERIT" : row.isPreorderEnabled ? "ON" : "OFF"}
-          onChange={(event) =>
-            onUpdate(
-              row.key,
-              {
-                isPreorderEnabled: event.target.value === "INHERIT" ? undefined : event.target.value === "ON",
-                clearPreorderOverride: event.target.value === "INHERIT",
-              },
-              { touched: true },
-            )
-          }
-        >
-          <option value="INHERIT">Inherit</option>
-          <option value="ON">Allowed</option>
-          <option value="OFF">Not allowed</option>
-        </NativeSelect>
-      </td>
-      <td className="px-3 py-2">
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            aria-label={`Reset the image of ${row.name} to the inherited one`}
-            disabled={!row.imageMediaId}
-            onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
-          >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-          </Button>
+        <div className="flex items-center justify-end gap-1">
+          {editMode === "dialog" ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => onEdit(row.key)}>
+              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+              Edit
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-8 px-2 text-xs text-red-600 hover:bg-red-50"
-            title="Removes the variant from the form. On save it is archived, never deleted — its order history stays intact."
+            className="text-red-600 hover:bg-red-50"
             onClick={() => onRemove(row.key)}
           >
             <Archive className="h-3.5 w-3.5" aria-hidden="true" />
@@ -710,9 +872,11 @@ const VariantRow = React.memo(function VariantRow(props: RowSharedProps) {
 });
 
 const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
-  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onUpdate, onRemove, canViewCost } = props;
+  const { row, valueLabels, orphanKeys, rowErrors, selected, onSelect, onEdit, onRemove, attributes, productPricing, editMode } = props;
   const isOrphan = orphanKeys.includes(row.key);
   const error = rowErrors[row.key];
+  const sell = effectiveRowPrice(row, attributes, productPricing);
+  const price = displayedPricing(row, attributes, productPricing);
 
   return (
     <li className={cn("space-y-3 rounded-lg border border-slate-200 bg-white p-3", isOrphan && "border-amber-200 bg-amber-50/40")}>
@@ -724,85 +888,106 @@ const VariantCard = React.memo(function VariantCard(props: RowSharedProps) {
           onChange={(event) => onSelect(event.target.checked)}
           aria-label={`Select variant ${row.name || "row"}`}
         />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 space-y-2">
           <p className="truncate text-sm font-medium text-slate-800">{row.name || "Untitled variant"}</p>
           <p className="text-xs text-slate-500">{optionSummary(row, valueLabels)}</p>
+          {editMode === "inline" ? (
+            <>
+              <VariantImageCell {...props} />
+              <VariantPriceFields {...props} layout="stack" />
+              <VariantWeightField {...props} />
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-slate-800">{formatPaisa(sell.sellPricePaisa)}</p>
+              <InheritNote inheriting={price.inheriting} />
+            </>
+          )}
           {isOrphan ? <Badge variant="warning">Not in matrix</Badge> : null}
           {error ? <p className="mt-1 text-[11px] text-red-600">{error}</p> : null}
         </div>
-        <VariantImageCell {...props} />
       </div>
-
-      <div className="grid gap-2 sm:grid-cols-2">
-        <VariantPriceCell {...props} />
-        {canViewCost ? (
-          <Input
-            aria-label={`Cost for ${row.name}`}
-            inputMode="decimal"
-            placeholder="Cost (inherit)"
-            value={row.cost ?? ""}
-            onChange={(event) => onUpdate(row.key, { cost: event.target.value, clearCostOverride: false }, { touched: true })}
-          />
+      <div className="flex justify-end gap-1">
+        {editMode === "dialog" ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => onEdit(row.key)}>
+            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+            Edit
+          </Button>
         ) : null}
-        <div className="flex items-center gap-1">
-          <Input
-            aria-label={`Weight for ${row.name}`}
-            inputMode="decimal"
-            placeholder="Weight"
-            value={row.weight ?? ""}
-            onChange={(event) => onUpdate(row.key, { weight: event.target.value, clearWeightOverride: false }, { touched: true })}
-          />
-          <NativeSelect
-            aria-label={`Weight unit for ${row.name}`}
-            value={row.weightUnit ?? DEFAULT_WEIGHT_UNIT}
-            onChange={(event) => onUpdate(row.key, { weightUnit: event.target.value as WeightUnit })}
-          >
-            {WEIGHT_UNITS.map((unit) => (
-              <option key={unit.value} value={unit.value}>
-                {unit.label}
-              </option>
-            ))}
-          </NativeSelect>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <NativeSelect
-          aria-label={`Preorder for ${row.name}`}
-          className="h-9 w-32"
-          value={row.isPreorderEnabled === undefined ? "INHERIT" : row.isPreorderEnabled ? "ON" : "OFF"}
-          onChange={(event) =>
-            onUpdate(
-              row.key,
-              {
-                isPreorderEnabled: event.target.value === "INHERIT" ? undefined : event.target.value === "ON",
-                clearPreorderOverride: event.target.value === "INHERIT",
-              },
-              { touched: true },
-            )
-          }
-        >
-          <option value="INHERIT">Preorder: inherit</option>
-          <option value="ON">Preorder: allowed</option>
-          <option value="OFF">Preorder: off</option>
-        </NativeSelect>
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!row.imageMediaId}
-            onClick={() => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true })}
-          >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            Reset image
-          </Button>
-          <Button type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => onRemove(row.key)}>
-            <Archive className="h-3.5 w-3.5" aria-hidden="true" />
-            Remove
-          </Button>
-        </div>
+        <Button type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => onRemove(row.key)}>
+          <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+          Remove
+        </Button>
       </div>
     </li>
   );
 });
+
+function InheritNote({ inheriting, onInherit }: { inheriting: boolean; onInherit?: () => void }) {
+  if (inheriting) {
+    return <p className="text-[11px] text-slate-500">Inherited from the product. Change a field to set a custom value.</p>;
+  }
+  return (
+    <p className="text-[11px] text-amber-800">
+      Not inherited — this is a custom value.
+      {onInherit ? (
+        <>
+          {" "}
+          <button type="button" className="font-medium underline" onClick={onInherit}>
+            Inherit
+          </button>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
+function VariantEditDialog(props: RowSharedProps & { onClose: () => void }) {
+  const { row, onUpdate, onClose } = props;
+  const imageCustom = Boolean(row.imageMediaId);
+  const price = displayedPricing(row, props.attributes, props.productPricing);
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent
+        title={`Edit ${row.name || "variant"}`}
+        description="Fields show the inherited product value until you change them. Changing a field makes it custom; Inherit restores the product value."
+        className="max-h-[90dvh] max-w-lg overflow-y-auto"
+      >
+        <div className="space-y-4">
+          <VariantImageCell {...props} />
+          <InheritNote
+            inheriting={!imageCustom}
+            onInherit={imageCustom ? () => onUpdate(row.key, { imageMediaId: null, clearImageOverride: true }, { touched: true }) : undefined}
+          />
+
+          <VariantPriceFields {...props} layout="stack" />
+          <InheritNote
+            inheriting={price.inheriting}
+            onInherit={
+              price.inheriting
+                ? undefined
+                : () =>
+                    onUpdate(
+                      row.key,
+                      { currentPrice: "", discountType: "NONE", discountValue: "", price: "", compareAt: "", clearPriceOverride: true },
+                      { touched: true },
+                    )
+            }
+          />
+
+          <div className="space-y-1">
+            <Label className="text-[11px] text-slate-500">Weight</Label>
+            <VariantWeightField {...props} />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

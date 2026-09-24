@@ -94,7 +94,7 @@ export async function getDashboardMetrics(subject: PermissionSubject): Promise<D
       : null,
     canViewInventory
       ? prisma.$queryRaw<Array<{ variantId: string; sku: string; productName: string; available: number }>>`
-          SELECT b."variantId" AS "variantId", v."sku" AS "sku", p."name" AS "productName",
+          SELECT b."variantId" AS "variantId", p."sku" AS "sku", p."name" AS "productName",
                  (b."onHand" - b."damaged" - b."inspection" - b."reserved") AS "available"
           FROM "InventoryBalance" b
           JOIN "Variant" v ON v."id" = b."variantId"

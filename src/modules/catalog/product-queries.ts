@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/client";
 import { getBusinessSettings } from "@/lib/settings";
 import { toAssetView } from "@/modules/media/service";
 import { storageIsConfigured, storageDriverName } from "@/modules/media/storage";
-import { DEFAULT_UNIT_LABELS, listBrandOptions, listUnitLabels } from "@/modules/catalog/product-service";
+import { DEFAULT_UNIT_LABELS, listBrandOptions, listLabelOptions, listUnitLabels } from "@/modules/catalog/product-service";
 import { parseRichText, isRichTextEmpty, richTextToPlainText } from "@/components/rich-text-editor/serialization";
 import type { RichTextDocument } from "@/components/rich-text-editor/types";
 import type { MediaAssetView } from "@/modules/media/service";
@@ -53,7 +53,6 @@ export interface EditorCategory {
 
 export interface EditorVariant {
   id: string;
-  sku: string;
   barcode: string | null;
   name: string;
   position: number;
@@ -119,7 +118,10 @@ export interface EditorProduct {
   publishedAt: string | null;
   categoryIds: string[];
   primaryCategoryId: string | null;
+  labelIds: string[];
   attributeIds: string[];
+  /** Independent of `images` — never stored as gallery row 0. */
+  primaryImage: EditorImage | null;
   images: EditorImage[];
   variants: EditorVariant[];
 }
@@ -127,6 +129,7 @@ export interface EditorProduct {
 export interface ProductEditorData {
   product: EditorProduct | null;
   brands: Awaited<ReturnType<typeof listBrandOptions>>;
+  labels: Awaited<ReturnType<typeof listLabelOptions>>;
   categories: EditorCategory[];
   attributes: EditorAttribute[];
   unitLabels: Array<{ id: string | null; name: string; slug: string; isDefault: boolean }>;
@@ -181,7 +184,7 @@ export async function loadProductEditorData(
   // This keeps the code compatible with an outdated Prisma Client that does
   // not yet know the `image` relation (Unknown field `image` errors seen in
   // production) while remaining correct for the current schema.
-  const [brands, rawCategories, rawAttributes, unitLabels, priceLists, settings, storefrontPrefix, taxRates, packagingTemplates, draft] = await Promise.all([
+  const [brands, rawCategories, rawAttributes, unitLabels, priceLists, settings, storefrontPrefix, taxRates, packagingTemplates, labels, draft] = await Promise.all([
     listBrandOptions(businessId).catch(() => [] as Awaited<ReturnType<typeof listBrandOptions>>),
     (prisma.category as unknown as { findMany: typeof prisma.category.findMany }).findMany({
       where: { businessId, deletedAt: null },
@@ -226,14 +229,15 @@ export async function loadProductEditorData(
     storefrontUrlPrefix(businessId),
     prisma.taxRate.findMany({ where: { businessId, isActive: true }, orderBy: [{ isDefault: "desc" }, { name: "asc" }], select: { id: true, name: true, rateBps: true, isDefault: true } }).catch(() => []),
     prisma.packagingCostTemplate.findMany({ where: { businessId, isActive: true }, orderBy: [{ isDefault: "desc" }, { name: "asc" }], select: { id: true, name: true, costPaisa: true, isDefault: true } }).catch(() => []),
-    // Drafts are per user: a "new product" draft belongs to the person writing
-    // it, while an edit draft is shared for the product (the last autosave wins
-    // and the editor warns when a newer revision exists).
-    prisma.productDraft.findFirst({
-      where: { businessId, ...(productId ? { productId } : { productId: null, userId: viewer.userId ?? undefined }) },
-      orderBy: { updatedAt: "desc" },
-      select: { id: true, updatedAt: true, payload: true, revision: true },
-    }).catch(() => null),
+    listLabelOptions(businessId).catch(() => [] as Awaited<ReturnType<typeof listLabelOptions>>),
+    // Edit drafts only: Add New Product never resumes a stored draft.
+    productId
+      ? prisma.productDraft.findFirst({
+          where: { businessId, productId },
+          orderBy: { updatedAt: "desc" },
+          select: { id: true, updatedAt: true, payload: true, revision: true },
+        }).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   // Batch-fetch category images
@@ -304,6 +308,7 @@ export async function loadProductEditorData(
   return {
     product: productId ? await loadEditorProduct(businessId, productId) : null,
     brands: brandRows,
+    labels,
     categories: categoryRows,
     attributes: attributeRows,
     unitLabels: unitLabels.length > 0 ? unitLabels : DEFAULT_UNIT_LABELS.map((name, index) => ({ id: null, name, slug: name, isDefault: index === 0 })),
@@ -360,14 +365,18 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
   let product: any = null;
   let brandRef: { id: string; name: string } | null = null;
   let seoImageAsset: (typeof MEDIA_ASSET_SELECT & Record<string, unknown>) | null = null;
+  let primaryImageAsset: (typeof MEDIA_ASSET_SELECT & Record<string, unknown>) | null = null;
   let seoImageMediaIdFallback: string | null = null;
+  let primaryImageMediaIdFallback: string | null = null;
   try {
     product = await prisma.product.findFirst({
       where: { id: productId, businessId },
       include: {
         brandRef: { select: { id: true, name: true } },
         seoImage: { select: MEDIA_ASSET_SELECT },
+        primaryImage: { select: MEDIA_ASSET_SELECT },
         categories: { select: { categoryId: true, isPrimary: true } },
+        labels: { orderBy: { position: "asc" }, select: { labelId: true } },
         attributes: { orderBy: { position: "asc" }, select: { attributeId: true } },
         images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
         variants: {
@@ -386,6 +395,7 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
     // pull out the relations we already fetched so later code can treat them uniformly
     brandRef = (product as unknown as { brandRef: typeof brandRef }).brandRef ?? null;
     seoImageAsset = (product as unknown as { seoImage: typeof seoImageAsset }).seoImage ?? null;
+    primaryImageAsset = (product as unknown as { primaryImage: typeof primaryImageAsset }).primaryImage ?? null;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (!msg.includes("Unknown field") && !msg.includes("Unknown arg") && !msg.includes("brandRef") && !msg.includes("seoImage")) throw error;
@@ -394,6 +404,7 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
       where: { id: productId, businessId },
       include: {
         categories: { select: { categoryId: true, isPrimary: true } },
+        labels: { orderBy: { position: "asc" }, select: { labelId: true } },
         attributes: { orderBy: { position: "asc" }, select: { attributeId: true } },
         images: { orderBy: { position: "asc" }, include: { media: { select: MEDIA_ASSET_SELECT } } },
         variants: {
@@ -411,6 +422,7 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
     if (!fallback) return null;
     product = fallback as any;
     seoImageMediaIdFallback = (fallback as { seoImageMediaId: string | null }).seoImageMediaId ?? null;
+    primaryImageMediaIdFallback = (fallback as { primaryImageMediaId?: string | null }).primaryImageMediaId ?? null;
     const brandId = (fallback as { brandId: string | null }).brandId;
     if (brandId) {
       try {
@@ -432,6 +444,14 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
         seoImageAsset = asset as never;
       } catch {
         seoImageAsset = null;
+      }
+    }
+    if (primaryImageMediaIdFallback) {
+      try {
+        const asset = await prisma.mediaAsset.findFirst({ where: { id: primaryImageMediaIdFallback, businessId }, select: MEDIA_ASSET_SELECT });
+        primaryImageAsset = asset as never;
+      } catch {
+        primaryImageAsset = null;
       }
     }
   }
@@ -457,7 +477,6 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
       const price = priceByVariant.get(variant.id);
       return {
         id: variant.id,
-        sku: variant.sku,
         barcode: variant.barcode,
         name: variant.name,
         position: variant.position,
@@ -494,6 +513,8 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
   const resolvedBrandId = fallbackBrandId ?? brandRef?.id ?? null;
   const resolvedBrandName = brandRef?.name ?? fallbackBrandText;
   const resolvedSeoAsset = seoImageAsset ?? fallbackSeo ?? null;
+  const resolvedPrimaryAsset = primaryImageAsset ?? null;
+  const labelIds = ((product as { labels?: Array<{ labelId: string }> }).labels ?? []).map((entry) => entry.labelId);
 
   return {
     id: (rawProduct as { id: string }).id,
@@ -532,7 +553,9 @@ async function loadEditorProduct(businessId: string, productId: string): Promise
     publishedAt: (product as any).publishedAt?.toISOString() ?? null,
     categoryIds: (product as any).categories.map((entry: any) => entry.categoryId),
     primaryCategoryId: primaryCategory?.categoryId ?? null,
+    labelIds,
     attributeIds: (product as any).attributes.map((entry: any) => entry.attributeId),
+    primaryImage: resolvedPrimaryAsset ? { ...(await toAssetView(resolvedPrimaryAsset as never)), altText: (resolvedPrimaryAsset as { altText?: string | null }).altText ?? null } : null,
     images: await Promise.all((product as any).images.map(async (image: any) => ({ ...(await toAssetView(image.media as never)), altText: image.altText }))),
     variants,
   };
