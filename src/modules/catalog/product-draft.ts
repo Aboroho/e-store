@@ -219,18 +219,18 @@ export interface MatrixPlan {
  * Plan a regeneration without destroying anything.
  *
  * - A combination that already has a row keeps that row (and every value typed
- *   into it: SKU, price, images, overrides).
+ *   into it: price, images, overrides).
  * - A new combination becomes a row.
  * - A row whose combination is no longer selected is returned as an **orphan**
  *   rather than deleted, so a merchandiser who unticks a value by accident does
- *   not lose the SKU and price they already filled in. The UI lists those rows and
+ *   not lose the price they already filled in. The UI lists those rows and
  *   asks explicitly before removing them.
  */
 export function planMatrix(
   attributes: DraftAttribute[],
   selectedValueIds: string[],
   existing: DraftVariant[],
-  options: { skuPrefix?: string; keepOrphans?: boolean } = {},
+  options: { keepOrphans?: boolean } = {},
 ): MatrixPlan {
   const combinations = buildCombinations(attributes, selectedValueIds);
   const existingByKey = new Map(existing.map((row) => [combinationKey(row.attributeValueIds), row]));
@@ -438,6 +438,74 @@ export interface ImageActionImpact {
   unchanged: number;
 }
 
+/** Apply a bulk action to in-memory draft rows (used before the product exists). */
+export function applyLocalBulkAction(
+  rows: DraftVariant[],
+  matched: DraftVariant[],
+  input: {
+    action: string;
+    mediaId?: string | null;
+    currentPrice?: string;
+    discountType?: DiscountType;
+    discountValue?: string;
+    compareAt?: string;
+    cost?: string;
+    weight?: string;
+    weightUnit?: WeightUnit;
+    isPreorderEnabled?: boolean;
+    replaceOverrides?: boolean;
+  },
+): DraftVariant[] {
+  const keys = new Set(matched.map((row) => row.key));
+  return rows.map((row) => {
+    if (!keys.has(row.key)) return row;
+    switch (input.action) {
+      case "set-primary-image":
+        if (row.imageMediaId && !input.replaceOverrides) return row;
+        return { ...row, imageMediaId: input.mediaId ?? null, clearImageOverride: !input.mediaId, touched: true };
+      case "add-gallery-image":
+        if (!input.mediaId || row.galleryMediaIds.includes(input.mediaId)) return row;
+        return { ...row, galleryMediaIds: [...row.galleryMediaIds, input.mediaId], touched: true };
+      case "set-price":
+        return {
+          ...row,
+          currentPrice: input.currentPrice ?? "",
+          discountType: input.discountType ?? "NONE",
+          discountValue: input.discountValue ?? "",
+          clearPriceOverride: false,
+          touched: true,
+        };
+      case "set-compare-at":
+        return { ...row, compareAt: input.compareAt ?? "", touched: true };
+      case "set-cost":
+        return { ...row, cost: input.cost ?? "", clearCostOverride: false, touched: true };
+      case "set-weight":
+        return { ...row, weight: input.weight ?? "", weightUnit: input.weightUnit ?? row.weightUnit, clearWeightOverride: false, touched: true };
+      case "set-preorder":
+        return { ...row, isPreorderEnabled: input.isPreorderEnabled, clearPreorderOverride: false, touched: true };
+      case "reset-image":
+      case "clear-image-override":
+        if (!row.imageMediaId) return row;
+        return { ...row, imageMediaId: null, clearImageOverride: true, touched: true };
+      case "clear-gallery":
+        if (row.galleryMediaIds.length === 0) return row;
+        return { ...row, galleryMediaIds: [], touched: true };
+      case "clear-price-override":
+        return clearVariantPropertyOverride(row, "price");
+      case "clear-cost-override":
+        return clearVariantPropertyOverride(row, "cost");
+      case "clear-weight-override":
+        return clearVariantPropertyOverride(row, "weight");
+      case "clear-preorder-override":
+        return clearVariantPropertyOverride(row, "preorder");
+      case "clear-packaging-cost-override":
+        return clearVariantPropertyOverride(row, "packagingCost");
+      default:
+        return row;
+    }
+  });
+}
+
 export function imageActionImpact(
   target: DraftVariant[],
   context: { mediaId: string; productImageMediaId: string | null; attributes: DraftAttribute[] },
@@ -483,6 +551,28 @@ export const SKU_PATTERN = /^[A-Za-z0-9._\-/]+$/;
 export function isValidSku(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.length >= 2 && trimmed.length <= 64 && SKU_PATTERN.test(trimmed);
+}
+
+/**
+ * Should the product editor persist a working copy?
+ *
+ * Edit of an existing product only. The network is skipped when the payload
+ * has not changed since the last successful save, or when nothing is dirty.
+ */
+export function shouldAutosaveDraft(input: {
+  dirty: boolean;
+  name: string;
+  productCode: string;
+  productId: string | null;
+  fingerprint: string;
+  lastSavedFingerprint: string | null;
+}): boolean {
+  // Create Product never persists a working draft. Autosave is for editing
+  // an existing product only, and only after a real change.
+  if (!input.productId) return false;
+  if (!input.dirty) return false;
+  if (input.fingerprint === input.lastSavedFingerprint) return false;
+  return true;
 }
 
 /** Duplicate SKUs inside one submission (case-insensitive). */

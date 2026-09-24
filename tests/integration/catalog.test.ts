@@ -58,12 +58,12 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       isPreorderEnabled: false,
       taxRateBps: 0,
       packagingCostPaisa: 0,
+      sku: `SCARF-${context.slug}`,
       mediaIds: [],
       categoryIds: [],
       attributeIds: [createdAttribute.id],
       variants: attributeValues.map((value, index) => ({
         name: value.value,
-        sku: `SCARF-${index}-${context.slug}`,
         pricePaisa: 12_500 + index * 500,
         costPaisa: 7_000,
         attributeValueIds: [value.id],
@@ -107,8 +107,9 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       mediaIds: [],
       categoryIds: [],
       attributeIds: [],
+      sku: `SCARF-ALT-${context.slug}`,
       variants: [
-        { name: "Default", sku: `SCARF-ALT-${context.slug}`, pricePaisa: 9_900, attributeValueIds: [], isPreorderEnabled: false },
+        { name: "Default", pricePaisa: 9_900, attributeValueIds: [], isPreorderEnabled: false },
       ],
     });
     expect(second.slug).not.toBe(product.slug);
@@ -148,14 +149,32 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
     }
   });
 
-  it("rejects duplicate SKUs across variants instead of letting the database fail", async () => {
+  it("rejects duplicate product SKUs instead of letting the database fail", async () => {
     const duplicateSku = `DUP-${context.slug}`;
+
+    await createProduct(actor(), {
+      name: "Duplicate SKU product A",
+      slug: undefined,
+      productType: "SIMPLE",
+      status: "DRAFT",
+      unitLabel: "piece",
+      requiresShipping: true,
+      isFeatured: false,
+      isPreorderEnabled: false,
+      taxRateBps: 0,
+      packagingCostPaisa: 0,
+      sku: duplicateSku,
+      mediaIds: [],
+      categoryIds: [],
+      attributeIds: [],
+      variants: [{ name: "One", pricePaisa: 10_000, attributeValueIds: [], isPreorderEnabled: false }],
+    });
 
     await expect(
       createProduct(actor(), {
-        name: "Duplicate SKU product",
+        name: "Duplicate SKU product B",
         slug: undefined,
-        productType: "VARIABLE",
+        productType: "SIMPLE",
         status: "DRAFT",
         unitLabel: "piece",
         requiresShipping: true,
@@ -163,13 +182,11 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
         isPreorderEnabled: false,
         taxRateBps: 0,
         packagingCostPaisa: 0,
+        sku: duplicateSku,
         mediaIds: [],
         categoryIds: [],
         attributeIds: [],
-        variants: [
-          { name: "One", sku: duplicateSku, pricePaisa: 10_000, attributeValueIds: [], isPreorderEnabled: false },
-          { name: "Two", sku: duplicateSku, pricePaisa: 10_000, attributeValueIds: [], isPreorderEnabled: false },
-        ],
+        variants: [{ name: "Two", pricePaisa: 10_000, attributeValueIds: [], isPreorderEnabled: false }],
       }),
     ).rejects.toBeInstanceOf(AppError);
   });
@@ -221,8 +238,9 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       mediaIds: [],
       categoryIds: [],
       attributeIds: [],
+      sku: `PRICED-${context.slug}`,
       variants: [
-        { name: "Default", sku: `PRICED-${context.slug}`, pricePaisa: 20_000, attributeValueIds: [], isPreorderEnabled: false },
+        { name: "Default", pricePaisa: 20_000, attributeValueIds: [], isPreorderEnabled: false },
       ],
     });
 
@@ -255,11 +273,12 @@ describe.skipIf(!reachable)("catalog and pricing (database)", () => {
       isPreorderEnabled: false,
       taxRateBps: 0,
       packagingCostPaisa: 0,
+      sku: `ARCH-${context.slug}`,
       mediaIds: [],
       categoryIds: [],
       attributeIds: [],
       variants: [
-        { name: "Default", sku: `ARCH-${context.slug}`, pricePaisa: 5_000, attributeValueIds: [], isPreorderEnabled: false },
+        { name: "Default", pricePaisa: 5_000, attributeValueIds: [], isPreorderEnabled: false },
       ],
     });
 

@@ -163,10 +163,10 @@ export async function createTestVariant(
       productType: "SIMPLE",
       status: "ACTIVE",
       unitLabel: "piece",
+      sku,
       variants: {
         create: [
           {
-            sku,
             name: "Default",
             optionKey: "default",
             status: "ACTIVE",

@@ -23,7 +23,7 @@ export default async function ResellerPricingPage({ params }: { params: Promise<
 
   const items = priceList.items.map((item) => ({
     id: item.id,
-    sku: item.variant.sku ?? "",
+    sku: item.variant.product?.sku ?? "",
     product: item.variant.product.name,
     variant: item.variant.name,
     pricePaisa: item.pricePaisa,
@@ -64,7 +64,7 @@ export default async function ResellerPricingPage({ params }: { params: Promise<
       <ResellerPricingPanel
         resellerId={detail.reseller.id}
         items={items}
-        variants={variants.map((variant) => ({ id: variant.id, label: `${variant.sku} · ${variant.productName} — ${variant.name}` }))}
+        variants={variants.map((variant) => ({ id: variant.id, label: `${variant.sku || variant.name} · ${variant.productName} — ${variant.name}` }))}
       />
     </div>
   );

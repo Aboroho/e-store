@@ -6,15 +6,23 @@ import { AppError } from "@/lib/errors";
 import { logger } from "@/lib/logging";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission, can } from "@/lib/permissions";
-import { addAttributeValue as addAttributeValueService, createAttribute as createAttributeService, createCategory as createCategoryService } from "@/modules/catalog/service";
+import { addAttributeValue as addAttributeValueService, archiveVariant, createAttribute as createAttributeService, createCategory as createCategoryService } from "@/modules/catalog/service";
 import {
   bulkApplyVariantAction,
   createBrand,
+  createLabel,
   createUnitLabel,
   discardProductDraft,
   listBrandOptions,
+  listLabelOptions,
   listProductDrafts,
   loadProductDraft,
+  permanentlyDeleteBinnedItem,
+  permanentlyDeleteProduct,
+  restoreBinnedItem,
+  restoreBinnedProduct,
+  moveProductsToBin,
+  setProductPublication,
   saveProduct,
   saveProductDraft,
   setAttributeValueImage,
@@ -22,14 +30,17 @@ import {
 } from "@/modules/catalog/product-service";
 import {
   createBrandPreset,
+  createLabelPreset,
   createPackagingCostTemplate,
   createTaxRate,
   createUnitLabelPreset,
   deleteBrandPreset,
+  deleteLabelPreset,
   deletePackagingCostTemplate,
   deleteTaxRate,
   deleteUnitLabelPreset,
   updateBrandPreset,
+  updateLabelPreset,
   updatePackagingCostTemplate,
   updateTaxRate,
   updateUnitLabelPreset,
@@ -43,6 +54,7 @@ import {
   attributeValueInputSchema,
   brandInputSchema,
   bulkVariantActionSchema,
+  labelInputSchema,
   packagingCostTemplateInputSchema,
   productDraftSchema,
   singleVariantUpdateSchema,
@@ -168,8 +180,6 @@ export interface SkuCheckResult {
 export async function checkProductSkusAction(input: {
   productId?: string;
   productCode?: string;
-  /** Legacy: variants no longer carry their own code, so this is usually empty. */
-  variantSkus?: Array<{ key: string; sku: string }>;
 }): Promise<ActionResult<SkuCheckResult>> {
   try {
     const session = await requireSession();
@@ -177,42 +187,22 @@ export async function checkProductSkusAction(input: {
     const parsed = skuCheckSchema.parse(input);
 
     const variants: Record<string, SkuCheckEntry> = {};
-    const seen = new Map<string, string[]>();
-    for (const entry of parsed.variantSkus) {
-      const sku = entry.sku.trim().toUpperCase();
-      if (!sku) continue;
-      seen.set(sku, [...(seen.get(sku) ?? []), entry.key]);
-    }
-
-    const codes = [...seen.keys()];
-    const clashes = codes.length > 0 ? await prisma.variant.findMany({ where: { sku: { in: codes } }, select: { sku: true, productId: true } }) : [];
-    const clashMap = new Map(clashes.map((row) => [row.sku, row.productId]));
-
-    for (const [sku, keys] of seen) {
-      if (keys.length > 1) {
-        for (const key of keys) variants[key] = { available: false, message: `${sku} is used by more than one variant in this product.` };
-        continue;
-      }
-      const owner = clashMap.get(sku);
-      const entry: SkuCheckEntry =
-        owner && owner !== parsed.productId
-          ? { available: false, message: `${sku} is already used by another product.` }
-          : { available: true };
-      for (const key of keys) variants[key] = entry;
-    }
 
     let productCode: SkuCheckEntry = { available: true };
-    const code = parsed.productSku?.trim().toUpperCase();
+    const code = (parsed.productSku ?? parsed.productCode)?.trim().toUpperCase();
     if (code) {
-      const [productClash, variantClash] = await Promise.all([
-        prisma.product.findFirst({
-          where: { businessId: session.businessId, sku: { equals: code, mode: "insensitive" }, ...(parsed.productId ? { id: { not: parsed.productId } } : {}) },
-          select: { name: true },
-        }),
-        prisma.variant.findFirst({ where: { sku: code }, select: { id: true } }),
-      ]);
+      const productClash = await prisma.product.findFirst({
+        where: {
+          businessId: session.businessId,
+          sku: { equals: code, mode: "insensitive" },
+          ...(parsed.productId ? { id: { not: parsed.productId } } : {}),
+          NOT: {
+            AND: [{ status: "DRAFT" }, { publishedAt: null }, { createdByUserId: session.id }],
+          },
+        },
+        select: { name: true },
+      });
       if (productClash) productCode = { available: false, message: `Already used by "${productClash.name}".` };
-      else if (variantClash) productCode = { available: false, message: "Already used by a variant." };
     }
 
     return { ok: true, data: { productCode, variants } };
@@ -244,6 +234,29 @@ export async function listBrandsAction(): Promise<ActionResult<Awaited<ReturnTyp
     return { ok: true, data: await listBrandOptions(session.businessId) };
   } catch (error) {
     return failure(error, "Unable to load brands.");
+  }
+}
+
+export async function createLabelAction(input: unknown): Promise<ActionResult<{ id: string; name: string; slug: string }>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = labelInputSchema.parse(input);
+    const label = await createLabel(actor, parsed);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/catalog/labels");
+    return { ok: true, data: label };
+  } catch (error) {
+    return failure(error, "Unable to create the label.");
+  }
+}
+
+export async function listLabelsAction(): Promise<ActionResult<Awaited<ReturnType<typeof listLabelOptions>>>> {
+  try {
+    const session = await requireSession();
+    assertPermission(session, "product.view");
+    return { ok: true, data: await listLabelOptions(session.businessId) };
+  } catch (error) {
+    return failure(error, "Unable to load labels.");
   }
 }
 
@@ -389,7 +402,7 @@ export async function bulkVariantActionAction(input: unknown): Promise<ActionRes
 
 export async function updateSingleVariantAction(
   input: unknown,
-): Promise<ActionResult<{ variantId: string; productName: string; variantName: string }>> {
+): Promise<ActionResult<{ variantId: string; productId: string; productName: string; variantName: string }>> {
   try {
     const actor = await actorFor(["product.update"]);
     const parsed = singleVariantUpdateSchema.parse(input);
@@ -398,6 +411,7 @@ export async function updateSingleVariantAction(
     }
     const result = await updateSingleVariant(actor, parsed);
     revalidatePath("/admin/catalog/products");
+    revalidatePath(`/admin/catalog/products/${result.productId}`);
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to update the variant.");
@@ -430,10 +444,11 @@ export async function saveProductDraftAction(input: {
   revision?: number | null;
   name?: string;
   payload: Record<string, unknown>;
-}): Promise<ActionResult<{ draftId: string; revision: number; updatedAt: string }>> {
+}): Promise<ActionResult<{ draftId: string; revision: number; updatedAt: string; productId: string | null; createdProduct: boolean }>> {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const result = await saveProductDraft(actor, input);
+    revalidatePath("/admin/catalog/products");
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to save the draft. Your changes are still on this page — try again in a moment.");
@@ -473,6 +488,7 @@ export async function discardProductDraftAction(input: {
   try {
     const actor = await actorFor(input.productId ? ["product.update"] : ["product.create"]);
     const discarded = await discardProductDraft(actor.businessId, { ...input, userId: actor.userId });
+    revalidatePath("/admin/catalog/products");
     return { ok: true, data: { discarded } };
   } catch (error) {
     return failure(error, "Unable to discard the draft.");
@@ -641,8 +657,163 @@ export async function deleteBrandPresetAction(id: string): Promise<ActionResult<
     const result = await deleteBrandPreset(actor, id);
     revalidatePath("/admin/catalog/brands");
     revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/bin");
     return { ok: true, data: result };
   } catch (error) {
     return failure(error, "Unable to delete brand.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Presets: Labels                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function createLabelPresetAction(input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.create", "product.update"]);
+    const parsed = labelInputSchema.parse(input);
+    const result = await createLabelPreset(actor, parsed);
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to create label.");
+  }
+}
+
+export async function updateLabelPresetAction(id: string, input: unknown): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const parsed = labelInputSchema.parse(input);
+    const result = await updateLabelPreset(actor, id, parsed);
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to update label.");
+  }
+}
+
+export async function deleteLabelPresetAction(id: string): Promise<ActionResult<any>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await deleteLabelPreset(actor, id);
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/bin");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to delete label.");
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Bin                                                                        */
+/* -------------------------------------------------------------------------- */
+
+export async function restoreBinnedProductAction(productId: string): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete"]);
+    const result = await restoreBinnedProduct(actor, productId);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error, "Unable to restore the product.");
+  }
+}
+
+export async function permanentlyDeleteProductAction(productId: string): Promise<ActionResult<{ deleted: true }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete"]);
+    const result = await permanentlyDeleteProduct(actor, productId);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to permanently delete the product.");
+  }
+}
+
+export async function restoreBinnedItemAction(input: {
+  type: "product" | "brand" | "label" | "category";
+  id: string;
+}): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete", "category.manage"]);
+    const result = await restoreBinnedItem(actor, input.type, input.id);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/categories");
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error, "Unable to restore that item.");
+  }
+}
+
+export async function permanentlyDeleteBinnedItemAction(input: {
+  type: "product" | "brand" | "label" | "category";
+  id: string;
+}): Promise<ActionResult<{ deleted: true }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete", "category.manage"]);
+    const result = await permanentlyDeleteBinnedItem(actor, input.type, input.id);
+    revalidatePath("/admin/bin");
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/catalog/brands");
+    revalidatePath("/admin/catalog/labels");
+    revalidatePath("/admin/catalog/categories");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to permanently delete that item.");
+  }
+}
+
+export async function moveProductsToBinAction(productIds: string[]): Promise<ActionResult<{ moved: number }>> {
+  try {
+    const actor = await actorFor(["product.delete", "product.update"]);
+    const result = await moveProductsToBin(actor, productIds);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath("/admin/bin");
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error, "Unable to move those products to the bin.");
+  }
+}
+
+export async function archiveVariantsAction(input: {
+  productId: string;
+  variantIds: string[];
+}): Promise<ActionResult<{ archived: number }>> {
+  try {
+    const actor = await actorFor(["product.update", "product.delete"]);
+    const uniqueIds = [...new Set(input.variantIds.filter(Boolean))];
+    if (uniqueIds.length === 0) return { ok: true, data: { archived: 0 } };
+    const variants = await prisma.variant.findMany({
+      where: { id: { in: uniqueIds }, productId: input.productId, product: { businessId: actor.businessId } },
+      select: { id: true },
+    });
+    for (const variant of variants) {
+      await archiveVariant(actor, variant.id);
+    }
+    revalidatePath(`/admin/catalog/products/${input.productId}`);
+    revalidatePath("/admin/catalog/products");
+    return { ok: true, data: { archived: variants.length } };
+  } catch (error) {
+    return failure(error, "Unable to delete those variants.");
+  }
+}
+
+export async function setProductPublicationAction(productId: string, published: boolean): Promise<ActionResult<{ id: string }>> {
+  try {
+    const actor = await actorFor(["product.update"]);
+    const result = await setProductPublication(actor, productId, published);
+    revalidatePath("/admin/catalog/products");
+    revalidatePath(`/admin/catalog/products/${productId}`);
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error, published ? "Unable to publish the product." : "Unable to unpublish the product.");
   }
 }

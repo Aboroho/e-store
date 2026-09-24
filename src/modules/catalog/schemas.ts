@@ -6,12 +6,6 @@ import { zId, zMoneyPaisa, zOptionalSlug, zOptionalText } from "@/lib/validation
 export const variantInputSchema = z.object({
   id: zId.optional(),
   name: z.string().trim().min(1, "Give the variant a name").max(160),
-  sku: z
-    .string()
-    .trim()
-    .min(2, "SKU is required")
-    .max(64)
-    .regex(/^[A-Za-z0-9._\-/]+$/, "SKUs may contain letters, numbers, dot, dash, underscore and slash"),
   barcode: z.string().trim().max(64).optional(),
   pricePaisa: zMoneyPaisa,
   compareAtPricePaisa: zMoneyPaisa.optional(),

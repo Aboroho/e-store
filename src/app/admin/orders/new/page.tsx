@@ -46,8 +46,8 @@ export default async function NewOrderPage() {
           );
           return {
             id: variant.id,
-            sku: variant.sku ?? "",
-            label: `${variant.product.name} · ${variant.name} (${variant.sku || "no SKU"}) — ${available} available`,
+            sku: variant.product?.sku ?? "",
+            label: `${variant.product.name} · ${variant.name} (${variant.product?.sku || "no SKU"}) — ${available} available`,
             pricePaisa: variant.priceOverridePaisa ?? null,
           };
         })}

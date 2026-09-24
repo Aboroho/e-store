@@ -18,7 +18,7 @@ import { createTestBusiness, databaseReachable, destroyTestBusiness, type TestCo
 /**
  * End-to-end coverage for the Create/Edit Product flow against the real database:
  * transactions, unique-code and slug rules, media-library references, the three
- * image inheritance levels, bulk actions (Black-only vs White), opening stock and
+ * image inheritance levels, bulk actions (Black-only vs White), and
  * the optimistic-concurrency guard. Every payload goes through the same schema the
  * server action parses with, so the tests exercise the exact write path.
  */
@@ -39,7 +39,7 @@ describe.skipIf(!reachable)("product editor (database)", () => {
       unitLabel: "piece",
       shortDescription: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "A soft tee." }] }] },
       variants: [
-        { name: "Default", sku: `V-${randomUUID().slice(0, 8)}`, pricePaisa: 12_000, attributeValueIds: [] },
+        { name: "Default", pricePaisa: 12_000, attributeValueIds: [] },
       ],
       ...overrides,
     });
@@ -122,8 +122,8 @@ describe.skipIf(!reachable)("product editor (database)", () => {
         attributeIds: [attribute.id],
         saveAsDraft: true,
         variants: [
-          { name: "Black", sku: "ETEE-BLK", pricePaisa: 1_500, compareAtPricePaisa: 2_000, attributeValueIds: [black.id] },
-          { name: "White", sku: "ETEE-WHT", pricePaisa: 1_500, attributeValueIds: [white.id] },
+          { name: "Black", pricePaisa: 1_500, compareAtPricePaisa: 2_000, attributeValueIds: [black.id] },
+          { name: "White", pricePaisa: 1_500, attributeValueIds: [white.id] },
         ],
       }),
     );
@@ -139,7 +139,7 @@ describe.skipIf(!reachable)("product editor (database)", () => {
 
     const variants = await prisma.variant.findMany({ where: { productId: product.id }, orderBy: { position: "asc" } });
     expect(variants).toHaveLength(2);
-    expect(variants.map((variant) => variant.sku).sort()).toEqual(["ETEE-BLK", "ETEE-WHT"]);
+    expect(variants.map((variant) => variant.name).sort()).toEqual(["Black", "White"]);
 
     const prices = await prisma.priceListItem.findMany({ where: { productId: product.id, minQuantity: 1 } });
     expect(prices).toHaveLength(2);
@@ -172,33 +172,15 @@ describe.skipIf(!reachable)("product editor (database)", () => {
     expect(third.slug).toBe("shared-url-3");
   });
 
-  it("rejects duplicate codes inside one submission, and codes used by other products", async () => {
-    const base = await saveProduct(actor(), draftInput({ productCode: "PARENT-1", variants: [{ name: "One", sku: "TAKEN-1", pricePaisa: 100 }] }));
+  it("rejects duplicate product codes, and allows editing a product that keeps its own code", async () => {
+    const base = await saveProduct(actor(), draftInput({ productCode: "PARENT-1", variants: [{ name: "One", pricePaisa: 100 }] }));
 
-    // Two variants with the same code in one product (case-insensitive).
-    await expect(
-      saveProduct(
-        actor(),
-        draftInput({
-          variants: [
-            { name: "A", sku: "dup-1", pricePaisa: 100 },
-            { name: "B", sku: "DUP-1", pricePaisa: 100 },
-          ],
-        }),
-      ),
-    ).rejects.toMatchObject({ message: expect.stringMatching(/used more than once/) });
-
-    // A variant code that belongs to another product.
-    await expect(saveProduct(actor(), draftInput({ variants: [{ name: "A", sku: "taken-1", pricePaisa: 100 }] }))).rejects.toMatchObject(
-      { message: expect.stringMatching(/already used by another product/) },
-    );
-
-    // The parent-level product code is unique inside the business too.
+    // The product code is unique inside the business. Variants never carry a SKU.
     await expect(saveProduct(actor(), draftInput({ productCode: "parent-1" }))).rejects.toMatchObject({
       message: expect.stringMatching(/Product code PARENT-1 is already used/),
     });
 
-    // … but editing the same product while keeping its codes is fine.
+    // Editing the same product while keeping its code is fine.
     const baseRow = await prisma.product.findUniqueOrThrow({ where: { id: base.productId } });
     const baseVariant = await prisma.variant.findFirstOrThrow({ where: { productId: base.productId } });
     await expect(
@@ -208,7 +190,7 @@ describe.skipIf(!reachable)("product editor (database)", () => {
           productId: base.productId,
           slug: baseRow.slug,
           productCode: "PARENT-1",
-          variants: [{ id: baseVariant.id, name: baseVariant.name, sku: "TAKEN-1", pricePaisa: 100 }],
+          variants: [{ id: baseVariant.id, name: baseVariant.name, pricePaisa: 100 }],
         }),
       ),
     ).resolves.toMatchObject({ created: false });
@@ -231,7 +213,7 @@ describe.skipIf(!reachable)("product editor (database)", () => {
     );
     const foreignValue = await prisma.attributeValue.findFirstOrThrow({ where: { attributeId: foreignAttribute.id } });
     await expect(
-      saveProduct(actor(), draftInput({ variants: [{ name: "A", sku: `F-${randomUUID().slice(0, 6)}`, pricePaisa: 100, attributeValueIds: [foreignValue.id] }] })),
+      saveProduct(actor(), draftInput({ variants: [{ name: "A", pricePaisa: 100, attributeValueIds: [foreignValue.id] }] })),
     ).rejects.toMatchObject({ message: expect.stringMatching(/another business/) });
   });
 
@@ -303,14 +285,16 @@ describe.skipIf(!reachable)("product editor (database)", () => {
           seoImage: { mediaId: seo.id },
           attributeValueImages: { [black.id]: valueDefault.id },
           variants: [
-            { name: "Black", sku: `B-${randomUUID().slice(0, 6)}`, pricePaisa: 100, imageMediaId: override.id, galleryMediaIds: [gallery.id], attributeValueIds: [black.id] },
+            { name: "Black", pricePaisa: 100, imageMediaId: override.id, galleryMediaIds: [gallery.id], attributeValueIds: [black.id] },
           ],
         }),
       );
 
       const data = await loadProductEditorData(context.businessId, { canViewCost: true, canManageMedia: true, canUploadMedia: true }, saved.productId);
       const product = data.product!;
-      expect(product.images.map((image) => image.id)).toContain(primary.id);
+      expect(product.primaryImage?.id).toBe(primary.id);
+      expect(product.images.map((image) => image.id)).toContain(gallery.id);
+      expect(product.images.map((image) => image.id)).not.toContain(primary.id);
       expect(product.seoImage?.id).toBe(seo.id);
       const variant = product.variants[0]!;
       expect(variant.imageMediaId).toBe(override.id);
@@ -338,7 +322,6 @@ describe.skipIf(!reachable)("product editor (database)", () => {
           variants: product.variants.map((row) => ({
             id: row.id,
             name: row.name,
-            sku: row.sku,
             pricePaisa: row.pricePaisa ?? 100,
             attributeValueIds: row.attributeValueIds,
           })),
@@ -395,7 +378,7 @@ describe.skipIf(!reachable)("product editor (database)", () => {
         productId: created.productId,
         slug: product.slug,
         productCode: product.sku!,
-        variants: [{ id: variant.id, name: variant.name, sku: variant.sku, pricePaisa: 12_000 }],
+        variants: [{ id: variant.id, name: variant.name, pricePaisa: 12_000 }],
         ...overrides,
       });
 
@@ -490,9 +473,9 @@ describe.skipIf(!reachable)("product editor (database)", () => {
           attributeIds: [attribute.id, size.attribute.id],
           variants: [
             // has its own image (override)
-            { name: "Black / S", sku: "BLK-S", pricePaisa: 100, imageMediaId: custom.id, attributeValueIds: [black.id, size.s.id] },
-            { name: "Black / M", sku: "BLK-M", pricePaisa: 100, attributeValueIds: [black.id, size.m.id] },
-            { name: "White / S", sku: "WHT-S", pricePaisa: 100, attributeValueIds: [white.id, size.s.id] },
+            { name: "Black / S", pricePaisa: 100, imageMediaId: custom.id, attributeValueIds: [black.id, size.s.id] },
+            { name: "Black / M", pricePaisa: 100, attributeValueIds: [black.id, size.m.id] },
+            { name: "White / S", pricePaisa: 100, attributeValueIds: [white.id, size.s.id] },
           ],
         }),
       );
@@ -518,10 +501,10 @@ describe.skipIf(!reachable)("product editor (database)", () => {
       expect(whiteValue.mediaId).toBeNull();
 
       const variants = await prisma.variant.findMany({ where: { productId } });
-      const bySku = (sku: string) => variants.find((variant) => variant.sku === sku)!;
-      expect(bySku("BLK-S").imageMediaId).toBe(custom.id); // override preserved
-      expect(bySku("BLK-M").imageMediaId).toBeNull(); // inherits the Black default now
-      expect(bySku("WHT-S").imageMediaId).toBeNull(); // White untouched
+      const byName = (name: string) => variants.find((variant) => variant.name === name)!;
+      expect(byName("Black / S").imageMediaId).toBe(custom.id); // override preserved
+      expect(byName("Black / M").imageMediaId).toBeNull(); // inherits the Black default now
+      expect(byName("White / S").imageMediaId).toBeNull(); // White untouched
 
       // Same action with an explicit "replace overrides" reaches the variant rows.
       const replaced = await bulkApplyVariantAction(
@@ -536,10 +519,10 @@ describe.skipIf(!reachable)("product editor (database)", () => {
       );
       expect(replaced.affected).toBe(2); // both Black rows now point at the asset directly
       const after = await prisma.variant.findMany({ where: { productId } });
-      const bySkuAfter = (sku: string) => after.find((variant) => variant.sku === sku)!;
-      expect(bySkuAfter("BLK-S").imageMediaId).toBe(shared.id);
-      expect(bySkuAfter("BLK-M").imageMediaId).toBe(shared.id);
-      expect(bySkuAfter("WHT-S").imageMediaId).toBeNull();
+      const byNameAfter = (name: string) => after.find((variant) => variant.name === name)!;
+      expect(byNameAfter("Black / S").imageMediaId).toBe(shared.id);
+      expect(byNameAfter("Black / M").imageMediaId).toBe(shared.id);
+      expect(byNameAfter("White / S").imageMediaId).toBeNull();
     });
 
     it("applies price and weight updates to the resolved target only", async () => {
@@ -550,12 +533,12 @@ describe.skipIf(!reachable)("product editor (database)", () => {
           slug: "bulk-price",
           attributeIds: [attribute.id],
           variants: [
-            { name: "One", sku: "P-1", pricePaisa: 1_000, attributeValueIds: [black.id] },
-            { name: "Two", sku: "P-2", pricePaisa: 2_000, attributeValueIds: [white.id] },
+            { name: "One", pricePaisa: 1_000, attributeValueIds: [black.id] },
+            { name: "Two", pricePaisa: 2_000, attributeValueIds: [white.id] },
           ],
         }),
       );
-      const one = (await prisma.variant.findMany({ where: { productId: created.productId } })).find((variant) => variant.sku === "P-1")!;
+      const one = (await prisma.variant.findMany({ where: { productId: created.productId } })).find((variant) => variant.name === "One")!;
 
       await bulkApplyVariantAction(
         actor(),
@@ -567,8 +550,8 @@ describe.skipIf(!reachable)("product editor (database)", () => {
         }),
       );
       const priced = await prisma.variant.findMany({ where: { productId: created.productId } });
-      expect(priced.find((variant) => variant.sku === "P-1")!.priceOverridePaisa).toBe(9_999);
-      expect(priced.find((variant) => variant.sku === "P-2")!.priceOverridePaisa).toBe(2_000);
+      expect(priced.find((variant) => variant.name === "One")!.priceOverridePaisa).toBe(9_999);
+      expect(priced.find((variant) => variant.name === "Two")!.priceOverridePaisa).toBe(2_000);
       const priceRow = await prisma.priceListItem.findFirst({ where: { variantId: one.id } });
       expect(priceRow!.pricePaisa).toBe(9_999);
 
@@ -619,12 +602,12 @@ describe.skipIf(!reachable)("product editor (database)", () => {
         draftInput({
           slug: "value-push",
           attributeIds: [attribute.id],
-          variants: [{ name: "B", sku: "VB-1", pricePaisa: 100, imageMediaId: override.id, attributeValueIds: [black.id] }],
+          variants: [{ name: "B", pricePaisa: 100, imageMediaId: override.id, attributeValueIds: [black.id] }],
         }),
       );
       const pushed = await setAttributeValueImage(actor(), { attributeValueId: black.id, mediaId: asset.id, productId: created.productId, applyToVariants: true });
       expect(pushed.variantsUpdated).toBe(1);
-      const variant = await prisma.variant.findFirstOrThrow({ where: { sku: "VB-1" } });
+      const variant = await prisma.variant.findFirstOrThrow({ where: { productId: created.productId, name: "B" } });
       expect(variant.imageMediaId).toBe(asset.id); // the caller chose to replace
 
       const cleared = await setAttributeValueImage(actor(), { attributeValueId: black.id, mediaId: null });

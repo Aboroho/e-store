@@ -48,17 +48,14 @@ export function BasicInformationSection({
   onSlugChange,
   onRegenerateSlug,
   onPatch,
-  shortDescription,
-  description,
-  onShortDescriptionChange,
-  onDescriptionChange,
-  canUpload,
+  productType,
 }: {
   name: string;
   slug: string;
   slugTouched: boolean;
   productCode: string;
   barcode: string;
+  productType: "SIMPLE" | "VARIABLE";
   productUrlPrefix: string | null;
   slugState: { checking: boolean; available: boolean | null; suggestion: string | null };
   skuState: { checking: boolean; message?: string };
@@ -66,13 +63,7 @@ export function BasicInformationSection({
   onNameChange: (value: string) => void;
   onSlugChange: (value: string, options?: { manual?: boolean }) => void;
   onRegenerateSlug: () => void;
-  onPatch: (patch: { barcode?: string; productCode?: string }) => void;
-  /** Rich-text documents live with the product information, not with the settings. */
-  shortDescription?: RichTextDocument;
-  description?: RichTextDocument;
-  onShortDescriptionChange?: (value: RichTextDocument) => void;
-  onDescriptionChange?: (value: RichTextDocument) => void;
-  canUpload?: boolean;
+  onPatch: (patch: { barcode?: string; productCode?: string; productType?: "SIMPLE" | "VARIABLE" }) => void;
 }) {
   return (
     <CollapsibleSection
@@ -213,62 +204,118 @@ export function BasicInformationSection({
           </div>
           <Input id="product-barcode" value={barcode} maxLength={64} onChange={(event) => onPatch({ barcode: event.target.value })} />
         </div>
-      </div>
 
-      {onShortDescriptionChange || onDescriptionChange ? (
-        <div className="mt-5 space-y-6 border-t border-slate-200 pt-5">
-          {onShortDescriptionChange ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <Label className="text-slate-800">Short description</Label>
-                <InfoTip>
-                  One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the
-                  fallback meta description.
-                </InfoTip>
-              </div>
-              <RichTextEditor
-                value={shortDescription}
-                onChange={onShortDescriptionChange}
-                aria-label="Short description"
-                expandedTitle="Short description"
-                placeholder="Lightweight leather shoes for everyday wear."
-                minHeight={140}
-                maxHeight={260}
-                features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
-                toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
-                onUpload={canUpload ? uploadToMediaLibrary : undefined}
-                renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
-              />
-            </div>
-          ) : null}
-          {onDescriptionChange ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <Label className="text-slate-800">Long description</Label>
-                <InfoTip>
-                  The full product story on the product page. Images and video are picked from the shared media library, so the same asset
-                  is never uploaded twice and never deleted while a description uses it.
-                </InfoTip>
-              </div>
-              <RichTextEditor
-                value={description}
-                onChange={onDescriptionChange}
-                aria-label="Long description"
-                expandedTitle="Long description"
-                placeholder="Describe the materials, sizing, care instructions… Press / for headings, lists, images and video."
-                minHeight={260}
-                expandable
-                onUpload={canUpload ? uploadToMediaLibrary : undefined}
-                renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
-              />
-              <p className="text-xs text-slate-500">
-                Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting
-                is rejected on save.
-              </p>
-            </div>
-          ) : null}
+        <div className="space-y-1.5 lg:col-span-2">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-slate-800">
+              Product type <span className="text-red-500">*</span>
+            </Label>
+            <InfoTip>
+              Single products sell as one item. Variable products have options such as colour and size; each combination is a variant that
+              inherits the product price until you override it.
+            </InfoTip>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { value: "SIMPLE", label: "Single", help: "One sellable item, no option matrix." },
+                { value: "VARIABLE", label: "Variable", help: "Options generate variants." },
+              ] as const
+            ).map((choice) => (
+              <label
+                key={choice.value}
+                className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+                  productType === choice.value ? "border-brand-300 bg-brand-50 text-brand-800" : "border-slate-200 text-slate-700"
+                }`}
+              >
+                <input
+                  type="radio"
+                  className="mt-0.5"
+                  name="product-type"
+                  checked={productType === choice.value}
+                  onChange={() => onPatch({ productType: choice.value })}
+                />
+                <span>
+                  <span className="font-medium">{choice.label}</span>
+                  <span className="block text-xs text-slate-500">{choice.help}</span>
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
-      ) : null}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+export function ProductDescriptionSection({
+  shortDescription,
+  description,
+  onShortDescriptionChange,
+  onDescriptionChange,
+  canUpload,
+}: {
+  shortDescription: RichTextDocument;
+  description: RichTextDocument;
+  onShortDescriptionChange: (value: RichTextDocument) => void;
+  onDescriptionChange: (value: RichTextDocument) => void;
+  canUpload?: boolean;
+}) {
+  return (
+    <CollapsibleSection
+      id="description"
+      title="Product description"
+      description="What shoppers read on listings and on the product page. Images come from the shared media library."
+      icon={<ClipboardList className="h-4 w-4" />}
+    >
+      <div className="space-y-6">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-slate-800">Short description</Label>
+            <InfoTip>
+              One or two sentences shown in listings, category tiles and search results. Keep it plain: it is also used as the fallback
+              meta description.
+            </InfoTip>
+          </div>
+          <RichTextEditor
+            value={shortDescription}
+            onChange={onShortDescriptionChange}
+            aria-label="Short description"
+            expandedTitle="Short description"
+            placeholder="Lightweight leather shoes for everyday wear."
+            minHeight={140}
+            maxHeight={260}
+            features={{ heading: false, table: false, taskList: false, image: true, file: false, blockquote: false, codeBlock: false, horizontalRule: false }}
+            toolbar={{ items: ["bold", "italic", "underline", "strike", "link", "bulletList", "orderedList", "image", "clearFormatting", "undo", "redo", "expand"] }}
+            onUpload={canUpload ? uploadToMediaLibrary : undefined}
+            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-slate-800">Long description</Label>
+            <InfoTip>
+              The full product story on the product page. Images and video are picked from the shared media library, so the same asset is
+              never uploaded twice and never deleted while a description uses it.
+            </InfoTip>
+          </div>
+          <RichTextEditor
+            value={description}
+            onChange={onDescriptionChange}
+            aria-label="Long description"
+            expandedTitle="Long description"
+            placeholder="Describe the materials, sizing, care instructions… Press / for headings, lists, images and video."
+            minHeight={260}
+            expandable
+            onUpload={canUpload ? uploadToMediaLibrary : undefined}
+            renderMediaLibrary={({ kind, onSelect }) => <MediaLibraryTrigger kind={kind} onSelect={onSelect} />}
+          />
+          <p className="text-xs text-slate-500">
+            Use “Expand editor” for a full-screen writing surface. Content is structured JSON, never raw HTML: unsupported formatting is
+            rejected on save.
+          </p>
+        </div>
+      </div>
     </CollapsibleSection>
   );
 }
@@ -333,6 +380,7 @@ export function OrganizationSection({
 }) {
   const [brandDialog, setBrandDialog] = React.useState(false);
   const [categoryDialog, setCategoryDialog] = React.useState(false);
+  const [addingUnit, setAddingUnit] = React.useState(false);
   const [unitDraft, setUnitDraft] = React.useState("");
   const [unitSaving, setUnitSaving] = React.useState(false);
 
@@ -355,7 +403,7 @@ export function OrganizationSection({
     const result = await createUnitLabelAction({ name });
     setUnitSaving(false);
     if (!result.ok) return;
-    onPatch({ unitLabel: result.data.name });
+    onPatch({ unitLabel: result.data.name, unitLabelId: result.data.id });
     onUnitLabelCreated({ id: result.data.id, name: result.data.name, slug: result.data.slug, isDefault: unitLabels.length === 0 });
     setUnitDraft("");
   };
@@ -364,7 +412,7 @@ export function OrganizationSection({
     <CollapsibleSection
       id="organization"
       title="Product organisation"
-      description="Brand, categories, how the product is sold and how much it weighs."
+      description="Brand, categories, how the product is counted, and how much it weighs."
       icon={<Layers className="h-4 w-4" />}
       defaultOpen
       badge={selectedCategoryIds.length > 0 ? `${selectedCategoryIds.length} category(ies)` : undefined}
@@ -444,38 +492,61 @@ export function OrganizationSection({
             <Label htmlFor="unit-label" className="text-slate-800">
               Unit label
             </Label>
-            <InfoTip>
-              Describes how this product is sold or counted, such as piece, pair or box. This is different from the weight unit below.
-            </InfoTip>
+            <InfoTip>How this product is counted — piece, pair, box. A value only: no slug or image.</InfoTip>
           </div>
-          <div className="flex items-center gap-2">
-            <Input
-              id="unit-label"
-              list="unit-label-options"
-              value={unitLabel}
-              maxLength={24}
-              onChange={(event) => onPatch({ unitLabel: event.target.value })}
-            />
-            <datalist id="unit-label-options">
-              {unitLabels.map((label) => (
-                <option key={label.slug} value={label.name} />
-              ))}
-            </datalist>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              className="h-8 w-40 text-xs"
-              value={unitDraft}
-              placeholder="Add a label"
-              maxLength={24}
-              onChange={(event) => setUnitDraft(event.target.value)}
-            />
-            <Button type="button" variant="outline" size="sm" disabled={unitSaving || !unitDraft.trim()} onClick={addUnitLabel}>
-              {unitSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
-              Save label
-            </Button>
-            <span className="text-xs text-slate-500">Labels are shared by every product; duplicates are ignored.</span>
-          </div>
+          <NativeSelect
+            id="unit-label"
+            value={addingUnit ? "__new__" : unitLabel}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === "__new__") {
+                setAddingUnit(true);
+                setUnitDraft("");
+                return;
+              }
+              setAddingUnit(false);
+              const match = unitLabels.find((entry) => entry.name === next);
+              onPatch({ unitLabel: next, unitLabelId: match?.id ?? null });
+            }}
+          >
+            {!unitLabel ? <option value="">Select a unit…</option> : null}
+            {unitLabel && !unitLabels.some((entry) => entry.name === unitLabel) ? <option value={unitLabel}>{unitLabel}</option> : null}
+            {unitLabels.map((entry) => (
+              <option key={entry.slug || entry.name} value={entry.name}>
+                {entry.name}
+              </option>
+            ))}
+            <option value="__new__">Add a new unit…</option>
+          </NativeSelect>
+          {addingUnit ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="h-8 w-40 text-xs"
+                value={unitDraft}
+                placeholder="e.g. piece"
+                maxLength={24}
+                onChange={(event) => setUnitDraft(event.target.value)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={unitSaving || !unitDraft.trim()}
+                onClick={async () => {
+                  await addUnitLabel();
+                  setAddingUnit(false);
+                }}
+              >
+                {unitSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+                Save unit
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setAddingUnit(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Shared across products. Pick one or add a new value.</p>
+          )}
           {errors.unitLabel ? <p className="text-xs text-red-600">{errors.unitLabel[0]}</p> : null}
         </div>
 
@@ -543,40 +614,40 @@ export function OrganizationSection({
 /* -------------------------------------------------------------------------- */
 
 export function ProductImagesSection({
+  primaryImage,
   images,
-  onChange,
+  onPrimaryChange,
+  onImagesChange,
   errors,
 }: {
+  primaryImage: MediaGalleryItem | null;
   images: MediaGalleryItem[];
-  onChange: (items: MediaGalleryItem[]) => void;
+  onPrimaryChange: (item: MediaGalleryItem | null) => void;
+  onImagesChange: (items: MediaGalleryItem[]) => void;
   errors: Record<string, string[]>;
 }) {
-  const primary = images[0] ?? null;
-  const gallery = images.slice(1);
-
   return (
     <CollapsibleSection
       id="images"
       title="Product images"
-      description="The image every listing shows, plus the gallery shoppers browse on the product page."
+      description="The listing image is independent of the gallery. Changing one never rewrites the other."
       icon={<ImageIcon className="h-4 w-4" />}
-      badge={images.length > 0 ? `${images.length} image(s)` : "No images"}
-      badgeTone={images.length > 0 ? "success" : "warning"}
+      badge={primaryImage || images.length > 0 ? `${(primaryImage ? 1 : 0) + images.length} image(s)` : "No images"}
+      badgeTone={primaryImage ? "success" : "warning"}
     >
       <div className="space-y-5">
         <MediaField
           label="Primary image"
           required
-          value={primary?.asset ?? null}
+          value={primaryImage?.asset ?? null}
           onChange={(asset) => {
             if (!asset) {
-              onChange(images.filter((item) => item.mediaId !== primary?.mediaId));
+              onPrimaryChange(null);
               return;
             }
-            const rest = images.filter((item) => item.mediaId !== primary?.mediaId && item.mediaId !== asset.id);
-            onChange([{ mediaId: asset.id, asset, altText: primary?.altText ?? null }, ...rest]);
+            onPrimaryChange({ mediaId: asset.id, asset, altText: primaryImage?.altText ?? null });
           }}
-          tooltip="Shown in listings, search results, cart and social previews. Choosing an existing asset reuses the same file instead of uploading it again."
+          tooltip="Shown in listings, search results, cart and social previews. It is stored separately from additional images — it is never gallery row 0."
           help="Pick from the shared media library — upload inside the library if the image is not there yet."
           size={128}
           error={errors.primaryImage}
@@ -584,13 +655,14 @@ export function ProductImagesSection({
 
         <MediaGalleryField
           label="Additional images"
-          items={gallery}
-          onChange={(items) => onChange(primary ? [primary, ...items] : items)}
-          max={19}
-          tooltip="Extra angles shown as thumbnails under the main image. Order matters: the first three are usually visible without scrolling."
-          help="Use the arrows to reorder and “Make primary” to promote an image. Removing an image here only detaches it from this product."
+          items={images}
+          onChange={onImagesChange}
+          max={20}
+          allowMakePrimary={false}
+          tooltip="Extra angles shown as thumbnails under the main image. These never become the primary image from here."
+          help="Use the arrows to reorder. Removing an image here only detaches it from this product — it stays in the media library."
           onAltTextChange={(mediaId, altText) =>
-            onChange(images.map((item) => (item.mediaId === mediaId ? { ...item, altText: altText || null } : item)))
+            onImagesChange(images.map((item) => (item.mediaId === mediaId ? { ...item, altText: altText || null } : item)))
           }
         />
       </div>
@@ -646,24 +718,32 @@ export function PricingSection({
   currentPrice,
   discountType,
   discountValue,
-  defaultCost,
+  taxRateId,
+  taxRates,
+  taxRateBps,
+  packagingTemplateId,
+  packagingTemplates,
+  packagingCostPaisa,
   variantCount,
   overrideCount,
   unpricedCount,
-  canViewCost,
   errors,
   onPatch,
 }: {
   currentPrice: string;
   discountType: "PERCENTAGE" | "FLAT" | "NONE";
   discountValue: string;
-  defaultCost: string;
+  taxRateId: string | null;
+  taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
+  taxRateBps: string;
+  packagingTemplateId: string | null;
+  packagingTemplates: Array<{ id: string; name: string; costPaisa: number; isDefault: boolean }>;
+  packagingCostPaisa: string;
   variantCount: number;
   /** Variants carrying a price override of their own. */
   overrideCount: number;
   /** Variants that would sell for nothing because no level defines a price. */
   unpricedCount: number;
-  canViewCost: boolean;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
 }) {
@@ -715,8 +795,8 @@ export function PricingSection({
             onChange={(event) => onPatch({ discountType: event.target.value as "PERCENTAGE" | "FLAT" | "NONE" })}
           >
             <option value="NONE">No discount</option>
-            <option value="PERCENTAGE">Percentage (%)</option>
-            <option value="FLAT">Flat amount (BDT)</option>
+            <option value="PERCENTAGE">Percentage</option>
+            <option value="FLAT">Flat</option>
           </NativeSelect>
         </FieldWithTip>
 
@@ -752,24 +832,92 @@ export function PricingSection({
         </FieldWithTip>
       </div>
 
-      {canViewCost ? (
-        <div className="mt-4 max-w-xs">
-          <FieldWithTip
-            id="product-default-cost"
-            label="Default purchase cost (BDT)"
-            tooltip="Fallback unit cost for margin reporting when a variant has no cost of its own. Never shown to shoppers."
-            error={errors.defaultCostPaisa}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <FieldWithTip
+          id="product-packaging-template"
+          label="Packaging cost"
+          tooltip="Reusable packaging cost per unit. Used for profitability reporting only — it is never added to what the shopper pays."
+          error={errors.packagingCostPaisa}
+        >
+          <NativeSelect
+            id="product-packaging-template"
+            value={packagingTemplateId ?? ""}
+            onChange={(event) => {
+              const nextId = event.target.value || null;
+              const preset = packagingTemplates.find((template) => template.id === nextId);
+              onPatch({ packagingCostTemplateId: nextId, ...(preset ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) } : {}) });
+            }}
           >
+            <option value="">No template</option>
+            {packagingTemplates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name} — {formatPaisa(template.costPaisa)}
+              </option>
+            ))}
+          </NativeSelect>
+          <div className="mt-2 flex items-center gap-2">
+            <Label htmlFor="product-packaging-cost" className="text-xs text-slate-500">
+              Custom cost (BDT)
+            </Label>
             <Input
-              id="product-default-cost"
+              id="product-packaging-cost"
+              className="h-8 w-24"
               inputMode="decimal"
-              value={defaultCost}
-              placeholder="0.00"
-              onChange={(event) => onPatch({ defaultCost: event.target.value })}
+              value={packagingCostPaisa}
+              onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
             />
-          </FieldWithTip>
-        </div>
-      ) : null}
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Manage presets in{" "}
+            <Link href="/admin/catalog/packaging-costs" className="text-brand-700 underline">
+              Packaging costs
+            </Link>
+            .
+          </p>
+        </FieldWithTip>
+
+        <FieldWithTip
+          id="product-tax-rate"
+          label="Tax rate"
+          tooltip="Reusable preset. Selecting one copies its rate onto this product; editing the preset later does not rewrite historical orders."
+        >
+          <NativeSelect
+            id="product-tax-rate"
+            value={taxRateId ?? ""}
+            onChange={(event) => {
+              const nextId = event.target.value || null;
+              const preset = taxRates.find((rate) => rate.id === nextId);
+              onPatch({ taxRateId: nextId, ...(preset ? { taxRateBps: String(preset.rateBps) } : {}) });
+            }}
+          >
+            <option value="">No tax preset</option>
+            {taxRates.map((rate) => (
+              <option key={rate.id} value={rate.id}>
+                {rate.name} ({(rate.rateBps / 100).toFixed(2)}%)
+              </option>
+            ))}
+          </NativeSelect>
+          <div className="mt-2 flex items-center gap-2">
+            <Label htmlFor="product-tax-bps" className="text-xs text-slate-500">
+              Custom rate (basis points)
+            </Label>
+            <Input
+              id="product-tax-bps"
+              className="h-8 w-24"
+              inputMode="numeric"
+              value={taxRateBps}
+              onChange={(event) => onPatch({ taxRateBps: event.target.value })}
+            />
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Manage presets in{" "}
+            <Link href="/admin/catalog/tax-rates" className="text-brand-700 underline">
+              Tax rates
+            </Link>
+            . Tax is recorded separately from discounts and profit.
+          </p>
+        </FieldWithTip>
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
         <Badge variant="neutral">{overrideCount} variant override(s)</Badge>
@@ -793,12 +941,6 @@ export function PricingSection({
  */
 export function ProductSettingsSection({
   status,
-  taxRateId,
-  taxRates,
-  taxRateBps,
-  packagingTemplateId,
-  packagingTemplates,
-  packagingCostPaisa,
   isPreorderEnabled,
   preorderNote,
   requiresShipping,
@@ -810,18 +952,11 @@ export function ProductSettingsSection({
   name,
   slug,
   productUrlPrefix,
-  canViewCost,
   errors,
   onPatch,
   onSeoImageChange,
 }: {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
-  taxRateId: string | null;
-  taxRates: Array<{ id: string; name: string; rateBps: number; isDefault: boolean }>;
-  taxRateBps: string;
-  packagingTemplateId: string | null;
-  packagingTemplates: Array<{ id: string; name: string; costPaisa: number; isDefault: boolean }>;
-  packagingCostPaisa: string;
   isPreorderEnabled: boolean;
   preorderNote: string;
   requiresShipping: boolean;
@@ -833,7 +968,6 @@ export function ProductSettingsSection({
   name: string;
   slug: string;
   productUrlPrefix: string | null;
-  canViewCost: boolean;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onSeoImageChange: (asset: MediaAssetView | null) => void;
@@ -844,106 +978,15 @@ export function ProductSettingsSection({
 
   return (
     <CollapsibleSection
-      id="settings"
-      title="Settings, SEO and publication"
-      description="Tax and packaging presets, preorder policy, search metadata and whether the product is live."
+      id="seo"
+      title="SEO and publication"
+      description="Search metadata, preorder policy, and whether the product is live. This section is last on purpose."
       icon={<Search className="h-4 w-4" />}
       badge={status === "ACTIVE" ? "Published" : status === "DRAFT" ? "Draft" : "Archived"}
       badgeTone={status === "ACTIVE" ? "success" : "neutral"}
       className="mb-10"
     >
       <div className="space-y-6">
-        <div className="grid gap-4 lg:grid-cols-3">
-          <FieldWithTip
-            id="product-tax-rate"
-            label="Tax rate"
-            tooltip="Reusable preset. Selecting one copies its rate onto this product; editing the preset later does not rewrite historical orders."
-          >
-            <NativeSelect
-              id="product-tax-rate"
-              value={taxRateId ?? ""}
-              onChange={(event) => {
-                const nextId = event.target.value || null;
-                const preset = taxRates.find((rate) => rate.id === nextId);
-                onPatch({ taxRateId: nextId, ...(preset ? { taxRateBps: String(preset.rateBps) } : {}) });
-              }}
-            >
-              <option value="">No tax preset</option>
-              {taxRates.map((rate) => (
-                <option key={rate.id} value={rate.id}>
-                  {rate.name} ({(rate.rateBps / 100).toFixed(2)}%)
-                </option>
-              ))}
-            </NativeSelect>
-            <div className="mt-2 flex items-center gap-2">
-              <Label htmlFor="product-tax-bps" className="text-xs text-slate-500">
-                Custom rate (basis points)
-              </Label>
-              <Input
-                id="product-tax-bps"
-                className="h-8 w-24"
-                inputMode="numeric"
-                value={taxRateBps}
-                onChange={(event) => onPatch({ taxRateBps: event.target.value })}
-              />
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              Manage presets in <Link href="/admin/catalog/tax-rates" className="text-brand-700 underline">Tax rates</Link>. Tax is recorded
-              separately from discounts, inventory cost and profit.
-            </p>
-          </FieldWithTip>
-
-          <FieldWithTip
-            id="product-packaging-template"
-            label="Packaging cost template"
-            tooltip="Reusable packaging cost per unit. Used for profitability reporting only — it is never added to what the shopper pays."
-          >
-            <NativeSelect
-              id="product-packaging-template"
-              value={packagingTemplateId ?? ""}
-              onChange={(event) => {
-                const nextId = event.target.value || null;
-                const preset = packagingTemplates.find((template) => template.id === nextId);
-                onPatch({ packagingCostTemplateId: nextId, ...(preset ? { packagingCostPaisa: (preset.costPaisa / 100).toFixed(2) } : {}) });
-              }}
-            >
-              <option value="">No template</option>
-              {packagingTemplates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name} — {formatPaisa(template.costPaisa)}
-                </option>
-              ))}
-            </NativeSelect>
-            <div className="mt-2 flex items-center gap-2">
-              <Label htmlFor="product-packaging-cost" className="text-xs text-slate-500">
-                Custom cost (BDT)
-              </Label>
-              <Input
-                id="product-packaging-cost"
-                className="h-8 w-24"
-                inputMode="decimal"
-                value={packagingCostPaisa}
-                onChange={(event) => onPatch({ packagingCostPaisa: event.target.value })}
-              />
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              Manage presets in{" "}
-              <Link href="/admin/catalog/packaging-costs" className="text-brand-700 underline">
-                Packaging costs
-              </Link>
-              .
-            </p>
-          </FieldWithTip>
-
-          {canViewCost ? (
-            <div className="space-y-2 text-xs text-slate-500">
-              <p className="font-medium text-slate-700">How these are used</p>
-              <p>Packaging cost is added to the cost side of an order line when profit is reported.</p>
-              <p>Tax is stored on the product and kept on the order line; it is never treated as a discount or as stock cost.</p>
-            </div>
-          ) : null}
-        </div>
-
         <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
           <div className="flex flex-wrap gap-4">
             <label className="flex items-start gap-2 text-sm text-slate-700">
@@ -956,8 +999,8 @@ export function ProductSettingsSection({
               <span>
                 Allow preorders on this product
                 <span className="block text-xs text-slate-500">
-                  Orders are only split into a preorder when the requested quantity exceeds available stock (or stock is zero). A variant
-                  can override this.
+                  Preorder is a product setting: when it is on, any variant of this product can be pre-ordered. Orders are only split into
+                  a preorder when the requested quantity exceeds available stock (or stock is zero).
                 </span>
               </span>
             </label>
@@ -1112,24 +1155,20 @@ export function AttributesAndValues({
   attributes,
   selectedAttributeIds,
   selectedValueIds,
-  attributeValueImages,
   attributesSummary,
   errors,
   onPatch,
   onAttributeCreated,
   onValueAdded,
-  onSetValueImage,
 }: {
   attributes: EditorAttribute[];
   selectedAttributeIds: string[];
   selectedValueIds: string[];
-  attributeValueImages: Record<string, string | null>;
   attributesSummary: string;
   errors: Record<string, string[]>;
   onPatch: (patch: Record<string, unknown>) => void;
   onAttributeCreated: (attribute: EditorAttribute) => void;
   onValueAdded: (attributeId: string, value: { id: string; value: string; colorHex: string | null; mediaId: string | null }) => void;
-  onSetValueImage: (attributeValueId: string, mediaId: string | null) => void;
 }) {
   const [dialog, setDialog] = React.useState(false);
   const selected = attributes.filter((attribute) => selectedAttributeIds.includes(attribute.id));
@@ -1196,7 +1235,6 @@ export function AttributesAndValues({
               <div className="mt-3 flex flex-wrap gap-2">
                 {attribute.values.map((value) => {
                   const checked = selectedValueIds.includes(value.id);
-                  const imageId = attributeValueImages[value.id] ?? value.mediaId ?? null;
                   return (
                     <div
                       key={value.id}
@@ -1222,37 +1260,6 @@ export function AttributesAndValues({
                         ) : null}
                         {value.value}
                       </label>
-
-                      <MediaPicker
-                        title={`Default image for ${attribute.name}: ${value.value}`}
-                        mimeGroup="image"
-                        onSelect={(asset) => onSetValueImage(value.id, asset.id)}
-                        trigger={
-                          <button
-                            type="button"
-                            className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full border border-slate-300 bg-white"
-                            aria-label={imageId ? `Change the default image for ${value.value}` : `Set a default image for ${value.value}`}
-                            title={imageId ? "Change the attribute default image" : "Set an attribute default image"}
-                          >
-                            {imageId ? (
-                              <AttributeValueThumb mediaId={imageId} />
-                            ) : (
-                              <Plus className="h-3 w-3 text-slate-400" aria-hidden="true" />
-                            )}
-                          </button>
-                        }
-                      />
-
-                      {imageId ? (
-                        <button
-                          type="button"
-                          className="text-[10px] text-slate-500 underline"
-                          onClick={() => onSetValueImage(value.id, null)}
-                          title="Remove the default image for this value"
-                        >
-                          clear
-                        </button>
-                      ) : null}
                     </div>
                   );
                 })}
@@ -1263,8 +1270,7 @@ export function AttributesAndValues({
         </div>
 
         <p className="text-xs text-slate-500">
-          {attributesSummary} Attribute default images are shared: the same asset can be the default of several values and a product image at
-          the same time.
+          {attributesSummary} Images are assigned on the variant after it exists — not while picking values.
         </p>
         {errors.selectedValueIds ? <p className="text-xs text-red-600">{errors.selectedValueIds[0]}</p> : null}
 
@@ -1279,4 +1285,3 @@ export function AttributesAndValues({
     </div>
   );
 }
-

@@ -53,7 +53,7 @@ export function Pagination({
         <span className="font-medium text-slate-700">{Math.min(page * pageSize, total)}</span> of{" "}
         <span className="font-medium text-slate-700">{total}</span>
       </p>
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         {page > 1 ? (
           <Link href={buildHref(page - 1)} className={buttonVariants({ variant: "outline", size: "sm" })}>
             Previous
@@ -81,6 +81,33 @@ export function Pagination({
         ) : (
           <span className={cn(buttonVariants({ variant: "outline", size: "sm" }), "pointer-events-none opacity-50")}>Next</span>
         )}
+        {totalPages > 1 ? (
+          <form action={basePath} method="get" className="ml-2 flex items-center gap-1">
+            {Object.entries(searchParams).flatMap(([key, value]) => {
+              if (key === "page" || value === undefined) return [];
+              const values = Array.isArray(value) ? value : [value];
+              return values.map((entry, index) => (
+                <input key={`${key}-${index}`} type="hidden" name={key} value={entry} />
+              ));
+            })}
+            <label htmlFor="jump-to-page" className="sr-only">
+              Go to page
+            </label>
+            <input
+              id="jump-to-page"
+              type="number"
+              name="page"
+              min={1}
+              max={totalPages}
+              defaultValue={page}
+              className="h-8 w-16 rounded-md border border-slate-300 bg-white px-2 text-center text-xs tabular-nums"
+            />
+            <button type="submit" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              Go
+            </button>
+            <span className="text-[11px] text-slate-500">of {totalPages}</span>
+          </form>
+        ) : null}
       </div>
     </nav>
   );

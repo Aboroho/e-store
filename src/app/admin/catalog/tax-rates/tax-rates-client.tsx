@@ -49,6 +49,7 @@ export function TaxRatesManager({
   const [items, setItems] = React.useState<TaxRateItem[]>(initialItems);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editItem, setEditItem] = React.useState<TaxRateItem | null>(null);
+  const [deleteItem, setDeleteItem] = React.useState<TaxRateItem | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -128,16 +129,18 @@ export function TaxRatesManager({
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this tax rate preset?")) return;
+  const handleDelete = async () => {
+    if (!deleteItem) return;
     setLoading(true);
-    const res = await deleteTaxRateAction(id);
+    setError(null);
+    const res = await deleteTaxRateAction(deleteItem.id);
     setLoading(false);
     if (res.ok) {
-      setItems((prev) => prev.filter((i) => i.id !== id));
+      setItems((prev) => prev.filter((i) => i.id !== deleteItem.id));
+      setDeleteItem(null);
       router.refresh();
     } else {
-      alert(res.message);
+      setError(res.message);
     }
   };
 
@@ -212,6 +215,25 @@ export function TaxRatesManager({
           </Dialog>
         ) : null}
       </div>
+
+      {deleteItem ? (
+        <Dialog open={Boolean(deleteItem)} onOpenChange={(open) => { if (!open) setDeleteItem(null); }}>
+          <DialogContent title="Delete this tax rate?" description="Products keep the rate already copied onto them. The preset is removed from the list." className="max-w-md">
+            {error ? <p className="mb-3 text-sm text-rose-600 bg-rose-50 p-2 rounded">{error}</p> : null}
+            <p className="text-sm text-slate-600">
+              Delete <span className="font-medium text-slate-900">{deleteItem.name}</span>?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setDeleteItem(null)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" disabled={loading} onClick={handleDelete}>
+                {loading ? "Deleting…" : "Delete tax rate"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       {editItem && (
         <Dialog open={Boolean(editItem)} onOpenChange={(o) => { if (!o) { setEditItem(null); resetForm(); } }}>
@@ -335,7 +357,7 @@ export function TaxRatesManager({
                           size="sm"
                           variant="ghost"
                           className="text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                          onClick={() => handleDelete(rate.id)}
+                          onClick={() => { setError(null); setDeleteItem(rate); }}
                           title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

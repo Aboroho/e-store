@@ -54,7 +54,6 @@ export interface VariantPricingRow {
   costPaisa: number | null;
   optionKey: string;
   name: string;
-  sku: string | null;
 }
 
 const VARIANT_PRICING_SELECT = {
@@ -72,7 +71,6 @@ const VARIANT_PRICING_SELECT = {
   costPaisa: true,
   optionKey: true,
   name: true,
-  sku: true,
   attributeValues: {
     orderBy: { attribute: { position: "asc" } },
     select: {

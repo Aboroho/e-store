@@ -360,7 +360,7 @@ export default async function ResellerDetailPage({ params }: { params: Promise<{
               resellerId={reseller.id}
               variants={variants.map((variant) => ({
                 id: variant.id,
-                label: `${variant.sku} · ${variant.productName} — ${variant.name}`,
+                label: `${variant.sku || variant.name} · ${variant.productName} — ${variant.name}`,
                 pricePaisa: variant.pricePaisa,
               }))}
             />

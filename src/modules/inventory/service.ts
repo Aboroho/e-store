@@ -328,7 +328,7 @@ export async function recordStockAdjustment(input: StockAdjustmentInput): Promis
   return withTransaction(async (tx) => {
     const variant = await tx.variant.findFirst({
       where: { id: input.variantId, product: { businessId: input.businessId, deletedAt: null } },
-      select: { id: true, sku: true, product: { select: { name: true } } },
+      select: { id: true, name: true, product: { select: { name: true, sku: true } } },
     });
     if (!variant) throw AppError.notFound("Variant not found");
 
@@ -386,7 +386,7 @@ export async function recordStockAdjustment(input: StockAdjustmentInput): Promis
         action: "inventory.adjusted",
         entityType: "Variant",
         entityId: input.variantId,
-        summary: `${input.direction === "INCREASE" ? "Increased" : "Decreased"} ${input.condition.toLowerCase()} stock of ${variant.sku} by ${input.quantity} (${reason.label})`,
+        summary: `${input.direction === "INCREASE" ? "Increased" : "Decreased"} ${input.condition.toLowerCase()} stock of ${variant.product?.sku ?? variant.name} by ${input.quantity} (${reason.label})`,
         before: { available: result.reused ? null : result.balance.available + signedQuantity * -1 },
         after: {
           available: result.balance.available,
