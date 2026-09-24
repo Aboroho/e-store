@@ -165,6 +165,8 @@ model Business {
   idempotencyRecords   IdempotencyRecord[]
   paymentReconciliations PaymentReconciliation[]
   checkoutFields       CheckoutFieldConfig[]
+  orderColumnPreferences OrderListColumnPreference[]
+  orderDeletionRecords OrderDeletionRecord[]
   inventoryMovements   InventoryMovement[]
   stockAdjustments     StockAdjustment[]
   codCollections       CodCollection[]
@@ -232,6 +234,8 @@ model User {
   passwordResets      PasswordResetToken[]
   resellerProfile     Reseller?
   securityEvents      SecurityEvent[]
+  orderColumnPreferences OrderListColumnPreference[]
+  orderDeletions      OrderDeletionRecord[] @relation("OrderDeletionActor")
 
   @@index([businessId, status])
   @@index([businessId, deletedAt])

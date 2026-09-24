@@ -198,6 +198,13 @@ without a cookie returned `307` to the login page.
 4. Prefer concurrent `Promise.all` assertions for anything that must survive races.
 5. If a test exposes a real bug, fix the service and keep the test.
 
+## 10. Manual Order Management & Status Transition Test Suite
+
+The manual order management system is thoroughly validated through unit and integration suites:
+- `tests/lib/order-status.test.ts`: Status groups, forward/backward transition rules, group permission enforcement, reason requirements, administrative override behavior, and edit permission boundaries (34 tests).
+- `tests/lib/order-totals.test.ts`: BDT integer-paisa math, line item discounts, proportional order discount allocations with largest-remainder distribution, discount caps, delivery fee overrides, and in-store fee exemptions (7 tests).
+- `tests/integration/manual-orders.test.ts`: End-to-end database workflows including manual order creation across types (`ONLINE_DELIVERY`, `PREORDER`, `IN_STORE`), server price snapshots, stock reservation vs preorder commitments, pre-courier transitions, cancellation stock release, bulk status updates, bulk courier dispatch eligibility & duplicate prevention, pre-courier editing, creator scope isolation, normalized phone saved-address lookups, permanent deletion log capturing (`OrderDeletionRecord`), checkout field configuration, and user column preferences (16 tests).
+
 ## 9. Not covered yet (deliberate)
 
 - Browser/E2E automation (Playwright). The stage smoke passes are scripted HTTP checks with a

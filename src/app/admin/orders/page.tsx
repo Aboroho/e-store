@@ -1,53 +1,30 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Suspense } from "react";
 import { requireSession } from "@/lib/auth/session";
-import { assertPermission } from "@/lib/permissions";
-import { parseListQuery } from "@/lib/validation";
-import { formatPaisa } from "@/lib/money";
-import { formatDateTime } from "@/lib/utils";
-import { listOrders, orderStats } from "@/modules/orders/queries";
+import { assertPermission, can } from "@/lib/permissions";
+import { prisma } from "@/lib/db/client";
+import { manualOrderContext } from "@/modules/orders/manual";
 import {
-  Badge,
-  Card,
-  CardContent,
-  EmptyState,
-  PageHeader,
-  StatCard,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  buttonVariants,
-} from "@/components/ui/primitives";
-import { FilterSelect, SearchForm } from "@/components/ui/interactive";
-import { Pagination } from "@/components/ui/pagination";
+  orderCreatorOptions,
+  orderCreatorRoleOptions,
+  orderListSummary,
+  searchOrders,
+  type OrderListFilters,
+} from "@/modules/orders/lookup";
+import { resolveOrderColumns } from "@/modules/orders/columns";
+import { courierProviders } from "@/modules/orders/queries";
+import { OrderList } from "@/components/orders/order-list";
+import { PageHeader } from "@/components/ui/primitives";
 
 export const metadata: Metadata = { title: "Orders" };
 export const dynamic = "force-dynamic";
 
-type BadgeVariant = "neutral" | "brand" | "success" | "warning" | "danger" | "info" | "violet";
-
-const STATUS_TONES: Record<string, BadgeVariant> = {
-  PENDING: "warning",
-  CONFIRMED: "brand",
-  PROCESSING: "brand",
-  READY_TO_SHIP: "violet",
-  SHIPPED: "violet",
-  DELIVERED: "success",
-  COMPLETED: "success",
-  CANCELLED: "danger",
-};
-
-const PAYMENT_TONES: Record<string, BadgeVariant> = {
-  PAID: "success",
-  PARTIALLY_PAID: "warning",
-  PARTIALLY_REFUNDED: "warning",
-  REFUNDED: "neutral",
-  UNPAID: "neutral",
-};
+/** Parse a `YYYY-MM-DD` filter into a Date at the start (or end) of that day. */
+function dayBoundary(value: string | undefined, end: boolean): Date | undefined {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  const date = new Date(`${value}T${end ? "23:59:59.999" : "00:00:00.000"}`);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
 
 export default async function OrdersPage({
   searchParams,
@@ -58,153 +35,76 @@ export default async function OrdersPage({
   assertPermission(session, "order.view");
   const params = await searchParams;
 
-  const query = parseListQuery(params, {
-    defaultSortBy: "placedAt",
-    defaultSortDir: "desc",
-    allowedSortBy: ["placedAt", "grandTotalPaisa", "orderNumber", "duePaisa"],
-  });
-  const filterValue = (key: string): string | undefined => {
-    const value = params[key];
-    return Array.isArray(value) ? value[0] : value;
+  const value = (key: string): string | undefined => {
+    const entry = params[key];
+    return Array.isArray(entry) ? entry[0] : entry;
   };
 
-  const [stats, result] = await Promise.all([
-    orderStats(session.businessId),
-    listOrders(session.businessId, {
-      search: query.search,
-      status: filterValue("status"),
-      paymentStatus: filterValue("paymentStatus"),
-      channel: filterValue("channel"),
-      storefrontId: filterValue("storefrontId"),
-      customerId: filterValue("customerId"),
-      page: query.page,
-      pageSize: query.pageSize,
-      sortBy: query.sortBy,
-      sortDir: query.sortDir,
-    }),
+  const context = await manualOrderContext(session);
+  const page = Math.max(1, Number.parseInt(value("page") ?? "1", 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number.parseInt(value("pageSize") ?? "25", 10) || 25));
+
+  const filters: OrderListFilters = {
+    search: value("q"),
+    status: value("status"),
+    orderType: value("orderType"),
+    paymentStatus: value("paymentStatus"),
+    channel: value("channel"),
+    districtCode: value("districtCode"),
+    createdByUserRole: value("createdByUserRole"),
+    creator: value("createdByUserId") === "mine" ? "mine" : undefined,
+    createdByUserId: value("createdByUserId") === "mine" ? undefined : value("createdByUserId"),
+    resellerId: value("resellerId"),
+    from: dayBoundary(value("from"), false),
+    to: dayBoundary(value("to"), true),
+    page,
+    pageSize,
+    sortBy: value("sortBy"),
+    sortDir: value("sortDir") === "asc" ? "asc" : "desc",
+  };
+
+  const [result, summary, columnConfig, creators, creatorRoles, districts, providers] = await Promise.all([
+    searchOrders(context, filters),
+    orderListSummary(context, { ...filters, page: undefined, pageSize: undefined }),
+    resolveOrderColumns(context),
+    orderCreatorOptions(context),
+    orderCreatorRoleOptions(context),
+    prisma.district.findMany({ orderBy: { name: "asc" }, select: { code: true, name: true } }),
+    courierProviders(session.businessId, true),
   ]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         title="Orders"
-        description="Every channel — storefront, in-store, admin and reseller — lands here with the same lifecycle, stock reservation and payment rules."
-        actions={
-          <Link href="/admin/orders/new" className={buttonVariants({ variant: "default" })}>
-            <Plus className="mr-2 h-4 w-4" /> New order
-          </Link>
+        description={
+          can(session, "order.view_all")
+            ? "Every order in the business, scoped by the filters below. Status changes, dispatch and deletion are re-checked on the server for each order."
+            : "Orders you created. Status changes and edits are limited to what your role may do, and the server re-checks every request."
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Open orders" value={String(stats.open)} hint={`${stats.awaitingDispatch} awaiting dispatch`} tone="brand" />
-        <StatCard label="Placed today" value={String(stats.today)} tone="violet" />
-        <StatCard label="Outstanding due" value={formatPaisa(stats.unpaidDuePaisa)} tone={stats.unpaidDuePaisa > 0 ? "warning" : "success"} />
-        <StatCard label="Preorder orders" value={String(stats.preorderOrders)} hint={`${stats.refundQueue} refund(s) queued`} tone={stats.refundQueue > 0 ? "warning" : "slate"} />
-      </div>
-
-      <Card>
-        <CardContent className="space-y-4 pt-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <SearchForm placeholder="Order number, name, phone or reference" defaultValue={query.search ?? ""} />
-            <FilterSelect
-              name="status"
-              value={typeof params.status === "string" ? params.status : "ALL"}
-              options={[
-                { value: "ALL", label: "All statuses" },
-                ...["PENDING", "CONFIRMED", "PROCESSING", "READY_TO_SHIP", "SHIPPED", "DELIVERED", "COMPLETED", "CANCELLED"].map((status) => ({
-                  value: status,
-                  label: status.replace(/_/g, " ").toLowerCase(),
-                })),
-              ]}
-            />
-            <FilterSelect
-              name="paymentStatus"
-              value={typeof params.paymentStatus === "string" ? params.paymentStatus : "ALL"}
-              options={[
-                { value: "ALL", label: "Any payment" },
-                ...["UNPAID", "PARTIALLY_PAID", "PAID", "PARTIALLY_REFUNDED", "REFUNDED"].map((status) => ({
-                  value: status,
-                  label: status.replace(/_/g, " ").toLowerCase(),
-                })),
-              ]}
-            />
-            <FilterSelect
-              name="channel"
-              value={typeof params.channel === "string" ? params.channel : "ALL"}
-              options={[
-                { value: "ALL", label: "All channels" },
-                { value: "STOREFRONT", label: "Storefront" },
-                { value: "ADMIN", label: "Admin" },
-                { value: "IN_STORE", label: "In-store" },
-                { value: "RESELLER", label: "Reseller" },
-                { value: "API", label: "API" },
-              ]}
-            />
-          </div>
-
-          {result.rows.length === 0 ? (
-            <EmptyState
-              title="No orders match these filters"
-              description="Create an order from the admin screen, or place one through a storefront to see the lifecycle in action."
-            />
-          ) : (
-            <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Order</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Channel</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Payment</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead className="text-right">Due</TableHead>
-                    <TableHead>Placed</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {result.rows.map((order) => {
-                    const units = order.items.reduce((total, item) => total + item.quantity, 0);
-                    const hasPreorder = order.items.some((item) => item.isPreorder);
-                    const shipment = order.shipments[0];
-                    return (
-                      <TableRow key={order.id}>
-                        <TableCell>
-                          <Link href={`/admin/orders/${order.id}`} className="font-medium text-indigo-600 hover:underline">
-                            {order.orderNumber}
-                          </Link>
-                          <div className="text-xs text-slate-500">
-                            {units} unit(s){hasPreorder ? " · preorder" : ""}
-                            {shipment?.trackingCode ? ` · ${shipment.trackingCode}` : ""}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="text-sm text-slate-900">{order.customerName ?? "—"}</div>
-                          <div className="text-xs text-slate-500">{order.customerPhoneNormalized ?? ""}</div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="neutral">{order.channel.replace(/_/g, " ").toLowerCase()}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={STATUS_TONES[order.status] ?? "neutral"}>{order.status.replace(/_/g, " ").toLowerCase()}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={PAYMENT_TONES[order.paymentStatus] ?? "neutral"}>{order.paymentStatus.replace(/_/g, " ").toLowerCase()}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{formatPaisa(order.grandTotalPaisa)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{order.duePaisa > 0 ? formatPaisa(order.duePaisa) : "—"}</TableCell>
-                        <TableCell className="text-xs text-slate-500">{formatDateTime(order.placedAt)}</TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-              <Pagination page={result.page} pageSize={result.pageSize} total={result.total} basePath="/admin/orders" searchParams={params} />
-            </>
-          )}
-        </CardContent>
-      </Card>
+      {/* `useSearchParams` in the list needs a suspense boundary. */}
+      <Suspense fallback={<p className="text-sm text-slate-500">Loading orders…</p>}>
+      <OrderList
+        orders={result.orders}
+        total={result.total}
+        page={result.page}
+        pageSize={result.pageSize}
+        columns={columnConfig.definitions}
+        availableColumns={columnConfig.available}
+        columnSource={columnConfig.source}
+        mayManageColumns={columnConfig.mayManage}
+        mayViewCosts={can(session, "order.view_cost")}
+        mayBulkStatus={can(session, "order.update")}
+        mayDispatch={can(session, "order.dispatch")}
+        providers={providers.map((provider) => ({ id: provider.id, name: provider.name }))}
+        districts={districts}
+        creators={creators}
+        creatorRoles={creatorRoles}
+        summary={summary}
+      />
+      </Suspense>
     </div>
   );
 }

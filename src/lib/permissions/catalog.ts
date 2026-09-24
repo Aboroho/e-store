@@ -49,6 +49,13 @@ export const PERMISSIONS: PermissionDefinition[] = [
 
   // Orders
   { key: "order.view", group: "Orders", label: "View orders" },
+  {
+    key: "order.view_all",
+    group: "Orders",
+    label: "View every order in the business",
+    description:
+      "Without this permission a user only sees the orders they created and, for reseller accounts, the orders of their own reseller profile.",
+  },
   { key: "order.create", group: "Orders", label: "Create orders" },
   { key: "order.update", group: "Orders", label: "Edit orders" },
   { key: "order.cancel", group: "Orders", label: "Cancel orders", isDangerous: true },
@@ -56,6 +63,45 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { key: "order.dispatch", group: "Orders", label: "Dispatch orders" },
   { key: "order.deliver", group: "Orders", label: "Mark orders delivered" },
   { key: "order.view_cost", group: "Orders", label: "View order cost and profit", isDangerous: true },
+
+  // Order status groups. A user may change an order's status only when they hold
+  // the permission for the group the order is in *and* the group it moves to.
+  // See docs/BUSINESS_RULES.md → "Order status model and status groups".
+  {
+    key: "order.status.pre_courier",
+    group: "Orders",
+    label: "Manage pre-courier statuses",
+    description: "Move orders between processing, confirmed, on hold and canceled, forwards and backwards, before the parcel is handed to a courier.",
+  },
+  {
+    key: "order.status.courier",
+    group: "Orders",
+    label: "Manage courier-stage status",
+    description: "Move orders that are in courier (handed over to the courier) between courier-stage statuses.",
+  },
+  {
+    key: "order.status.post_courier",
+    group: "Orders",
+    label: "Manage post-courier outcomes",
+    description: "Record delivered, partially delivered, returned and completed outcomes.",
+  },
+  {
+    key: "order.status.override",
+    group: "Orders",
+    label: "Administrative status override",
+    description: "Move an order from any status to any other status, including backward and cross-group moves. Always requires an explicit confirmation and is recorded in the audit trail.",
+    isDangerous: true,
+  },
+  {
+    key: "order.edit_post_courier",
+    group: "Orders",
+    label: "Edit orders after courier handover",
+    description: "Change customer, address, items or adjustments on an order that already entered the courier stage. Requires an explicit confirmation and may need the shipment to be reconciled.",
+    isDangerous: true,
+  },
+  { key: "order.delete", group: "Orders", label: "Permanently delete cancelled orders", isDangerous: true },
+  { key: "order.columns.manage", group: "Orders", label: "Manage default order list columns", description: "Set the business-wide default columns of the order list. Users may still personalise their own view." },
+  { key: "checkout_fields.manage", group: "Orders", label: "Manage checkout fields", description: "Configure which customer-facing checkout fields are enabled and required." },
 
   // Customers
   { key: "customer.view", group: "Customers", label: "View customers" },
@@ -173,10 +219,15 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
       "product.view",
       "inventory.view",
       "order.view",
+      "order.view_all",
       "order.create",
       "order.update",
       "order.dispatch",
       "order.deliver",
+      "order.status.pre_courier",
+      "order.status.courier",
+      "order.status.post_courier",
+      "order.delete",
       "customer.view",
       "courier.view",
       "courier.manage",
@@ -194,8 +245,12 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
       "dashboard.view",
       "product.view",
       "order.view",
+      "order.view_all",
       "order.update",
       "order.cancel",
+      "order.status.pre_courier",
+      "order.status.post_courier",
+      "order.delete",
       "customer.view",
       "customer.update",
       "customer.view_pii",
@@ -214,6 +269,7 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
     permissions: [
       "dashboard.view",
       "order.view",
+      "order.view_all",
       "order.view_cost",
       "payment.view",
       "payment.record",
@@ -236,13 +292,16 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
   {
     slug: "reseller",
     name: "Reseller",
-    description: "Reseller portal access. Staff accounts should not use this role.",
+    description:
+      "Reseller portal access. Resellers manage their own orders only, and only while those orders are in the pre-courier group.",
     permissions: [
       "dashboard.view",
       "product.view",
       "inventory.view",
       "order.view",
       "order.create",
+      "order.update",
+      "order.status.pre_courier",
       "reseller.ledger_view",
       "notification.view",
     ],
@@ -256,6 +315,7 @@ export const NAV_PERMISSIONS: Record<string, string> = {
   inventory: "inventory.view",
   purchasing: "purchase.view",
   orders: "order.view",
+  orders_checkout_fields: "checkout_fields.manage",
   customers: "customer.view",
   payments: "payment.view",
   couriers: "courier.view",

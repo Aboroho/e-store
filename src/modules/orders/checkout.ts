@@ -180,6 +180,7 @@ export async function placeStorefrontOrder(input: CheckoutInput, meta: { actorLa
 
   const orderInput: CreateOrderInput = {
     channel: "STOREFRONT",
+    orderType: "ONLINE_DELIVERY",
     storefrontId: storefront.id,
     customerName: input.customerName,
     customerPhone: input.customerPhone,

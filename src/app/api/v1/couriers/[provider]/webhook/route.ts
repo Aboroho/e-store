@@ -57,7 +57,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pr
     const secrets = await getIntegrationSecrets({ courierProviderId: providerRow.id });
     const signature = parseSignatureHeader(request.headers.get(adapter.webhookSignatureHeader));
     const secret = secrets.webhook_secret;
-    const signatureValid = Boolean(secret && signature && verifyPayloadSignature(rawBody, secret, signature));
+    // Providers authenticate differently: most sign the body, Steadfast sends the
+    // token configured in its portal as `Authorization: Bearer <token>`.
+    const signatureValid = adapter.verifyWebhook
+      ? adapter.verifyWebhook({
+          rawBody,
+          headers: Object.fromEntries(request.headers.entries()),
+          secret: secret ?? "",
+        })
+      : Boolean(secret && signature && verifyPayloadSignature(rawBody, secret, signature));
 
     if (!secret) {
       logger.warn("courier.webhook_no_secret", { providerCode, providerId: providerRow.id });

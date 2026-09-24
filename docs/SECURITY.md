@@ -136,6 +136,14 @@ production policy does not include it.
 - 2FA is not implemented; protect the admin with a long password, TLS and an IP allowlist
   at the proxy if the deployment allows it.
 
+## Manual Order Security & Isolation
+
+- **Role-Based Scope Isolation**: Resellers and staff without `order.view_all` can only query and manage their own orders via `orderScopeWhere` query boundaries. Business costs and margins (`order.view_cost`) are strictly concealed from resellers.
+- **Unit Price Integrity**: Manual modification of product unit prices is blocked at both schema and service layers. Unit prices are strictly loaded from active price lists.
+- **Status Override Auditing**: Administrative status overrides and backward transitions require explicit confirmation flags and written reasons, generating comprehensive audit log entries.
+- **Financial Record Protection**: Permanent order deletion is strictly blocked if any payments, refunds, COD collections, courier charges, or reseller earnings are attached.
+- **Courier Webhook Verification**: Inbound Steadfast webhooks enforce Bearer token verification using constant-time comparisons.
+
 ## Verification
 
 Run these after each deployment:

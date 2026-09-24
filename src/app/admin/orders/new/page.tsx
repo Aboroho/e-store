@@ -4,55 +4,73 @@ import { ArrowLeft } from "lucide-react";
 import { requireSession } from "@/lib/auth/session";
 import { assertPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db/client";
-import { searchVariants } from "@/modules/inventory/queries";
-import { courierProviders } from "@/modules/orders/queries";
-import { OrderForm } from "@/components/forms/order-forms";
-import { buttonVariants } from "@/components/ui/primitives";
+import { getBusinessSettings } from "@/lib/settings";
+import { getCheckoutFields } from "@/modules/orders/checkout-fields";
+import { manualOrderContext, resolveSalesContext } from "@/modules/orders/manual";
+import { ManualOrderForm, type CheckoutFieldView } from "@/components/orders/manual-order-form";
+import { PageHeader, buttonVariants } from "@/components/ui/primitives";
 
-export const metadata: Metadata = { title: "New order" };
+export const metadata: Metadata = { title: "Create order" };
 export const dynamic = "force-dynamic";
 
+/**
+ * Manual order creation.
+ *
+ * The page only gathers what the form needs to *display* — districts, storefronts,
+ * the checkout field configuration and the creator's sales context. Every price,
+ * total and the initial status are resolved by the server when the form previews
+ * and submits.
+ */
 export default async function NewOrderPage() {
   const session = await requireSession();
   assertPermission(session, "order.create");
 
-  const [variants, districts, storefronts, providers] = await Promise.all([
-    searchVariants(session.businessId, undefined, 200),
+  const context = await manualOrderContext(session);
+  const sales = await resolveSalesContext(context);
+
+  const [districts, storefronts, checkoutFields, settings] = await Promise.all([
     prisma.district.findMany({ orderBy: { name: "asc" }, select: { code: true, name: true } }),
-    prisma.storefront.findMany({ where: { businessId: session.businessId }, select: { id: true, name: true } }),
-    courierProviders(session.businessId),
+    prisma.storefront.findMany({
+      where: { businessId: session.businessId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+    getCheckoutFields(session.businessId),
+    getBusinessSettings(session.businessId),
   ]);
 
+  const fields: CheckoutFieldView[] = checkoutFields.map((field) => ({
+    key: field.key,
+    label: field.customLabel ?? field.label,
+    helpText: field.customHelpText ?? field.helpText,
+    isEnabled: field.isEnabled,
+    isRequired: field.isRequired,
+    appliesTo: [...field.appliesTo],
+  }));
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <Link href="/admin/orders" className={buttonVariants({ variant: "ghost", size: "sm" })}>
-          <ArrowLeft className="mr-2 h-4 w-4" /> Back to orders
+          <ArrowLeft className="mr-2 h-4 w-4" /> Order list
         </Link>
       </div>
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold text-slate-900">Create order</h1>
-        <p className="text-sm text-slate-600">
-          Staff-created orders go through exactly the same pricing, reservation and preorder logic as storefront orders —
-          nothing is trusted from the form except the chosen variant, quantity and channel.
-        </p>
-        <p className="text-xs text-slate-500">{providers.length} courier provider(s) configured for dispatch.</p>
-      </div>
-      <OrderForm
-        variants={variants.map((variant) => {
-          const available = variant.inventory.reduce(
-            (total, balance) => total + (balance.onHand - balance.reserved - balance.damaged - balance.inspection),
-            0,
-          );
-          return {
-            id: variant.id,
-            sku: variant.product?.sku ?? "",
-            label: `${variant.product.name} · ${variant.name} (${variant.product?.sku || "no SKU"}) — ${available} available`,
-            pricePaisa: variant.priceOverridePaisa ?? null,
-          };
-        })}
+
+      <PageHeader
+        title="Create order"
+        description="Prices, delivery charges, stock and the starting status are resolved on the server — the form only sends what the operator chose."
+      />
+
+      <ManualOrderForm
+        mode="create"
         districts={districts}
         storefronts={storefronts}
+        checkoutFields={fields}
+        priceListName={sales.priceListName}
+        mayViewCosts={sales.mayViewCosts}
+        maxDiscountPercent={Number(settings["order.max_discount_percent"] ?? 100)}
+        defaultStorefrontId={storefronts[0]?.id ?? null}
+        allowInStore={sales.channel !== "RESELLER"}
       />
     </div>
   );

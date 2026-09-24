@@ -108,6 +108,9 @@ export async function destroyTestBusiness(businessId: string): Promise<void> {
   await prisma.courierProvider.deleteMany({ where: { businessId } });
   await prisma.exchangeRequest.deleteMany({ where: { businessId } });
   await prisma.exchangeReason.deleteMany({ where: { businessId } });
+  await prisma.orderDeletionRecord.deleteMany({ where: { businessId } });
+  await prisma.orderListColumnPreference.deleteMany({ where: { businessId } });
+  await prisma.checkoutFieldConfig.deleteMany({ where: { businessId } });
   await prisma.outboxEvent.deleteMany({ where: { businessId } });
   await prisma.orderAdjustment.deleteMany({ where: { order: { businessId } } });
   await prisma.orderStatusHistory.deleteMany({ where: { order: { businessId } } });

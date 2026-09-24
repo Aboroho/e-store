@@ -298,7 +298,7 @@ src/modules/
   inventory/   ledger engine, balances, adjustments, stock history
   purchasing/  suppliers, purchase orders, receipts, landed cost, payments
   preorders/   commitments, FIFO allocation, cancellation
-  orders/      order lifecycle, dispatch, delivery, cancellation           (Stage 3)
+  orders/      order lifecycle, manual orders, checkout fields, status model (Stage 3 & Manual Orders)
   payments/    payments, provider flows, refunds, COD collection           (Stage 3)
   couriers/    provider adapters, shipments, tracking, charges             (Stage 3)
   settlements/ statement import, matching, reconciliation                  (Stage 3)
@@ -328,3 +328,16 @@ server action ──► permission check ──► service (transaction) ──�
                                            └─ domain tables         → product/PO/commitment
 page (server component) ──► queries module ──► prisma client (read-only, business-scoped)
 ```
+
+## Manual Order Management Architecture
+
+The manual order management system is built on modular, decoupled subsystems under `src/modules/orders/` and `src/components/orders/`:
+
+- **Manual Order Creation & Editing (`manual.ts`)**: Server-authoritative price resolution from active price lists, server-side initial status assignment, phone validation & normalization, and transactional order creation reusing core `createOrder` services.
+- **Order Calculations & Totals (`totals.ts`)**: Pure BDT integer-paisa computation, line subtotal discounting, proportional allocation of order discounts via largest remainder, and delivery fee override calculations.
+- **Status & Transition Governance (`status.ts`)**: Three-tier status groups (`PRE_COURIER`, `COURIER`, `POST_COURIER`), transition decision evaluator, administrative override policy, and post-courier edit permission checks.
+- **Lifecycle & Operational Actions (`lifecycle.ts`)**: Single and bulk status changes, courier dispatch execution with idempotency, partial delivery recording, and safe permanent deletion for cancelled orders.
+- **Lookup & Search Queries (`lookup.ts`)**: Optimized order list queries with multi-faceted filtering, creator role aggregations, and debounced saved-address lookups.
+- **Checkout Fields Configuration (`checkout-fields.ts`)**: Customizable checkout field definitions, requirement rules, and storefront-level overrides.
+- **Column Customization (`columns.ts`)**: Multi-tiered column preference resolution (user preference > business setting > default).
+- **Navigation & UI Layout**: Collapsible `Orders` sidebar group (Create order, Order list, Checkout fields, Deleted orders, Shipments, Couriers & gateways) and streamlined `Sales` section.

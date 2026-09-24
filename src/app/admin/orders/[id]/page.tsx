@@ -7,6 +7,10 @@ import { assertPermission, can } from "@/lib/permissions";
 import { formatPaisa } from "@/lib/money";
 import { formatDateTime } from "@/lib/utils";
 import { getOrderDetail, courierProviders } from "@/modules/orders/queries";
+import { getOrderScreen } from "@/modules/orders/lookup";
+import { manualOrderContext } from "@/modules/orders/manual";
+import { ORDER_TYPE_LABELS, STATUS_TONES, type InternalOrderStatus, type OrderTypeValue } from "@/modules/orders/status";
+import { OrderStatusControls } from "@/components/orders/order-status-controls";
 import {
   Badge,
   Card,
@@ -24,11 +28,7 @@ import {
   buttonVariants,
 } from "@/components/ui/primitives";
 import {
-  CancelOrderForm,
   CourierChargeForm,
-  DispatchOrderForm,
-  MarkDeliveredForm,
-  OrderTransitionForm,
   RecordPaymentForm,
   RefundPaymentForm,
   ShipmentActions,
@@ -37,32 +37,6 @@ import {
 
 export const metadata: Metadata = { title: "Order" };
 export const dynamic = "force-dynamic";
-
-const TRANSITIONS: Record<string, Array<{ value: string; label: string }>> = {
-  PENDING: [
-    { value: "CONFIRMED", label: "Confirm" },
-    { value: "CANCELLED", label: "Cancel" },
-  ],
-  CONFIRMED: [
-    { value: "PROCESSING", label: "Start processing" },
-    { value: "CANCELLED", label: "Cancel" },
-  ],
-  PROCESSING: [
-    { value: "READY_TO_SHIP", label: "Ready to ship" },
-    { value: "CANCELLED", label: "Cancel" },
-  ],
-  READY_TO_SHIP: [
-    { value: "SHIPPED", label: "Shipped" },
-    { value: "CANCELLED", label: "Cancel" },
-  ],
-  SHIPPED: [
-    { value: "DELIVERED", label: "Delivered" },
-    { value: "CANCELLED", label: "Cancel" },
-  ],
-  DELIVERED: [
-    { value: "COMPLETED", label: "Complete" },
-  ],
-};
 
 const SHIPMENT_MANUAL_STATUSES = [
   { value: "CREATED", label: "Created" },
@@ -80,12 +54,17 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   assertPermission(session, "order.view");
   const { id } = await params;
 
+  // The scoped read runs first: an order the actor may not see is a 404, not a
+  // permission message that leaks its existence.
+  const context = await manualOrderContext(session);
+  const screen = await getOrderScreen(context, id).catch(() => null);
+  if (!screen) notFound();
+
   const detail = await getOrderDetail(session.businessId, id).catch(() => null);
   if (!detail) notFound();
 
   const { order, shipments } = detail;
   const providers = await courierProviders(session.businessId, true);
-  const canDispatch = ["CONFIRMED", "PROCESSING", "READY_TO_SHIP"].includes(order.status) && order.channel !== "IN_STORE";
   const preorderItems = order.items.flatMap((item) => (item.preorder ? [item.preorder] : []));
   const openPreorderUnits = preorderItems
     .filter((preorder) => ["OPEN", "PARTIALLY_ALLOCATED"].includes(preorder.status))
@@ -120,11 +99,13 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
         description={`${order.channel.replace(/_/g, " ").toLowerCase()} · placed ${formatDateTime(order.placedAt)}${order.customerPhoneNormalized ? ` · ${order.customerPhoneNormalized}` : ""}`}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Badge variant="info">{order.status.replace(/_/g, " ").toLowerCase()}</Badge>
+            <Badge variant={STATUS_TONES[order.status as InternalOrderStatus] ?? "neutral"}>{screen.statusLabel}</Badge>
+            <Badge variant="neutral">{ORDER_TYPE_LABELS[order.orderType as OrderTypeValue] ?? order.orderType}</Badge>
             <Badge variant={order.paymentStatus === "PAID" ? "success" : order.duePaisa > 0 ? "warning" : "neutral"}>
               {order.paymentStatus.replace(/_/g, " ").toLowerCase()}
             </Badge>
             <Badge variant="neutral">{order.fulfillmentStatus.replace(/_/g, " ").toLowerCase()}</Badge>
+            {order.createdByUserRole ? <Badge variant="info">Created by {order.createdByUserRole}</Badge> : null}
           </div>
         }
       />
@@ -178,6 +159,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                   ["Items subtotal", order.itemsSubtotalPaisa],
                   ["Discount", -order.discountTotalPaisa],
                   ["Delivery fee", order.deliveryFeePaisa],
+                  ["Delivery calculated", order.deliveryFeeCalculatedPaisa],
                   ["Extra charges", order.extraChargePaisa],
                   ["Packaging", order.packagingCostPaisa],
                   ["COD surcharge", order.codSurchargePaisa],
@@ -195,6 +177,19 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
               {can(session, "order.view_cost") ? (
                 <p className="mt-3 text-xs text-slate-500">
                   Inventory cost snapshot: {formatPaisa(order.inventoryCostPaisa)} · COD to collect: {formatPaisa(order.codCollectPaisa)}
+                </p>
+              ) : null}
+              {order.deliveryFeeOverriddenAt ? (
+                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                  The delivery charge was overridden to {formatPaisa(order.deliveryFeePaisa)} (calculated{" "}
+                  {formatPaisa(order.deliveryFeeCalculatedPaisa)}) on {formatDateTime(order.deliveryFeeOverriddenAt)}
+                  {order.deliveryFeeOverrideNote ? ` — ${order.deliveryFeeOverrideNote}` : ""}.
+                </p>
+              ) : null}
+              {order.discountType && order.discountValue ? (
+                <p className="mt-2 text-xs text-slate-500">
+                  Order discount: {order.discountType === "PERCENTAGE" ? `${order.discountValue / 100}%` : formatPaisa(order.discountValue)}
+                  {" "}applied — {formatPaisa(order.discountTotalPaisa)} in total across the lines.
                 </p>
               ) : null}
               {order.adjustments.length > 0 ? (
@@ -307,28 +302,71 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             </CardContent>
           </Card>
 
-          {can(session, "order.update") ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Status and fulfilment</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrderStatusControls
+                orderId={order.id}
+                orderNumber={order.orderNumber}
+                currentStatus={order.status}
+                statusLabel={screen.statusLabel}
+                courierStatus={screen.courierStatus}
+                statusGroup={screen.statusGroup}
+                transitions={screen.transitions.map((transition) => ({
+                  status: transition.target,
+                  label: transition.label,
+                  allowed: transition.allowed,
+                  requiresConfirmation: transition.requiresConfirmation,
+                  requiresReason: transition.requiresReason,
+                  deniedReason: transition.deniedReason ?? null,
+                  warning: transition.warning ?? null,
+                  effect: transition.effect,
+                }))}
+                dispatch={screen.dispatch}
+                providers={providers.map((provider) => ({ id: provider.id, name: provider.name }))}
+                mayDispatch={screen.mayDispatch}
+                deletable={screen.deletable}
+                deletionBlockers={screen.deletionBlockers}
+                mayDelete={screen.mayDelete}
+                partialDeliveryLines={order.items.map((item) => ({
+                  id: item.id,
+                  productName: item.productName,
+                  variantName: item.variantName,
+                  quantity: item.quantity,
+                  dispatchedQuantity: item.dispatchedQuantity,
+                  returnedQuantity: item.returnedQuantity,
+                  cancelledQuantity: item.cancelledQuantity,
+                  exchangedQuantity: item.exchangedQuantity,
+                }))}
+                mayRecordPartialDelivery={
+                  can(session, "order.status.post_courier") || can(session, "order.status.override")
+                }
+                mayEdit={screen.edit.allowed || screen.edit.requiresConfirmation}
+              />
+              {screen.edit.deniedReason && !screen.edit.allowed && !screen.edit.requiresConfirmation ? (
+                <p className="mt-3 text-xs text-slate-500">{screen.edit.deniedReason}</p>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          {screen.earnings.length > 0 ? (
             <Card>
               <CardHeader>
-                <CardTitle>Status</CardTitle>
+                <CardTitle>Reseller earnings</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <OrderTransitionForm orderId={order.id} allowed={TRANSITIONS[order.status] ?? []} />
-                {canDispatch && can(session, "order.dispatch") ? (
-                  <div className="border-t border-slate-200 pt-4">
-                    <DispatchOrderForm orderId={order.id} providers={providers} />
-                  </div>
-                ) : null}
-                {order.status === "READY_TO_SHIP" && can(session, "order.deliver") ? (
-                  <div className="border-t border-slate-200 pt-4">
-                    <MarkDeliveredForm orderId={order.id} />
-                  </div>
-                ) : null}
-                {can(session, "order.cancel") ? (
-                  <div className="border-t border-slate-200 pt-4">
-                    <CancelOrderForm orderId={order.id} />
-                  </div>
-                ) : null}
+              <CardContent className="space-y-1 text-xs text-slate-600">
+                {screen.earnings.map((earning) => (
+                  <p key={earning.id}>
+                    {earning.eligibilityStatus.replace(/_/g, " ").toLowerCase()} · collected {formatPaisa(earning.collectedPaisa)} ·
+                    cost {formatPaisa(earning.resellerCostPaisa)} · earning {formatPaisa(earning.earningsPaisa)} · settled{" "}
+                    {formatPaisa(earning.settledPaisa)}
+                  </p>
+                ))}
+                <p className="text-slate-500">
+                  Earnings stay pending until the courier COD settlement is reconciled; a returned order voids them.
+                </p>
               </CardContent>
             </Card>
           ) : null}

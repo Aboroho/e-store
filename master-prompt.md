@@ -1101,7 +1101,7 @@ Customers should be able to:
 Support orders from:
 
 * Public storefronts.
-* Admin or authorized staff.
+* Admin or authorized staff (manual order creation).
 * Resellers.
 * In-store sales.
 
@@ -1124,14 +1124,15 @@ Preserve historical snapshots for:
 
 All prices and totals must be recalculated and validated on the server.
 
-Never trust client-submitted totals.
+Never trust client-submitted totals or unit prices. Manual unit price overrides are strictly prohibited across UI and API.
 
 ## Order adjustments
 
 Support:
 
-* Discounts.
-* District-based delivery charges.
+* Item-level discounts (capped at line subtotal).
+* Order-level discounts (flat or percent basis points, capped by `order.max_discount_percent`, allocated proportionally via largest remainder without paisa loss).
+* District-based delivery charges with manual override tracking (records timestamp, user, and note while keeping original calculated fee).
 * Additional charges with a required note.
 * Configurable pricing behavior.
 
@@ -1142,29 +1143,27 @@ Record who created or modified an adjustment.
 An in-store order must:
 
 * Be created by authorized staff.
-* Immediately be marked delivered according to the documented workflow.
-* Not require courier shipment.
+* Immediately start in `COMPLETED` and be paid immediately according to the counter workflow.
+* Not require courier shipment or delivery charges (forced to 0).
 * Allow customer information to be optional.
 * Update inventory consistently.
 * Record payment status accurately.
 
 Do not send an in-store order through courier workflows unless explicitly requested.
 
-## Order status
+## Order status model & status groups
 
-Define a clear state machine.
+The system implements a three-tier status group model:
 
-Separate, where appropriate:
+1. **Pre-courier**: `PROCESSING`, `CONFIRMED`, `ON_HOLD`, `CANCELLED`, `READY_TO_SHIP`. Creators with `order.status.pre_courier` can transition forward and backward within this group. Written reasons are required for `CANCELLED` and `ON_HOLD`.
+2. **Courier**: `SHIPPED`. Orders enter courier solely through the dispatch workflow (`sendOrdersToCourier`), which consumes reserved stock and generates the shipment record.
+3. **Post-courier**: `DELIVERED`, `PARTIALLY_DELIVERED`, `RETURNED`, `COMPLETED`. Outcomes recorded with `order.status.post_courier`. Partial delivery requires itemized delivered/returned unit breakdown. Returns trigger stock inspection and void reseller earnings.
+4. **Administrative Override**: Users with `order.status.override` can execute any-to-any transitions with mandatory warning confirmation dialog, written reason, and audit logging. Reopening cancelled orders with settled finance is blocked.
 
-* Order lifecycle.
-* Payment lifecycle.
-* Fulfillment lifecycle.
-* Courier lifecycle.
-* Exchange lifecycle.
+## Cancellation & Permanent Deletion Policy
 
-Document permitted transitions and who may perform them.
-
-Do not let arbitrary status changes bypass stock or payment logic.
+* **Cancellation**: Releases reserved stock and cancels unallocated preorder commitments.
+* **Permanent Deletion**: Only `CANCELLED` orders are eligible for permanent deletion (`deleteCancelledOrder`). Deletion is strictly blocked if any financial records (payments, refunds, COD collections, courier charges, reseller earnings) or courier shipments exist. Captures a full JSON snapshot in `OrderDeletionRecord` and `AuditLog` before deleting operational rows. Customer profiles and inventory movements remain intact.
 
 ---
 

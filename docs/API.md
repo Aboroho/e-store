@@ -212,3 +212,25 @@ Subscriptions are per event type: `order.created`, `order.confirmed`, `order.dis
 4. **Timestamps are ISO-8601 UTC**; the business timezone (`Asia/Dhaka` by default) is
    applied for reporting only.
 5. **Pagination is 1-based** with `pageSize` ≤ 100.
+
+## Manual Orders & Governance Actions
+
+The manual order management system provides high-performance Next.js server actions under `@/modules/orders/manual-actions`:
+
+* **`searchOrderProductsAction(query, storefrontId?)`**: Search catalog products by name, SKU, or category; returns live pricing and stock availability (available, reserved, uncovered).
+* **`previewManualOrderAction(input)`**: Calculate server-authoritative order totals, item subtotals, proportional discount shares, delivery fees, and field validation errors before submission.
+* **`createManualOrderAction(input)`**: Create an order in `PROCESSING` (or `COMPLETED` for in-store sales); executes stock reservation/preorder commitments transactionally.
+* **`updateManualOrderAction(input)`**: Update pre-courier order details (or post-courier with explicit permission and confirmed override).
+* **`lookupCustomerPhoneAction(phone)`**: Async lookup of customer profiles, saved addresses, and past order delivery addresses.
+* **`changeOrderStatusAction(input)`**: Transition order status with server-enforced status group permissions and reason validation.
+* **`bulkChangeOrderStatusAction(input)`**: Batch update order statuses; skips ineligible orders with detailed reasons.
+* **`sendOrdersToCourierAction(input)`**: Bulk dispatch confirmed online delivery orders to couriers with duplicate prevention.
+* **`deleteCancelledOrderAction(input)`**: Permanently delete a cancelled order; captures an `OrderDeletionRecord` snapshot while preserving customer profile and inventory ledger rows.
+* **`saveCheckoutFieldAction(input)` / `loadCheckoutFieldsAction(storefrontId?)`**: Manage required and enabled checkout fields per storefront.
+* **`saveOrderColumnsAction(columns)`**: Persist user column preferences for the order management data grid.
+
+## Steadfast Courier Webhook Integration
+
+* **Endpoint**: `/api/v1/couriers/steadfast/webhook`
+* **Authentication**: Verified using Bearer token authorization matching the configured `webhook_secret` integration credential.
+* **Payload Handling**: Processes `delivery_status` notifications (`consignment_id`, `invoice`, `status`, `cod_amount`). Maps delivery outcomes to domain statuses (`DELIVERED`, `PARTIALLY_DELIVERED`, `RETURNED`) with automatic restock inspection triggers and reseller earnings reconciliation.

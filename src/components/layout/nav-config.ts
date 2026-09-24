@@ -63,13 +63,22 @@ export const ADMIN_NAV: NavSection[] = [
     ],
   },
   {
-    title: "Sales",
+    title: "Orders",
+    collapsible: true,
     items: [
-      { label: "Orders", href: "/admin/orders", permission: "order.view", icon: "ShoppingCart", badge: "orders", stage: 3 },
-      { label: "Customers", href: "/admin/customers", permission: "customer.view", icon: "Users", stage: 3 },
-      { label: "Payments", href: "/admin/payments", permission: "payment.view", icon: "CreditCard", stage: 3 },
+      { label: "Create order", href: "/admin/orders/new", permission: "order.create", icon: "Plus", stage: 3 },
+      { label: "Order list", href: "/admin/orders", permission: "order.view", icon: "ShoppingCart", badge: "orders", stage: 3 },
+      { label: "Checkout fields", href: "/admin/orders/checkout-fields", permission: "order.view", icon: "ListChecks", stage: 3 },
+      { label: "Deleted orders", href: "/admin/orders/deleted", permission: "order.delete", icon: "Trash2", stage: 3 },
       { label: "Shipments", href: "/admin/shipments", permission: "courier.view", icon: "Send", stage: 3 },
       { label: "Couriers & gateways", href: "/admin/couriers", permission: "courier.view", icon: "Plug", stage: 3 },
+    ],
+  },
+  {
+    title: "Sales",
+    items: [
+      { label: "Customers", href: "/admin/customers", permission: "customer.view", icon: "Users", stage: 3 },
+      { label: "Payments", href: "/admin/payments", permission: "payment.view", icon: "CreditCard", stage: 3 },
       { label: "Exchanges", href: "/admin/exchanges", permission: "exchange.view", icon: "RefreshCw", badge: "exchanges", stage: 3 },
     ],
   },

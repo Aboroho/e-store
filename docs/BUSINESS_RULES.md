@@ -321,3 +321,22 @@ code; most of them also by a database constraint.
   test suite, the production build and the smoke passes. Provider sandboxes, TLS termination,
   real S3 and off-site backups must be verified on the VPS before go-live (see
   `docs/DEPLOYMENT.md` §Verification).
+
+## 17. Manual Order Management, Status Groups, and Deletion Policy
+
+| Rule | Where it is enforced |
+| --- | --- |
+| Manual unit price overrides are prohibited everywhere in UI and API; prices are strictly resolved server-side from active price lists. | `src/modules/orders/manual.ts`, `previewManualOrder`, `createManualOrder` |
+| Item discounts are capped at line subtotal; order-level discounts (flat or percent in basis points) are capped by business setting `order.max_discount_percent` and allocated proportionally across lines by largest remainder without paisa loss. | `src/modules/orders/totals.ts`, `calculateManualOrderTotals` |
+| Delivery fees are calculated from delivery zones with authorised manual override tracking (preserves calculated amount, records override timestamp, userId, and note). In-store orders never carry delivery fees. | `src/modules/orders/manual.ts`, `calculateManualOrderTotals` |
+| Order types supported: `ONLINE_DELIVERY` (default), `IN_STORE` (counter sale completed immediately, customer details optional), `PREORDER` (allows selection regardless of stock, records unallocated quantity as preorder commitment allocated FIFO upon arrival). | `resolveOrderType`, `createManualOrder` |
+| Three-tier status groups: Pre-courier (`PROCESSING`, `CONFIRMED`, `ON_HOLD`, `CANCELLED`, `READY_TO_SHIP`), Courier (`SHIPPED`), and Post-courier (`DELIVERED`, `PARTIALLY_DELIVERED`, `RETURNED`, `COMPLETED`). | `src/modules/orders/status.ts`, `STATUS_GROUPS` |
+| Creators can manage transitions inside pre-courier group with `order.status.pre_courier` (including backward moves like `CONFIRMED` -> `PROCESSING`). Written reasons are required for `CANCELLED`, `ON_HOLD`, `RETURNED`, `PARTIALLY_DELIVERED`. | `evaluateStatusTransition` |
+| Administrative status override (`order.status.override`) enables any-to-any transitions with mandatory warning confirmation dialog, written reason, and audit logging. Reopening cancelled orders with settled finance is refused. | `evaluateStatusTransition`, `overrideWarning` |
+| Data editing after courier handover (`SHIPPED` onwards) requires `order.edit_post_courier` or override, explicit confirmation, and audit logging. | `evaluateOrderEditPermission` |
+| Bulk status updates and courier dispatch skip ineligible orders with itemized reasons instead of failing the entire batch; duplicate dispatch is prevented via idempotency key `order:{id}:shipment`. | `bulkChangeOrderStatus`, `sendOrdersToCourier` |
+| Steadfast courier integration supports Bearer token webhook verification, consignment status mapping, partial deliveries with inspection, and return requests. | `src/modules/couriers/providers/steadfast.ts`, `steadfast-outgoing-data.ts` |
+| Only `CANCELLED` orders are permanently deletable; deletion is refused if any payments, refunds, COD collections, settlements, reseller earnings, or courier shipments exist. Full snapshot is recorded in `OrderDeletionRecord` and `AuditLog` before deletion. Customer profiles and inventory ledger movements remain intact. | `deleteCancelledOrder`, `OrderDeletionRecord` |
+| Resellers and order staff without `order.view_all` only see their own orders. Reseller profit margins and confidential business costs are never leaked. | `orderScopeWhere`, `searchOrders`, `getOrderScreen` |
+| Checkout field requirements, visibility, labels, and positions are customizable per business with storefront overrides; in-store orders are always exempt from delivery fields. | `src/modules/orders/checkout-fields.ts` |
+| Configurable order list columns respect user preference > business setting `order.list_default_columns` > default columns, enforcing permission gates for cost, profit, and creator columns. | `src/modules/orders/columns.ts`, `resolveOrderColumns` |

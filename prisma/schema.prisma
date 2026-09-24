@@ -167,6 +167,8 @@ model Business {
   idempotencyRecords   IdempotencyRecord[]
   paymentReconciliations PaymentReconciliation[]
   checkoutFields       CheckoutFieldConfig[]
+  orderColumnPreferences OrderListColumnPreference[]
+  orderDeletionRecords OrderDeletionRecord[]
   inventoryMovements   InventoryMovement[]
   stockAdjustments     StockAdjustment[]
   codCollections       CodCollection[]
@@ -234,6 +236,8 @@ model User {
   passwordResets      PasswordResetToken[]
   resellerProfile     Reseller?
   securityEvents      SecurityEvent[]
+  orderColumnPreferences OrderListColumnPreference[]
+  orderDeletions      OrderDeletionRecord[] @relation("OrderDeletionActor")
 
   @@index([businessId, status])
   @@index([businessId, deletedAt])
@@ -1649,13 +1653,41 @@ enum OrderChannel {
   API
 }
 
+/// What kind of sale an order is. `OrderChannel` records *who* created the
+/// order; `OrderType` records *how it is fulfilled*:
+///   - ONLINE_DELIVERY — courier delivery to the customer's address;
+///   - IN_STORE        — counter sale, handed over and paid immediately;
+///   - PREORDER        — accepted against stock that is not (fully) available.
+enum OrderType {
+  ONLINE_DELIVERY
+  IN_STORE
+  PREORDER
+}
+
+/// How an order-level discount was entered. The applied amount always lives in
+/// `Order.discountTotalPaisa` (paisa); this only records the operator's input so
+/// the edit screen can show it back and the audit trail stays readable.
+enum OrderDiscountType {
+  FLAT
+  PERCENTAGE
+}
+
+/// Internal order lifecycle.
+///
+/// `ON_HOLD`, `PARTIALLY_DELIVERED` and `RETURNED` were added for the manual
+/// order-management workflow: they let the user-facing status model
+/// (docs/BUSINESS_RULES.md → "Order status model") express a hold, a part
+/// delivery and a courier return without inventing a second status column.
 enum OrderStatus {
   PENDING
   CONFIRMED
   PROCESSING
+  ON_HOLD
   READY_TO_SHIP
   SHIPPED
   DELIVERED
+  PARTIALLY_DELIVERED
+  RETURNED
   COMPLETED
   CANCELLED
 }
@@ -1917,6 +1949,7 @@ model Customer {
   consents       ConsentRecord[]
   reviewReports  ReviewReport[]
   exchanges      ExchangeRequest[]
+  deletionRecords OrderDeletionRecord[]
 
   @@unique([businessId, phoneNormalized])
   @@index([businessId, emailNormalized])
@@ -2028,6 +2061,28 @@ model Order {
   resellerCostPaisa       Int  @default(0)
   resellerEarningPaisa    Int  @default(0)
 
+  // Manual-order metadata (order type, creator role, delivery-charge override)
+  orderType         OrderType        @default(ONLINE_DELIVERY)
+  /// Role label snapshot of the creator ("Owner", "Reseller", …) so the order
+  /// list keeps showing who created it after roles are renamed or revoked.
+  createdByUserRole String?
+  /// Delivery charge produced by the delivery-zone rules. `deliveryFeePaisa` is
+  /// what the customer actually pays; keeping both makes an override auditable.
+  deliveryFeeCalculatedPaisa Int     @default(0)
+  deliveryFeeOverriddenAt    DateTime?
+  deliveryFeeOverriddenByUserId String?
+  deliveryFeeOverrideNote    String?
+  /// Order-level discount input: FLAT value is paisa, PERCENTAGE value is basis
+  /// points (250 = 2.50%). `discountTotalPaisa` stays the applied amount.
+  discountType      OrderDiscountType?
+  discountValue     Int?
+  /// Per-line allocation of the order-level discount: [{ orderItemId, paisa }].
+  discountAllocation Json?
+  onHoldAt          DateTime?
+  partiallyDeliveredAt DateTime?
+  returnedAt        DateTime?
+  deletedByUserId   String?
+
   deliveryZoneId    String?
   expectedDeliveryAt DateTime?
   placedAt          DateTime          @default(now())
@@ -2084,6 +2139,9 @@ model Order {
   @@index([channel, placedAt])
   @@index([placedAt])
   @@index([businessId, deletedAt])
+  @@index([businessId, orderType, placedAt])
+  @@index([businessId, createdByUserId, placedAt])
+  @@index([businessId, customerPhoneNormalized])
 }
 
 model OrderItem {
@@ -2188,6 +2246,18 @@ model OrderStatusHistory {
   fromStatus String?
   toStatus   String
   note       String?
+  /// Role label of the actor when the change happened.
+  actorRole  String?
+  /// True when an administrative override (backward or cross-group) was used.
+  isAdminOverride Boolean     @default(false)
+  /// True when the actor explicitly confirmed the warning this change required.
+  confirmationAcknowledged Boolean @default(false)
+  /// Reason captured for consequential transitions (hold, cancel, return, override).
+  reason     String?
+  /// Status group the order moved into: PRE_COURIER, COURIER or POST_COURIER.
+  toGroup    String?
+  /// Courier webhook/sync event that caused the change, when applicable.
+  courierEventId String?
   actorUserId String?
   actorType  ActorType        @default(USER)
   actorCustomerId String?
@@ -2197,6 +2267,68 @@ model OrderStatusHistory {
 
   @@index([orderId, createdAt])
   @@index([field, createdAt])
+}
+
+/// Per-user order-list column selection.
+///
+/// Administrators define the *default* column set for the business (setting
+/// `order.list_default_columns`); a user's own preference wins for that user.
+/// Only columns the user is allowed to see can be stored here — the list page
+/// re-checks every key against the caller's permissions, so a preference row can
+/// never widen access.
+model OrderListColumnPreference {
+  id         String   @id @default(uuid())
+  businessId String
+  userId     String
+  /// Screen the preference belongs to; keeps room for other order lists.
+  scope      String   @default("ADMIN_ORDER_LIST")
+  columns    String[] @default([])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, userId, scope])
+  @@index([userId])
+}
+
+/// Append-only record of a permanently deleted (cancelled) order.
+///
+/// Deleting a cancelled order removes the operational rows — the order, its
+/// items, adjustments, addresses and status history — but the business must still
+/// be able to answer "what was order ORD-123 and who removed it?". This row keeps
+/// the identity, the money summary and a JSON snapshot, and it deliberately has
+/// no foreign key to `Order` (the row is gone). Customer records and addresses are
+/// never touched by the deletion.
+model OrderDeletionRecord {
+  id                    String   @id @default(uuid())
+  businessId            String
+  orderId               String
+  orderNumber           String
+  orderType             String
+  channel               String
+  status                String
+  customerId            String?
+  customerName          String?
+  customerPhoneNormalized String?
+  resellerId            String?
+  grandTotalPaisa       Int      @default(0)
+  paidPaisa             Int      @default(0)
+  /// Full snapshot: order fields, items, adjustments, status history, shipments.
+  snapshot              Json
+  reason                String?
+  deletedByUserId       String?
+  deletedByRole         String?
+  deletedAt             DateTime @default(now())
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  deletedBy User?    @relation("OrderDeletionActor", fields: [deletedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, deletedAt])
+  @@index([orderNumber])
+  @@index([customerId])
 }
 
 // ----------------------------------------------------------------------------
