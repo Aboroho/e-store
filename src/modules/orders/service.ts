@@ -13,6 +13,14 @@ import { resolveVariantPrice } from "@/modules/pricing/service";
 import { findOrCreateCustomer, recalculateCustomerStats } from "@/modules/customers/service";
 import { reconcilePayoutAfterVoid, recordResellerEarnings, voidResellerEarnings } from "@/modules/resellers/earnings";
 import type { CreateOrderInput } from "@/modules/orders/schemas";
+import { calculateManualOrderTotals, discountAllocationSnapshot } from "@/modules/orders/totals";
+import {
+  INITIAL_STATUS_BY_ORDER_TYPE,
+  isBackwardTransition,
+  statusGroupOf,
+  statusLabel,
+  type OrderTypeValue,
+} from "@/modules/orders/status";
 import { emitWebhookEvent, orderPayload } from "@/modules/api-keys/events";
 import { queueMarketingEvent } from "@/modules/marketing/service";
 import type { WebhookOrderLike } from "@/modules/api-keys/events";
@@ -39,6 +47,11 @@ export interface OrderActor {
   actorType?: "USER" | "CUSTOMER" | "SYSTEM" | "API_KEY";
   actorLabel?: string | null;
   ipAddress?: string | null;
+  /**
+   * Role label snapshot of the creator ("Owner", "Reseller", …). Stored on the
+   * order so the list can show who created it even after roles change.
+   */
+  roleLabel?: string | null;
 }
 
 type Tx = Prisma.TransactionClient;
@@ -180,8 +193,11 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       note: string | null;
     }> = [];
 
-    let itemsSubtotalPaisa = 0;
-    let packagingCostPaisa = 0;
+    // Manual channels may promise stock that is not there: an explicit pre-order
+    // selection (order type PREORDER or a line flagged `allowPreorder`) is always
+    // accepted, and the shortfall becomes a real preorder commitment.
+    const isManualChannel = input.channel === "ADMIN" || input.channel === "RESELLER" || input.channel === "IN_STORE";
+    const manualPreorderOrder = isManualChannel && input.orderType === "PREORDER";
 
     for (const item of input.items) {
       const variant = variantById.get(item.variantId)!;
@@ -191,9 +207,11 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
       const lineSku = variant.product.sku ?? "";
       if (variant.status !== "ACTIVE") throw AppError.validation(`${variant.product.name} — ${variant.name} is not available`);
 
-      const canOverride = input.channel === "ADMIN" || input.channel === "RESELLER" || input.channel === "IN_STORE";
-      const resolved = await resolveVariantPrice(variant.id, { priceListId });
-      const unitPricePaisa = canOverride && item.unitPricePaisa != null ? item.unitPricePaisa : resolved.pricePaisa;
+      // The price is resolved here, inside the transaction, from the applicable
+      // price list and quantity tier. No caller — staff form, reseller screen,
+      // REST API or storefront — can submit a unit price.
+      const resolved = await resolveVariantPrice(variant.id, { priceListId, quantity: item.quantity });
+      const unitPricePaisa = resolved.pricePaisa;
       if (unitPricePaisa <= 0) throw AppError.validation(`${variant.product.name} — ${variant.name} has no price configured`);
 
       const lineSubtotalPaisa = unitPricePaisa * item.quantity;
@@ -227,19 +245,31 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         // Preorder eligibility follows the same inheritance chain as the rest of
         // the catalogue: a variant override wins over the product default, and a
         // storefront that has preorders switched off refuses them altogether.
-        isPreorderAllowed: (variant.isPreorderEnabled ?? variant.product.isPreorderEnabled) && storefrontAllowsPreorder,
+        // The manual pre-order workflow is the one documented exception: an
+        // authorised operator may accept an uncovered quantity on purpose.
+        isPreorderAllowed:
+          (manualPreorderOrder || isManualChannel && item.allowPreorder === true
+            ? true
+            : (variant.isPreorderEnabled ?? variant.product.isPreorderEnabled) && storefrontAllowsPreorder),
         pricingSource: resolved.source,
         priceListId: resolved.priceListId,
         note: item.note ?? null,
       });
 
-      itemsSubtotalPaisa += lineSubtotalPaisa;
-      packagingCostPaisa += itemPackaging * item.quantity;
+      void lineSubtotalPaisa;
+      void itemPackaging;
     }
 
-    const discountTotalPaisa = Math.min(input.discountTotalPaisa, itemsSubtotalPaisa);
-    const delivery = await resolveDeliveryFee(tx, actor.businessId, input, itemsSubtotalPaisa, locationId);
-    const extraChargePaisa = input.extraCharges.reduce((total, charge) => total + charge.amountPaisa, 0);
+    // ------------------------------------------------------------- totals
+    // One calculation feeds the stored snapshot and the live preview shown while
+    // the operator builds the order, so the two can never disagree. Integer paisa
+    // arithmetic only (see modules/orders/totals.ts).
+    const provisionalSubtotalPaisa = preparedItems.reduce((total, item) => total + item.lineSubtotalPaisa, 0);
+    const delivery = await resolveDeliveryFee(tx, actor.businessId, {
+      districtCode: customer?.districtCode ?? null,
+      storefrontId: input.storefrontId ?? null,
+      deliveryZoneId: input.deliveryZoneId ?? null,
+    }, provisionalSubtotalPaisa);
     // Cash on delivery is charged by the delivery zone when the zone defines a fee;
     // otherwise the business-wide setting applies. Staff can still override it.
     const isCashOnDelivery = (input.paymentMethod ?? "COD") === "COD";
@@ -250,11 +280,55 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
           ? delivery.codFeePaisa
           : Number(settings["order.cod_surcharge_paisa"] ?? 0)
         : 0);
-    const inventoryCostPaisa = preparedItems.reduce((total, item) => total + item.unitCostPaisa * item.quantity, 0);
-    const grandTotalPaisa =
-      itemsSubtotalPaisa - discountTotalPaisa + delivery.feePaisa + extraChargePaisa + packagingCostPaisa + codSurchargePaisa;
 
-    const isInStore = input.channel === "IN_STORE";
+    const orderType: OrderTypeValue =
+      input.orderType ?? (input.channel === "IN_STORE" ? "IN_STORE" : "ONLINE_DELIVERY");
+    const isInStore = orderType === "IN_STORE";
+    const maxDiscountPercent = Number(settings["order.max_discount_percent"] ?? 100);
+    const orderDiscount =
+      input.discountType && input.discountValue != null
+        ? { type: input.discountType, value: input.discountValue }
+        : input.discountTotalPaisa > 0
+          ? { type: "FLAT" as const, value: input.discountTotalPaisa }
+          : null;
+
+    const totals = calculateManualOrderTotals({
+      orderType,
+      lines: preparedItems.map((item, index) => ({
+        key: `line-${index}`,
+        variantId: item.variantId,
+        quantity: item.quantity,
+        unitPricePaisa: item.unitPricePaisa,
+        itemDiscountPaisa: item.discountPaisa,
+        packagingCostPaisa: item.packagingCostPaisa,
+        unitCostPaisa: item.unitCostPaisa,
+      })),
+      orderDiscount,
+      maxDiscountBps: Math.max(0, Math.min(10_000, Math.round(maxDiscountPercent * 100))),
+      deliveryFee: { calculatedPaisa: delivery.calculatedFeePaisa, manualPaisa: input.deliveryFeePaisa ?? null },
+      extraChargesPaisa: input.extraCharges.reduce((total, charge) => total + charge.amountPaisa, 0),
+      codSurchargePaisa,
+      paymentMethod: input.paymentMethod ?? "COD",
+    });
+
+    const itemsSubtotalPaisa = totals.itemsSubtotalPaisa;
+    const discountTotalPaisa = totals.itemDiscountPaisa + totals.orderDiscountPaisa;
+    const deliveryFeePaisa = totals.deliveryFeePaisa;
+    const extraChargePaisa = totals.extraChargePaisa;
+    const packagingCostPaisa = totals.packagingCostPaisa;
+    const inventoryCostPaisa = totals.inventoryCostPaisa;
+    const grandTotalPaisa = totals.grandTotalPaisa;
+    const lineTotalsByKey = new Map(totals.lines.map((line, index) => [index, line]));
+
+    // The initial status is decided here, never by the client: counter sales are
+    // completed on the spot, storefront orders wait for confirmation, and manual
+    // delivery/pre-order orders start in the pre-courier group (docs/BUSINESS_RULES.md).
+    const initialStatus = isInStore
+      ? "COMPLETED"
+      : input.channel === "STOREFRONT"
+        ? "PENDING"
+        : INITIAL_STATUS_BY_ORDER_TYPE[orderType];
+
     const orderNumber = await nextDocumentNumber(tx, { businessId: actor.businessId, key: "order" });
 
     const order = await tx.order.create({
@@ -263,14 +337,18 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         orderNumber,
         storefrontId: input.storefrontId ?? null,
         channel: input.channel,
+        orderType,
         customerId,
         resellerId: input.resellerId ?? null,
-        status: isInStore ? "COMPLETED" : "PENDING",
+        status: initialStatus,
         paymentStatus: isInStore ? "PAID" : "UNPAID",
         fulfillmentStatus: isInStore ? "FULFILLED" : "UNFULFILLED",
         itemsSubtotalPaisa,
         discountTotalPaisa,
-        deliveryFeePaisa: delivery.feePaisa,
+        discountType: orderDiscount?.type ?? null,
+        discountValue: orderDiscount?.value ?? null,
+        discountAllocation: discountAllocationSnapshot(totals) as unknown as Prisma.InputJsonValue,
+        deliveryFeePaisa,
         extraChargePaisa,
         packagingCostPaisa,
         codSurchargePaisa,
@@ -286,18 +364,36 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         shippingDistrictCode: customer?.districtCode ?? null,
         shippingAddressLine: customer?.addressLine ?? null,
         shippingArea: customer?.area ?? null,
+        deliveryNotes: input.deliveryNotes ?? null,
+        deliveryFeeCalculatedPaisa: totals.deliveryFeeCalculatedPaisa,
+        ...(totals.deliveryFeeOverridden
+          ? {
+              deliveryFeeOverriddenAt: new Date(),
+              deliveryFeeOverriddenByUserId: actor.userId ?? null,
+              deliveryFeeOverrideNote: input.deliveryFeeNote ?? null,
+            }
+          : {}),
         deliveryZoneId: delivery.zoneId,
         customerNote: input.customerNote ?? null,
         internalNote: input.internalNote ?? null,
         sourceReference: input.sourceReference ?? null,
         createdByUserId: actor.userId ?? null,
+        createdByUserRole: actor.roleLabel ?? null,
         idempotencyKey: input.idempotencyKey,
-        ...(isInStore ? { confirmedAt: new Date(), processingAt: new Date(), completedAt: new Date() } : {}),
+        ...(isInStore
+          ? { confirmedAt: new Date(), processingAt: new Date(), completedAt: new Date() }
+          : initialStatus === "PROCESSING"
+            ? { processingAt: new Date() }
+            : {}),
       },
     });
 
     const createdItems: Array<{ id: string; variantId: string | null; quantity: number; isPreorderAllowed: boolean; productName: string; sku: string }> = [];
     for (const [index, item] of preparedItems.entries()) {
+      // The stored line keeps the item-level discount in `discountPaisa` and the
+      // allocated share of the order-level discount inside `lineTotalPaisa`, so
+      // historical lines always add up to the order total.
+      const lineTotals = lineTotalsByKey.get(index)!;
       const created = await tx.orderItem.create({
         data: {
           orderId: order.id,
@@ -314,9 +410,9 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
           compareAtPricePaisa: item.compareAtPricePaisa,
           unitCostPaisa: item.unitCostPaisa,
           packagingCostPaisa: item.packagingCostPaisa,
-          discountPaisa: item.discountPaisa,
-          lineSubtotalPaisa: item.lineSubtotalPaisa,
-          lineTotalPaisa: item.lineTotalPaisa,
+          discountPaisa: lineTotals.itemDiscountPaisa,
+          lineSubtotalPaisa: lineTotals.lineSubtotalPaisa,
+          lineTotalPaisa: lineTotals.lineTotalPaisa,
           taxPaisa: item.taxPaisa,
           pricingSource: item.pricingSource,
           priceListId: item.priceListId,
@@ -340,8 +436,21 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         data: { orderId: order.id, type: "DISCOUNT", label: input.discountReason ?? "Order discount", amountPaisa: -discountTotalPaisa, createdByUserId: actor.userId ?? null },
       });
     }
-    if (delivery.feePaisa > 0) {
-      await tx.orderAdjustment.create({ data: { orderId: order.id, type: "DELIVERY_FEE", label: "Delivery fee", amountPaisa: delivery.feePaisa } });
+    if (deliveryFeePaisa > 0) {
+      // The adjustment records what is actually charged, including a manual
+      // override; the calculated value stays on the order for auditability.
+      await tx.orderAdjustment.create({
+        data: {
+          orderId: order.id,
+          type: "DELIVERY_FEE",
+          label: totals.deliveryFeeOverridden ? "Delivery fee (manual override)" : "Delivery fee",
+          amountPaisa: deliveryFeePaisa,
+          note: totals.deliveryFeeOverridden
+            ? `Calculated ${totals.deliveryFeeCalculatedPaisa}${input.deliveryFeeNote ? ` · ${input.deliveryFeeNote}` : ""}`
+            : null,
+          createdByUserId: totals.deliveryFeeOverridden ? (actor.userId ?? null) : null,
+        },
+      });
     }
     for (const charge of input.extraCharges) {
       await tx.orderAdjustment.create({
@@ -444,6 +553,8 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         field: "ORDER",
         toStatus: order.status,
         note: isInStore ? "In-store sale completed" : "Order created",
+        actorRole: actor.roleLabel ?? null,
+        toGroup: statusGroupOf(order.status),
         actorUserId: actor.userId ?? null,
         actorType: actor.actorType ?? "USER",
         actorCustomerId: actor.customerId ?? null,
@@ -487,7 +598,20 @@ export async function createOrder(actor: OrderActor, input: CreateOrderInput): P
         entityType: "Order",
         entityId: order.id,
         summary: `${orderNumber} created from ${input.channel.toLowerCase()} for ${grandTotalPaisa} paisa`,
-        after: { orderNumber, grandTotalPaisa, reservedUnits, preorderUnits, channel: input.channel },
+        after: {
+          orderNumber,
+          grandTotalPaisa,
+          reservedUnits,
+          preorderUnits,
+          channel: input.channel,
+          orderType,
+          status: order.status,
+          deliveryFeePaisa,
+          deliveryFeeCalculatedPaisa: totals.deliveryFeeCalculatedPaisa,
+          deliveryFeeOverridden: totals.deliveryFeeOverridden,
+          discountTotalPaisa,
+          actorRole: actor.roleLabel ?? null,
+        },
         ipAddress: actor.ipAddress ?? null,
       },
       tx,
@@ -556,37 +680,61 @@ async function resolvePriceListId(tx: Tx, businessId: string, input: CreateOrder
   return fallback?.id ?? null;
 }
 
-async function resolveDeliveryFee(
-  tx: Tx,
-  businessId: string,
-  input: CreateOrderInput,
-  itemsSubtotalPaisa: number,
-  locationId: string,
-): Promise<{ feePaisa: number; zoneId: string | null; codFeePaisa: number }> {
-  void locationId;
-  if (input.deliveryFeePaisa != null) return { feePaisa: input.deliveryFeePaisa, zoneId: input.deliveryZoneId ?? null, codFeePaisa: 0 };
+export interface DeliveryFeeResolution {
+  /** What the delivery-zone rules produce, before any manual override. */
+  calculatedFeePaisa: number;
+  zoneId: string | null;
+  zoneName: string | null;
+  /** Cash-on-delivery fee configured on the zone (a separate concept). */
+  codFeePaisa: number;
+  freeDeliveryApplied: boolean;
+}
 
-  const districtCode = normalizeCustomerInput(input)?.districtCode;
-  if (!districtCode) return { feePaisa: 0, zoneId: null, codFeePaisa: 0 };
+/**
+ * Resolve the delivery charge from the configured delivery zones.
+ *
+ * The calculated value is always returned, even when the caller passes a manual
+ * override: `calculateManualOrderTotals` decides which one is charged and the
+ * order stores both, so an override never erases what the rules said.
+ */
+export async function resolveDeliveryFee(
+  tx: Tx | typeof prisma,
+  businessId: string,
+  input: { districtCode?: string | null; storefrontId?: string | null; deliveryZoneId?: string | null },
+  itemsSubtotalPaisa: number,
+): Promise<DeliveryFeeResolution> {
+  const districtCode = input.districtCode ?? null;
+  if (!districtCode && !input.deliveryZoneId) {
+    return { calculatedFeePaisa: 0, zoneId: null, zoneName: null, codFeePaisa: 0, freeDeliveryApplied: false };
+  }
 
   const zone = input.deliveryZoneId
     ? await tx.deliveryZone.findFirst({ where: { id: input.deliveryZoneId, businessId } })
     : await tx.deliveryZone.findFirst({
         where: {
           businessId,
-          districtCode,
+          districtCode: districtCode!,
           isActive: true,
           ...(input.storefrontId ? { OR: [{ storefrontId: input.storefrontId }, { storefrontId: null }] } : {}),
         },
         orderBy: [{ storefrontId: "desc" }, { feePaisa: "asc" }],
       });
-  if (!zone) return { feePaisa: 0, zoneId: null, codFeePaisa: 0 };
+  if (!zone) return { calculatedFeePaisa: 0, zoneId: null, zoneName: null, codFeePaisa: 0, freeDeliveryApplied: false };
+
+  const district = await tx.district.findUnique({ where: { code: zone.districtCode }, select: { name: true } });
+  const zoneName = district?.name ?? zone.note ?? null;
 
   const freeThreshold = zone.freeDeliveryThresholdPaisa;
   if (freeThreshold != null && itemsSubtotalPaisa >= freeThreshold) {
-    return { feePaisa: 0, zoneId: zone.id, codFeePaisa: zone.codFeePaisa };
+    return { calculatedFeePaisa: 0, zoneId: zone.id, zoneName, codFeePaisa: zone.codFeePaisa, freeDeliveryApplied: true };
   }
-  return { feePaisa: zone.feePaisa, zoneId: zone.id, codFeePaisa: zone.codFeePaisa };
+  return {
+    calculatedFeePaisa: zone.feePaisa,
+    zoneId: zone.id,
+    zoneName,
+    codFeePaisa: zone.codFeePaisa,
+    freeDeliveryApplied: false,
+  };
 }
 
 // ------------------------------------------------------------------- preorders
@@ -630,60 +778,138 @@ export async function cancelPreorderForItem(
 
 // ------------------------------------------------------------------ lifecycle
 
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  PENDING: ["CONFIRMED", "CANCELLED"],
-  CONFIRMED: ["PROCESSING", "READY_TO_SHIP", "CANCELLED"],
-  PROCESSING: ["READY_TO_SHIP", "CANCELLED"],
-  READY_TO_SHIP: ["SHIPPED", "DELIVERED", "CANCELLED"],
-  SHIPPED: ["DELIVERED"],
-  DELIVERED: ["COMPLETED"],
-  COMPLETED: [],
-  CANCELLED: [],
-};
-
+/**
+ * Low-level status transition.
+ *
+ * Transitions follow the status-group model instead of a rigid forward-only
+ * machine (docs/BUSINESS_RULES.md → "Status transitions"):
+ *   - any move inside one group is allowed, forwards and backwards;
+ *   - a forward move across groups is allowed;
+ *   - a backward move across groups, and any move out of CANCELLED, needs the
+ *     administrative override (`adminOverride: true`), which the permission-aware
+ *     caller in `modules/orders/lifecycle.ts` only sets after an explicit
+ *     confirmation;
+ *   - moving into courier (SHIPPED) consumes the reserved stock exactly once, so a
+ *     status label can never leave stock reserved and shipped at the same time;
+ *   - CANCELLED is not a transition: `cancelOrder` releases reservations, cancels
+ *     preorder commitments and reverses reseller earnings.
+ *
+ * This function does not check permissions — every caller does, and the UI never
+ * calls it directly.
+ */
 export async function transitionOrder(
   actor: OrderActor,
-  input: { orderId: string; status: "CONFIRMED" | "PROCESSING" | "READY_TO_SHIP" | "SHIPPED" | "DELIVERED" | "COMPLETED"; note?: string },
+  input: {
+    orderId: string;
+    status: "CONFIRMED" | "PROCESSING" | "ON_HOLD" | "READY_TO_SHIP" | "SHIPPED" | "DELIVERED" | "PARTIALLY_DELIVERED" | "RETURNED" | "COMPLETED";
+    note?: string;
+    reason?: string | null;
+    /** Set by the permission-aware lifecycle service after an explicit confirmation. */
+    adminOverride?: boolean;
+    confirmationAcknowledged?: boolean;
+    courierEventId?: string | null;
+  },
 ) {
   const updated = await withTransaction(async (tx) => {
     const order = await tx.order.findFirst({ where: { id: input.orderId, businessId: actor.businessId } });
     if (!order) throw AppError.notFound("Order not found");
-    if (!ALLOWED_TRANSITIONS[order.status]?.includes(input.status)) {
-      throw AppError.invalidState(`An order in ${order.status} cannot move to ${input.status}`);
+
+    const from = order.status;
+    const to = input.status;
+    if (from === to) throw AppError.invalidState(`This order is already ${statusLabel(to)}`);
+
+    const fromGroup = statusGroupOf(from);
+    const toGroup = statusGroupOf(to);
+    const backward = isBackwardTransition(from, to);
+    const override = input.adminOverride === true;
+
+    if (to === "CANCELLED" as typeof to) {
+      throw AppError.invalidState("Use the cancel workflow: cancelling releases stock and preorder commitments");
+    }
+    if (from === "CANCELLED" && !override) {
+      throw AppError.invalidState(
+        "A cancelled order can only be reopened with the administrative override, because its stock reservations were released",
+      );
+    }
+    if (backward && fromGroup !== toGroup && !override) {
+      throw AppError.invalidState(
+        `Moving an order backward from ${statusLabel(from)} to ${statusLabel(to)} needs the administrative override`,
+      );
     }
 
     const timestamps: Record<string, Prisma.OrderUpdateInput> = {
       CONFIRMED: { confirmedAt: new Date() },
       PROCESSING: { processingAt: new Date() },
+      ON_HOLD: { onHoldAt: new Date() },
       READY_TO_SHIP: { readyToShipAt: new Date() },
       SHIPPED: { shippedAt: new Date(), fulfillmentStatus: "PARTIALLY_FULFILLED" },
       DELIVERED: { deliveredAt: new Date(), fulfillmentStatus: "FULFILLED" },
+      PARTIALLY_DELIVERED: { partiallyDeliveredAt: new Date(), fulfillmentStatus: "PARTIALLY_FULFILLED" },
+      RETURNED: { returnedAt: new Date(), fulfillmentStatus: "CANCELLED" },
       COMPLETED: { completedAt: new Date() },
     };
 
+    // Reopening a cancelled order re-reserves what is available now; the shortfall
+    // becomes a preorder commitment again when the product allows it.
+    if (from === "CANCELLED") {
+      await restoreOrderReservations(tx, { actor, orderId: order.id, orderNumber: order.orderNumber });
+    }
+
+    // Handing an order to a courier consumes the reservation exactly once.
+    if (to === "SHIPPED") {
+      await dispatchUnits(tx, {
+        actor,
+        order: { id: order.id, orderNumber: order.orderNumber, businessId: actor.businessId },
+        reason: "moved_in_courier",
+      });
+    }
+
     const updated = await tx.order.update({
       where: { id: order.id },
-      data: { status: input.status, updatedByUserId: actor.userId ?? null, ...(timestamps[input.status] ?? {}) },
+      data: {
+        status: to,
+        updatedByUserId: actor.userId ?? null,
+        ...(from === "CANCELLED" ? { cancelledAt: null, fulfillmentStatus: "UNFULFILLED" as const } : {}),
+        ...(timestamps[to] ?? {}),
+      },
     });
 
-    if (input.status === "DELIVERED" || input.status === "COMPLETED") {
+    if (to === "DELIVERED" || to === "COMPLETED") {
+      if (from !== "SHIPPED") {
+        await dispatchUnits(tx, {
+          actor,
+          order: { id: order.id, orderNumber: order.orderNumber, businessId: actor.businessId },
+          reason: "delivered",
+        });
+      }
       await tx.orderItem.updateMany({
         where: { orderId: order.id, status: { in: ["RESERVED", "ALLOCATED", "DISPATCHED", "PREORDER_PENDING"] } },
         data: { status: "DELIVERED" },
       });
       if (order.customerId) await recalculateCustomerStats(tx, order.customerId);
+      // Delivery is not money: this writes a *pending* ledger entry that only
+      // becomes payable once the courier COD settlement is reconciled.
+      if (order.resellerId) {
+        await recordResellerEarnings(tx, { orderId: order.id, actorUserId: actor.userId ?? null });
+      }
     }
 
     await tx.orderStatusHistory.create({
       data: {
         orderId: order.id,
         field: "ORDER",
-        fromStatus: order.status,
-        toStatus: input.status,
+        fromStatus: from,
+        toStatus: to,
         note: input.note ?? null,
+        reason: input.reason ?? null,
         actorUserId: actor.userId ?? null,
         actorType: actor.actorType ?? "USER",
         actorCustomerId: actor.customerId ?? null,
+        actorRole: actor.roleLabel ?? null,
+        isAdminOverride: override,
+        confirmationAcknowledged: input.confirmationAcknowledged === true,
+        toGroup,
+        courierEventId: input.courierEventId ?? null,
       },
     });
 
@@ -693,13 +919,15 @@ export async function transitionOrder(
         actorType: actor.actorType ?? "USER",
         actorUserId: actor.userId ?? null,
         actorCustomerId: actor.customerId ?? null,
-        action: "order.status_changed",
+        actorLabel: actor.actorLabel ?? null,
+        action: override ? "order.status_override" : "order.status_changed",
         entityType: "Order",
         entityId: order.id,
-        summary: `${order.orderNumber}: ${order.status} → ${input.status}`,
-        before: { status: order.status },
-        after: { status: input.status },
-        reason: input.note ?? null,
+        summary: `${order.orderNumber}: ${statusLabel(from)} → ${statusLabel(to)}${override ? " (administrative override)" : ""}`,
+        before: { status: from, group: fromGroup },
+        after: { status: to, group: toGroup, backward, confirmed: input.confirmationAcknowledged === true },
+        changedFields: ["status"],
+        reason: input.reason ?? input.note ?? null,
       },
       tx,
     );
@@ -709,6 +937,112 @@ export async function transitionOrder(
 
   await emitOrderStatusWebhook(actor.businessId, updated, input.status);
   return updated;
+}
+
+/**
+ * Re-reserve stock for an order that is reopened after cancellation.
+ *
+ * Only what is available *now* is reserved; anything else becomes a preorder
+ * commitment when the line allows it, and the transition is refused when neither
+ * is possible — an order must never promise units that do not exist and are not
+ * recorded as a preorder.
+ */
+export async function restoreOrderReservations(
+  tx: Tx,
+  input: { actor: OrderActor; orderId: string; orderNumber: string },
+): Promise<{ reservedUnits: number; preorderUnits: number }> {
+  const businessId = input.actor.businessId;
+  const locationId = await defaultLocationId(businessId);
+  const items = await tx.orderItem.findMany({
+    where: { orderId: input.orderId },
+    include: { variant: { select: { id: true, isPreorderEnabled: true, product: { select: { isPreorderEnabled: true } } } } },
+  });
+
+  let reservedUnits = 0;
+  let preorderUnits = 0;
+
+  for (const item of items) {
+    if (!item.variantId) continue;
+    const outstanding = item.quantity - item.dispatchedQuantity - item.cancelledQuantity;
+    if (outstanding <= 0) continue;
+
+    const available = await lockAvailableQuantity(tx, locationId, item.variantId);
+    const reserveNow = Math.min(available, outstanding);
+    const shortfall = outstanding - reserveNow;
+
+    if (reserveNow > 0) {
+      const key = `order:${input.orderId}:rereserve:${item.id}:${Date.now()}`;
+      const reservation = await tx.stockReservation.upsert({
+        where: { orderItemId: item.id },
+        create: {
+          businessId,
+          locationId,
+          variantId: item.variantId,
+          orderId: input.orderId,
+          orderItemId: item.id,
+          quantity: reserveNow,
+          status: "ACTIVE",
+          idempotencyKey: key,
+        },
+        update: {
+          quantity: reserveNow,
+          status: "ACTIVE",
+          releasedQuantity: 0,
+          consumedQuantity: 0,
+          releasedAt: null,
+          releasedReason: null,
+          idempotencyKey: key,
+        },
+      });
+      const movement = await applyStockMovement(tx, {
+        businessId,
+        locationId,
+        variantId: item.variantId,
+        type: "RESERVATION",
+        reservedDelta: reserveNow,
+        sourceType: "Order",
+        sourceId: input.orderId,
+        reference: input.orderNumber,
+        reason: "order_reopened",
+        actorUserId: input.actor.userId ?? null,
+        idempotencyKey: key,
+      });
+      await tx.reservationAllocation.create({
+        data: { reservationId: reservation.id, quantity: reserveNow, kind: "RESERVE", inventoryMovementId: movement.movementId },
+      });
+      await tx.orderItem.update({
+        where: { id: item.id },
+        data: { reservedQuantity: reserveNow, cancelledQuantity: item.dispatchedQuantity > 0 ? item.cancelledQuantity : 0, status: "RESERVED" },
+      });
+      reservedUnits += reserveNow;
+    }
+
+    if (shortfall > 0) {
+      const allowsPreorder = item.variant?.isPreorderEnabled ?? item.variant?.product?.isPreorderEnabled ?? false;
+      if (!allowsPreorder) {
+        throw AppError.insufficientStock(
+          `${item.productName} (${item.sku}) has only ${reserveNow} unit(s) available and does not accept preorders — the order cannot be reopened`,
+        );
+      }
+      await createPreorderCommitment(tx, {
+        businessId,
+        locationId,
+        variantId: item.variantId,
+        orderId: input.orderId,
+        orderItemId: item.id,
+        quantity: shortfall,
+        expectedAt: null,
+        note: `Reopened ${input.orderNumber}: ${shortfall} unit(s) still on preorder`,
+      });
+      await tx.orderItem.update({
+        where: { id: item.id },
+        data: { preorderQuantity: shortfall, isPreorder: true, status: "PREORDER_PENDING" },
+      });
+      preorderUnits += shortfall;
+    }
+  }
+
+  return { reservedUnits, preorderUnits };
 }
 
 /**

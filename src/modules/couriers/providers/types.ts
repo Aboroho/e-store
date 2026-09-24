@@ -89,6 +89,12 @@ export interface ParsedWebhook {
   courierChargePaisa: number | null;
   /** Raw provider status text, kept for support. */
   detail: string | null;
+  /**
+   * Set when the provider sent something that must not change a shipment (an
+   * unrelated notification type, a payload without a status). The event is stored
+   * and marked ignored instead of being guessed at.
+   */
+  ignore?: string | null;
 }
 
 export interface CourierAdapter {
@@ -98,6 +104,12 @@ export interface CourierAdapter {
   credentialKeys: string[];
   /** Header carrying the webhook HMAC signature (verified against `webhook_secret`). */
   webhookSignatureHeader: string;
+  /**
+   * Provider-specific webhook authentication. Providers that sign the body leave
+   * this unset and the route verifies an HMAC over the raw body; providers that
+   * send a bearer token (Steadfast) implement it instead.
+   */
+  verifyWebhook?(context: { rawBody: string; headers: Record<string, string>; secret: string }): boolean;
   /** Header carrying the provider's event id, when it sends one. */
   webhookEventIdHeader?: string;
   /**

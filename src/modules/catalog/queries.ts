@@ -234,6 +234,9 @@ export async function listProducts(
       updatedAt: product.updatedAt,
       image: productImage,
       isWorkingDraft: false,
+      // An existing product with an in-progress ProductDraft shows the "unsaved
+      // changes" hint in the list.
+      hasUnsavedDraft: draftProductIds.has(product.id),
       variants: variantRows,
     };
   });
@@ -374,6 +377,8 @@ export interface ProductViewVariant {
   currentPricePaisa: number | null;
   discountType: "PERCENTAGE" | "FLAT" | "NONE";
   discountValue: number;
+  /** Variant-level preorder override; `null` inherits the product setting. */
+  isPreorderEnabled: boolean | null;
   weightGrams: number | null;
   imageMediaId: string | null;
   image: CatalogImageThumb | null;
@@ -429,6 +434,7 @@ export async function getProductView(businessId: string, productId: string): Pro
           optionKey: true,
           attributesSummary: true,
           imageMediaId: true,
+          isPreorderEnabled: true,
           priceOverridePaisa: true,
           currentPricePaisa: true,
           discountType: true,
@@ -462,6 +468,10 @@ export async function getProductView(businessId: string, productId: string): Pro
     deletedAt: product.deletedAt,
     updatedAt: product.updatedAt,
     isPreorderEnabled: product.isPreorderEnabled,
+    defaultCurrentPricePaisa: product.defaultCurrentPricePaisa ?? null,
+    defaultDiscountType: (product.defaultDiscountType ?? "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
+    defaultDiscountValue: product.defaultDiscountValue ?? 0,
+    weightGrams: product.weightGrams,
     image: productImage,
     variants: product.variants.map((variant) => ({
       id: variant.id,
@@ -472,8 +482,12 @@ export async function getProductView(businessId: string, productId: string): Pro
       attributesSummary: (variant.attributesSummary as Record<string, string>) || null,
       pricePaisa: variant.priceItems[0]?.pricePaisa ?? variant.priceOverridePaisa ?? product.defaultPricePaisa,
       priceOverridePaisa: variant.priceOverridePaisa,
+      currentPricePaisa: variant.currentPricePaisa,
+      discountType: (variant.discountType ?? "NONE") as "PERCENTAGE" | "FLAT" | "NONE",
+      discountValue: variant.discountValue ?? 0,
       isPreorderEnabled: variant.isPreorderEnabled,
       weightGrams: variant.weightGrams,
+      imageMediaId: variant.imageMediaId,
       image: (variant.imageMediaId ? thumbs.get(variant.imageMediaId) : null) ?? productImage,
     })),
   };

@@ -206,7 +206,13 @@ export async function setResellerStatus(
 
 // ------------------------------------------------------------------ pricing
 
-async function resellerPriceList(tx: Tx, businessId: string, resellerId: string) {
+/**
+ * The reseller's own price list, created on first use.
+ *
+ * Exported so the manual order workflow prices a reseller's order with their
+ * negotiated prices instead of the default list.
+ */
+export async function resellerPriceList(tx: Tx, businessId: string, resellerId: string) {
   const list = await tx.priceList.findFirst({ where: { businessId, resellerId } });
   if (list) return list;
   const reseller = await tx.reseller.findFirstOrThrow({ where: { id: resellerId, businessId } });

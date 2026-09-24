@@ -367,13 +367,22 @@ async function check(schema, databaseUrl) {
       `SELECT t.typname, string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) AS labels
          FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid GROUP BY t.typname`,
     );
-    const dbEnums = new Map(enumRows.map((r) => [r.typname, r.labels]));
+    const dbEnums = new Map(enumRows.map((r) => [r.typname, String(r.labels ?? "").split(",").filter(Boolean)]));
     for (const enumType of schema.enums) {
       const labels = dbEnums.get(enumType.name);
       if (!labels) {
         problems.push(`missing enum type: ${enumType.name}`);
-      } else if (String(labels) !== enumType.values.join(",")) {
-        problems.push(`enum values differ: ${enumType.name} (db: ${labels})`);
+        continue;
+      }
+      // PostgreSQL appends values added later with `ALTER TYPE ... ADD VALUE`, so
+      // the physical order carries no meaning: compare the sets and report only
+      // labels that are genuinely missing or unexpected.
+      const missing = enumType.values.filter((value) => !labels.includes(value));
+      const extra = labels.filter((value) => !enumType.values.includes(value));
+      if (missing.length > 0 || extra.length > 0) {
+        problems.push(
+          `enum values differ: ${enumType.name} (missing: ${missing.join(", ") || "none"}; extra in db: ${extra.join(", ") || "none"})`,
+        );
       }
     }
   } finally {

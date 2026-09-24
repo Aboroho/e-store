@@ -95,7 +95,10 @@ async function availabilityByIds(variantIds: string[]): Promise<Map<string, numb
  * Archived and deleted products are excluded: an order line must always point at
  * a row the catalogue still offers.
  */
-export async function loadOrderCatalog(businessId: string, options: { take?: number } = {}): Promise<OrderCatalogProduct[]> {
+export async function loadOrderCatalog(
+  businessId: string,
+  options: { take?: number; priceListId?: string | null } = {},
+): Promise<OrderCatalogProduct[]> {
   const products = await prisma.product.findMany({
     where: { businessId, status: "ACTIVE", deletedAt: null },
     orderBy: { name: "asc" },
@@ -111,7 +114,11 @@ export async function loadOrderCatalog(businessId: string, options: { take?: num
   const [availability, channels] = await Promise.all([
     availabilityByIds(allVariantIds),
     prisma.priceListItem.findMany({
-      where: { minQuantity: 1, variantId: { in: allVariantIds }, priceList: { businessId, isDefault: true } },
+      where: {
+        minQuantity: 1,
+        variantId: { in: allVariantIds },
+        priceList: options.priceListId ? { businessId, id: options.priceListId } : { businessId, isDefault: true },
+      },
       select: { variantId: true, pricePaisa: true, compareAtPricePaisa: true },
     }),
   ]);
@@ -173,7 +180,7 @@ export async function loadOrderCatalog(businessId: string, options: { take?: num
  */
 export async function resolveVariantForOrder(
   businessId: string,
-  input: { productId: string; attributeValueIds: string[]; quantity?: number },
+  input: { productId: string; attributeValueIds: string[]; quantity?: number; priceListId?: string | null },
 ): Promise<{
   variantId: string;
   name: string;
@@ -201,7 +208,12 @@ export async function resolveVariantForOrder(
   const [availability, priceItem] = await Promise.all([
     availabilityByIds([row.id]),
     prisma.priceListItem.findFirst({
-      where: { variantId: row.id, minQuantity: 1, priceList: { businessId, isDefault: true } },
+      where: {
+        variantId: row.id,
+        minQuantity: { lte: Math.max(1, Math.floor(Number(input.quantity) || 1)) },
+        priceList: input.priceListId ? { businessId, id: input.priceListId } : { businessId, isDefault: true },
+      },
+      orderBy: { minQuantity: "desc" },
       select: { pricePaisa: true, compareAtPricePaisa: true },
     }),
   ]);
@@ -230,4 +242,126 @@ export async function resolveVariantForOrder(
     imageUrl: image.value ? urls.get(image.value) ?? null : null,
     attributes: row.attributeValues.map((link) => ({ name: link.attribute.name, value: link.attributeValue.value })),
   };
+}
+
+
+// --------------------------------------------------------------------- search
+
+export interface OrderCatalogSearchProduct extends OrderCatalogProduct {
+  productType: "SIMPLE" | "VARIABLE";
+  brand: string | null;
+  barcode: string | null;
+  unitLabel: string;
+  totalAvailable: number;
+  cheapestPricePaisa: number | null;
+}
+
+/**
+ * Server-backed product search for the manual order screen.
+ *
+ * Only the matched page of products is loaded (never the whole catalogue), and
+ * every price, image and availability figure is resolved here — the browser sends
+ * a search string and nothing else. `priceListId` carries the creator's sales
+ * context, so a reseller sees their own negotiated prices.
+ */
+export async function searchOrderCatalog(
+  businessId: string,
+  options: { query?: string; take?: number; priceListId?: string | null } = {},
+): Promise<OrderCatalogSearchProduct[]> {
+  const take = Math.min(25, Math.max(1, options.take ?? 8));
+  const term = (options.query ?? "").trim();
+
+  const products = await prisma.product.findMany({
+    where: {
+      businessId,
+      deletedAt: null,
+      status: "ACTIVE",
+      ...(term.length >= 1
+        ? {
+            OR: [
+              { name: { contains: term, mode: "insensitive" } },
+              { sku: { contains: term, mode: "insensitive" } },
+              { brand: { contains: term, mode: "insensitive" } },
+              { barcode: { contains: term, mode: "insensitive" } },
+              { variants: { some: { deletedAt: null, optionKey: { contains: term, mode: "insensitive" } } } },
+              { variants: { some: { deletedAt: null, barcode: { contains: term, mode: "insensitive" } } } },
+              { variants: { some: { deletedAt: null, name: { contains: term, mode: "insensitive" } } } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: [{ isFeatured: "desc" }, { name: "asc" }],
+    take,
+    select: { id: true, name: true, sku: true, unitLabel: true, productType: true, brand: true, barcode: true },
+  });
+  if (products.length === 0) return [];
+
+  const rowsByProduct = await Promise.all(
+    products.map(async (product) => ({ product, rows: await loadProductVariantRows(prisma, { productId: product.id }) })),
+  );
+
+  const allVariantIds = rowsByProduct.flatMap((entry) => entry.rows.map((row) => row.id));
+  const [availability, channelPrices] = await Promise.all([
+    availabilityByIds(allVariantIds),
+    options.priceListId
+      ? prisma.priceListItem.findMany({
+          where: { minQuantity: 1, variantId: { in: allVariantIds }, priceList: { businessId, id: options.priceListId } },
+          orderBy: { minQuantity: "asc" },
+          select: { variantId: true, pricePaisa: true, compareAtPricePaisa: true },
+        })
+      : Promise.resolve([] as Array<{ variantId: string; pricePaisa: number; compareAtPricePaisa: number | null }>),
+  ]);
+  const channelPrice = new Map(channelPrices.map((item) => [item.variantId, item]));
+
+  const mediaIds: string[] = [];
+  for (const entry of rowsByProduct) {
+    for (const row of entry.rows) {
+      const image = effectiveImage(row);
+      if (image.value) mediaIds.push(image.value);
+    }
+  }
+  const urls = await urlForMediaIds(mediaIds);
+
+  return rowsByProduct.map(({ product, rows }) => {
+    const optionMap = new Map<string, OrderCatalogOption>();
+    const variants: OrderCatalogVariant[] = rows.map((row) => {
+      const pricing = effectivePricing(row);
+      const image = effectiveImage(row);
+      const channel = channelPrice.get(row.id);
+      for (const link of row.attributeValues) {
+        const group = optionMap.get(link.attribute.id) ?? { id: link.attribute.id, name: link.attribute.name, values: [] };
+        if (!group.values.some((value) => value.id === link.attributeValue.id)) {
+          group.values.push({ id: link.attributeValue.id, value: link.attributeValue.value, colorHex: null });
+        }
+        optionMap.set(link.attribute.id, group);
+      }
+      return {
+        id: row.id,
+        name: row.name,
+        attributeValueIds: row.attributeValues.map((link) => link.attributeValue.id),
+        attributes: row.attributeValues.map((link) => ({ name: link.attribute.name, value: link.attributeValue.value })),
+        pricePaisa: channel?.pricePaisa ?? pricing.value.pricePaisa,
+        compareAtPricePaisa: channel?.compareAtPricePaisa ?? pricing.value.compareAtPricePaisa,
+        available: availability.get(row.id) ?? 0,
+        isPreorderEnabled: effectivePreorder(row),
+        imageUrl: image.value ? (urls.get(image.value) ?? null) : null,
+        imageSource: image.value ? IMAGE_SOURCE_BY_LEVEL[image.level] : "none",
+      };
+    });
+
+    const prices = variants.map((variant) => variant.pricePaisa).filter((price) => price > 0);
+    return {
+      id: product.id,
+      name: product.name,
+      sku: product.sku ?? "",
+      unitLabel: product.unitLabel,
+      productType: product.productType,
+      brand: product.brand,
+      barcode: product.barcode,
+      options: [...optionMap.values()],
+      variants,
+      totalAvailable: variants.reduce((total, variant) => total + Math.max(0, variant.available), 0),
+      cheapestPricePaisa: prices.length > 0 ? Math.min(...prices) : null,
+    };
+  });
 }

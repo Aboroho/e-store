@@ -9,6 +9,15 @@ import { getIntegrationSecrets } from "@/modules/integrations/secrets";
 import { getCourierAdapter, listCourierAdapters } from "@/modules/couriers/providers";
 import { CourierRequestError, asRecord, type OutgoingShipmentData } from "@/modules/couriers/providers/types";
 import { emitWebhookEvent } from "@/modules/api-keys/events";
+import { applyCourierOutcome, type CourierOutcome } from "@/modules/orders/courier-outcome";
+
+/** Courier shipment statuses that carry an outcome for the order itself. */
+const OUTCOME_BY_SHIPMENT_STATUS: Partial<Record<ShipmentStatus, CourierOutcome>> = {
+  DELIVERED: "DELIVERED",
+  PARTIALLY_DELIVERED: "PARTIALLY_DELIVERED",
+  RETURNED: "RETURNED",
+  CANCELLED: "CANCELLED",
+};
 
 /**
  * Courier service.
@@ -236,43 +245,23 @@ export async function updateShipmentStatus(input: {
       });
     }
 
-    // Mirror courier progress onto the order.
-    if (shipment.orderId) {
-      const order = await tx.order.findUnique({ where: { id: shipment.orderId } });
-      if (order) {
-        const orderPatch: Prisma.OrderUpdateInput = {};
-        if (input.status === "DELIVERED" && order.status !== "DELIVERED" && order.status !== "COMPLETED") {
-          orderPatch.status = "DELIVERED";
-          orderPatch.deliveredAt = new Date();
-          orderPatch.fulfillmentStatus = "FULFILLED";
-          await tx.orderItem.updateMany({ where: { orderId: order.id }, data: { status: "DELIVERED" } });
-        }
-        if (input.status === "PARTIALLY_DELIVERED" && order.status !== "DELIVERED" && order.status !== "COMPLETED") {
-          orderPatch.fulfillmentStatus = "PARTIALLY_FULFILLED";
-        }
-        if (input.status === "RETURNED" && order.status !== "CANCELLED") {
-          orderPatch.fulfillmentStatus = "PARTIALLY_FULFILLED";
-        }
-        if (input.status === "CANCELLED" && order.status !== "COMPLETED" && order.status !== "CANCELLED") {
-          orderPatch.fulfillmentStatus = "CANCELLED";
-        }
-        if (Object.keys(orderPatch).length > 0) {
-          await tx.order.update({ where: { id: order.id }, data: orderPatch });
-        }
-        if (input.status === "DELIVERED") {
-          await tx.orderStatusHistory.create({
-            data: {
-              orderId: order.id,
-              field: "FULFILLMENT",
-              fromStatus: order.status,
-              toStatus: "DELIVERED",
-              note: `Courier reported delivery (${shipment.trackingCode ?? shipment.internalCode})`,
-              actorUserId: input.actorUserId ?? null,
-              actorType: "SYSTEM",
-            },
-          });
-        }
-      }
+    // Mirror courier progress onto the order through the shared outcome applier:
+    // order status, stock and reseller earnings always move together, whichever
+    // path reported the event (webhook, polling sync or a manual refresh).
+    const outcome = OUTCOME_BY_SHIPMENT_STATUS[input.status];
+    if (shipment.orderId && outcome) {
+      await applyCourierOutcome(tx, {
+        businessId: shipment.businessId,
+        orderId: shipment.orderId,
+        shipmentId: shipment.id,
+        shipmentReference: shipment.trackingCode ?? shipment.providerConsignmentId ?? shipment.internalCode,
+        outcome,
+        providerStatusRaw: input.providerStatusRaw ?? null,
+        courierEventId: input.providerEventId ?? null,
+        note: input.note ?? null,
+        actorUserId: input.actorUserId ?? null,
+        collectedPaisa: input.collectedPaisa ?? null,
+      });
     }
 
     return updated;
@@ -355,6 +344,16 @@ export async function processCourierWebhook(input: {
       data: { status: "FAILED", errorMessage: "Signature verification failed", processedAt: new Date() },
     });
     throw AppError.forbidden("The webhook signature is not valid");
+  }
+
+  // The provider sent something that must not move a shipment. The event stays on
+  // record so support can see exactly what arrived.
+  if (parsed.ignore) {
+    await prisma.courierWebhookEvent.update({
+      where: { id: event.id },
+      data: { status: "IGNORED", processingResult: parsed.ignore, processedAt: new Date() },
+    });
+    return { duplicate: false, status: "IGNORED" as const, message: parsed.ignore };
   }
 
   const shipment = await prisma.shipment.findFirst({

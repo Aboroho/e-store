@@ -132,3 +132,22 @@ dependency order. Before running the suite the database must be migrated and see
 npm run db:start && npm run db:deploy && npm run db:seed
 npx vitest run tests/integration
 ```
+
+## 7. Manual Order Management & Order Governance Schema Extensions
+
+Applied in migration `20260925090000_manual_order_management`:
+
+### New Models
+- `CheckoutFieldConfig`: Per-business and per-storefront configuration for checkout fields (`fieldKey`, `label`, `isEnabled`, `isRequired`, `position`, `helpText`). Storefront-specific overrides take precedence when present.
+- `OrderListColumnPreference`: Per-user preference for order list table columns (`scope = "ADMIN_ORDER_LIST"`, `columns: string[]`), preserving customized views across sessions.
+- `OrderDeletionRecord`: Permanent deletion log preserving a complete audit snapshot (`snapshotJson: Json`, `orderNumber`, `orderType`, `channel`, `status`, `deletedByUserId`, `deletedByUserRole`, `reason`, `deletedAt`) when a cancelled order is permanently deleted.
+
+### Model Additions & Enhancements
+- `Order`:
+  - `deliveryFeeOverriddenAt`, `deliveryFeeOverriddenByUserId`, `deliveryFeeOverrideNote` for manual delivery fee override governance.
+  - `discountAllocation: Json?` preserving the proportional allocation breakdown across order items.
+  - `createdByUserRole: String?` storing role snapshot at creation for filtering and audit.
+- `OrderAdjustmentType` enum extended with `PACKAGING`, `COD_SURCHARGE`, `ROUNDING`, `RESELLER_COLLECTION`.
+- `ResellerOrderEarning`: Enhanced financial tracking columns (`collectedPaisa`, `resellerPricePaisa`, `resellerCostPaisa`, `packagingCostPaisa`, `courierChargePaisa`, `codChargePaisa`, `expectedCodPaisa`, `settledPaisa`, `eligibilityStatus`, `eligibleAt`).
+- `ShipmentStatusHistory`: Transition history recording (`fromStatus`, `toStatus`, `providerStatus`, `source`, `note`, `actorUserId`, `recordedAt`).
+- New permissions catalog keys: `order.view_all`, `order.status.pre_courier`, `order.status.courier`, `order.status.post_courier`, `order.status.override`, `order.edit_post_courier`, `order.columns.manage`, `checkout_fields.manage`.

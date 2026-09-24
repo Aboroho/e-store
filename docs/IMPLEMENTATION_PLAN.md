@@ -90,6 +90,20 @@ production build must all pass before the next stage starts. This plan is the wo
 | A conversion skipped for missing consent stayed blocked by its own dedupe key even after the shopper consented | `queueMarketingEvent` promotes the existing `SKIPPED_NO_CONSENT` row instead of dropping the event |
 | Storefront product views and checkout starts were never measured | added browser-side ViewContent/InitiateCheckout/Purchase tracking components wired into the product page, checkout form and order confirmation |
 
+## Stage 6 — Manual Order Management, Order Governance & Lifecycle ✅ complete
+
+| Area | Deliverable | Status |
+| --- | --- | --- |
+| Manual Order Creation | Mobile-first Create Order screen (`/admin/orders/new`); debounced searchable product picker with live image/SKU/stock/price resolution; order types: `ONLINE_DELIVERY`, `IN_STORE`, `PREORDER`; preorder selection allowed regardless of stock; initial status assigned server-side; server-authoritative price resolution; integer-paisa math; item & order discount calculations with largest-remainder proportional allocation; delivery fee calculation and manual override audit tracking; debounced phone lookup with address picker. | done |
+| Order Detail & Editing | Rich order screen (`/admin/orders/[id]`); full status transition panel showing permitted/blocked moves with reasons and confirmation requirements; pre-courier editing (`/admin/orders/[id]/edit`) and governed post-courier editing with explicit confirmation; manual unit price changes strictly forbidden; financial and shipment breakdown with cost/margin permission protection. | done |
+| Status Model & Governance | Three-tier status groups: Pre-courier (`PROCESSING`, `CONFIRMED`, `ON_HOLD`, `CANCELLED`, `READY_TO_SHIP`), Courier (`SHIPPED`), Post-courier (`DELIVERED`, `PARTIALLY_DELIVERED`, `RETURNED`, `COMPLETED`); creator pre-courier transitions (including backward moves); mandatory written reason for cancellations, holds, returns, and partial deliveries; administrative status override (`order.status.override`) with explicit confirmation dialog and audit logging. | done |
+| Bulk Operations & Couriers | Bulk status updates with itemized success/skip reporting; bulk courier dispatch (`sendOrdersToCourier`) enforcing eligibility (confirmed, delivery type, valid shipping address) and preventing duplicate dispatches; Steadfast adapter with Bearer token webhook auth, return request support, and consignment idempotency; partial delivery recording with stock inspection and reseller payout adjustment. | done |
+| Cancellation & Permanent Deletion | Cancellation releases stock reservations; permanent deletion (`deleteCancelledOrder`) restricted to `CANCELLED` orders without active financial or courier records; records full JSON snapshot in `OrderDeletionRecord` and `AuditLog`; preserves customer profiles, addresses, and inventory movements; deleted orders audit screen at `/admin/orders/deleted`. | done |
+| Checkout Fields & UI Customization | Checkout field manager (`/admin/orders/checkout-fields`) allowing custom labels, requirement, and visibility with storefront overrides; order list column preference editor (`/admin/orders`) supporting per-user customized data grids with permission-aware column visibility. | done |
+| Navigation Layout | Collapsible `Orders` sidebar group (Create order, Order list, Checkout fields, Deleted orders, Shipments, Couriers & gateways) and streamlined `Sales` section. | done |
+| Tests | `order-status.test.ts` (34), `order-totals.test.ts` (7), `manual-orders.test.ts` (16) — entire suite now **364 passed tests**, verifying creation, calculation, permissions, bulk dispatch, search isolation, and permanent deletion. | done |
+| Docs | ARCHITECTURE, BUSINESS_RULES, DATABASE_DESIGN, API, SECURITY, TESTING, IMPLEMENTATION_PLAN, master-prompt.md updated. | done |
+
 ## Definition of done for every stage
 
 1. `npm run check` (schema assembly check, `tsc --noEmit`, `eslint .`) passes.

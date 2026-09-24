@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { AppError } from "@/lib/errors";
 import { logger } from "@/lib/logging";
 import { requireSession } from "@/lib/auth/session";
@@ -9,14 +8,7 @@ import { assertPermission } from "@/lib/permissions";
 import { formDataToObject, parseInput } from "@/lib/validation";
 import { formatPaisa } from "@/lib/money";
 import type { ActionState } from "@/modules/auth/action-state";
-import {
-  cancelOrderSchema,
-  createOrderInputSchema,
-  orderTransitionSchema,
-  recordPaymentSchema,
-  refundSchema,
-} from "@/modules/orders/schemas";
-import { cancelOrder, createOrder, dispatchOrder, markOrderDelivered, transitionOrder } from "@/modules/orders/service";
+import { recordPaymentSchema, refundSchema } from "@/modules/orders/schemas";
 import { recordPayment, requestRefund, settleRefund } from "@/modules/payments/service";
 import { recordCourierCharge, requeueShipmentCreate, refreshShipmentTracking, updateShipmentStatus } from "@/modules/couriers/service";
 
@@ -49,182 +41,6 @@ function toState(error: unknown, fallback: string): ActionState {
 
 function toPaisa(value: unknown): number {
   return Math.round(Number(value ?? 0) * 100);
-}
-
-/** Staff-created order (admin, in-store counter or reseller order). */
-export async function createOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context: Awaited<ReturnType<typeof actor>>;
-  try {
-    context = await actor("order.create");
-  } catch (error) {
-    return toState(error, "You are not allowed to create orders");
-  }
-
-  let orderId: string;
-  try {
-    const raw = formDataToObject(formData);
-    const variantIds = formData.getAll("itemVariantId").map(String).filter(Boolean);
-    const items = variantIds.map((variantId, index) => ({
-      variantId,
-      quantity: Number(formData.getAll("itemQuantity")[index] ?? 1),
-      unitPricePaisa: formData.getAll("itemUnitPrice")[index] ? toPaisa(formData.getAll("itemUnitPrice")[index]) : undefined,
-      discountPaisa: formData.getAll("itemDiscount")[index] ? toPaisa(formData.getAll("itemDiscount")[index]) : 0,
-      note: String(formData.getAll("itemNote")[index] ?? "").trim() || undefined,
-    }));
-
-    const chargeLabels = formData.getAll("chargeLabel").map(String);
-    const extraCharges = chargeLabels
-      .map((label, index) => ({
-        label: label.trim(),
-        amountPaisa: toPaisa(formData.getAll("chargeAmount")[index]),
-        note: String(formData.getAll("chargeNote")[index] ?? "").trim() || undefined,
-      }))
-      .filter((charge) => charge.label.length >= 2 && charge.amountPaisa > 0);
-
-    const parsed = parseInput(
-      createOrderInputSchema,
-      {
-        channel: raw.channel || "ADMIN",
-        storefrontId: raw.storefrontId || undefined,
-        customerId: raw.customerId || undefined,
-        customerName: String(raw.customerName ?? "").trim() || undefined,
-        customerPhone: String(raw.customerPhone ?? "").trim() || undefined,
-        customerEmail: String(raw.customerEmail ?? "").trim() || undefined,
-        shippingDistrictCode: raw.shippingDistrictCode || undefined,
-        shippingAddressLine: String(raw.shippingAddressLine ?? "").trim() || undefined,
-        shippingArea: String(raw.shippingArea ?? "").trim() || undefined,
-        deliveryZoneId: raw.deliveryZoneId || undefined,
-        deliveryFeePaisa: raw.deliveryFeePaisa ? toPaisa(raw.deliveryFeePaisa) : undefined,
-        discountTotalPaisa: toPaisa(raw.discountTotalPaisa),
-        discountLabel: String(raw.discountLabel ?? "").trim() || undefined,
-        extraCharges: extraCharges.length > 0 ? extraCharges : undefined,
-        codSurchargePaisa: raw.codSurchargePaisa ? toPaisa(raw.codSurchargePaisa) : undefined,
-        paymentMethod: raw.paymentMethod || "COD",
-        markDelivered: raw.markDelivered === "on" || raw.markDelivered === "true",
-        expectedDeliveryAt: raw.expectedDeliveryAt || undefined,
-        customerNote: String(raw.customerNote ?? "").trim() || undefined,
-        internalNote: String(raw.internalNote ?? "").trim() || undefined,
-        idempotencyKey: String(raw.idempotencyKey ?? "").trim() || undefined,
-        items,
-      },
-      "Create order",
-    );
-
-    const result = await createOrder(context, parsed);
-    orderId = result.order.id;
-  } catch (error) {
-    return toState(error, "Unable to create the order");
-  }
-
-  revalidatePath("/admin/orders");
-  revalidatePath("/admin/inventory");
-  revalidatePath("/admin/inventory/preorders");
-  redirect(`/admin/orders/${orderId}?created=1`);
-}
-
-export async function transitionOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context: Awaited<ReturnType<typeof actor>>;
-  try {
-    context = await actor("order.update");
-  } catch (error) {
-    return toState(error, "You are not allowed to update orders");
-  }
-
-  try {
-    const raw = formDataToObject(formData);
-    const parsed = parseInput(
-      orderTransitionSchema,
-      { orderId: String(raw.orderId ?? ""), status: String(raw.status ?? ""), note: String(raw.note ?? "").trim() || undefined },
-      "Update order status",
-    );
-    await transitionOrder(context, parsed);
-    revalidatePath("/admin/orders");
-    revalidatePath(`/admin/orders/${parsed.orderId}`);
-    return { status: "success", message: `Order moved to ${parsed.status.replace(/_/g, " ").toLowerCase()}` };
-  } catch (error) {
-    return toState(error, "Unable to update the order status");
-  }
-}
-
-export async function cancelOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context: Awaited<ReturnType<typeof actor>>;
-  try {
-    context = await actor("order.cancel");
-  } catch (error) {
-    return toState(error, "You are not allowed to cancel orders");
-  }
-
-  try {
-    const raw = formDataToObject(formData);
-    const parsed = parseInput(
-      cancelOrderSchema,
-      { orderId: raw.orderId, reason: raw.reason, restock: raw.restock !== "false" },
-      "Cancel order",
-    );
-
-    const result = await cancelOrder(context, parsed);
-    revalidatePath("/admin/orders");
-    revalidatePath(`/admin/orders/${parsed.orderId}`);
-    revalidatePath("/admin/inventory");
-    return {
-      status: "success",
-      message: `Order cancelled. Released ${result.releasedUnits} reserved unit(s)${result.restockedUnits > 0 ? ` and restocked ${result.restockedUnits}` : ""}.`,
-    };
-  } catch (error) {
-    return toState(error, "Unable to cancel the order");
-  }
-}
-
-export async function dispatchOrderAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context: Awaited<ReturnType<typeof actor>>;
-  try {
-    context = await actor("order.dispatch");
-  } catch (error) {
-    return toState(error, "You are not allowed to dispatch orders");
-  }
-
-  const raw = formDataToObject(formData);
-  const orderId = String(raw.orderId ?? "");
-  if (!orderId) return { status: "error", message: "Missing order" };
-
-  try {
-    const result = await dispatchOrder(context, {
-      orderId,
-      courierProviderId: raw.courierProviderId ? String(raw.courierProviderId) : undefined,
-      courierChargePaisa: raw.courierChargePaisa ? toPaisa(raw.courierChargePaisa) : 0,
-      declaredWeightGrams: raw.declaredWeightGrams ? Number(raw.declaredWeightGrams) : undefined,
-    });
-    revalidatePath("/admin/orders");
-    revalidatePath(`/admin/orders/${orderId}`);
-    revalidatePath("/admin/shipments");
-    return {
-      status: "success",
-      message: `Dispatched ${result.dispatchedUnits} unit(s) as ${result.shipment.internalCode}. The courier push runs in the background.`,
-    };
-  } catch (error) {
-    return toState(error, "Unable to dispatch the order");
-  }
-}
-
-export async function markDeliveredAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
-  let context: Awaited<ReturnType<typeof actor>>;
-  try {
-    context = await actor("order.deliver");
-  } catch (error) {
-    return toState(error, "You are not allowed to mark orders delivered");
-  }
-
-  const raw = formDataToObject(formData);
-  const orderId = String(raw.orderId ?? "");
-  try {
-    await markOrderDelivered(context, orderId, raw.note ? String(raw.note) : undefined);
-  } catch (error) {
-    return toState(error, "Unable to mark the order delivered");
-  }
-
-  revalidatePath("/admin/orders");
-  revalidatePath(`/admin/orders/${orderId}`);
-  return { status: "success", message: "Order marked delivered" };
 }
 
 export async function recordPaymentAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
