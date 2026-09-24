@@ -684,7 +684,7 @@ export function ProductEditorForm({ data }: ProductEditorFormProps) {
             productPricing={productPricing}
             inheritedWeight={state.weightValue}
             inheritedWeightUnit={state.weightUnit}
-            variantEditMode={product ? "dialog" : "inline"}
+            variantEditMode="inline"
             canViewCost={data.canViewCost}
             onApplied={() => router.refresh()}
             onPatch={(value) => patch(value as Partial<ProductEditorState>)}

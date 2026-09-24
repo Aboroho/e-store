@@ -133,6 +133,7 @@ export function ProductListTable({
   };
 
   const colSpan = 7;
+  const editingProduct = products.find((row) => row.id === editingVariant?.productId);
 
   return (
     <div className="space-y-4">
@@ -374,7 +375,8 @@ export function ProductListTable({
                                           type="button"
                                           variant="outline"
                                           size="sm"
-                                          onClick={() =>
+                                          onClick={(event) => {
+                                            event.stopPropagation();
                                             setEditingVariant({
                                               productId: product.id,
                                               variant: {
@@ -388,8 +390,8 @@ export function ProductListTable({
                                                 priceOverridePaisa: variant.priceOverridePaisa,
                                                 weightGrams: variant.weightGrams,
                                               },
-                                            })
-                                          }
+                                            });
+                                          }}
                                         >
                                           <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                                           Edit
@@ -464,6 +466,19 @@ export function ProductListTable({
           </DialogContent>
         </Dialog>
       ) : null}
+
+      <PersistedVariantDialog
+        open={Boolean(editingVariant)}
+        variant={editingVariant?.variant ?? null}
+        product={{
+          currentPricePaisa: editingProduct?.defaultCurrentPricePaisa ?? null,
+          discountType: editingProduct?.defaultDiscountType ?? "NONE",
+          discountValue: editingProduct?.defaultDiscountValue ?? 0,
+          weightGrams: editingProduct?.weightGrams ?? null,
+        }}
+        onClose={() => setEditingVariant(null)}
+        onSaved={() => router.refresh()}
+      />
     </div>
   );
 }

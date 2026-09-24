@@ -62,7 +62,7 @@ export function AttributesVariationsSection({
   productPricing: PricingLevelInput;
   inheritedWeight?: string;
   inheritedWeightUnit?: WeightUnit;
-  /** Create Product uses inline rows; list/view/edit uses a dialog. */
+  /** Create and edit use inline rows. Product list / view use a dialog. */
   variantEditMode?: "inline" | "dialog";
   canViewCost: boolean;
   /** Called after a bulk change so the server read model is refreshed. */
